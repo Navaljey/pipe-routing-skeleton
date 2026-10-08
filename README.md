@@ -26,3 +26,13 @@ python -m unittest discover -s tests -t .
 | `pipe_routing/generator.py` | procedural 생성기 (v3 `gen_obstacle_grid` → 박스 목록, D30·D31) |
 | `scenarios/manual/manual_01.json` | 수작업 시나리오 (기관실형, 장애물 6 · 배관 5) |
 | `scenarios/procedural/` | procedural 세트 20개 (장애물 21~29 · 배관 10) |
+
+## 2단계 — 3D 시각화
+
+```
+python -m pipe_routing.viz scenarios/manual/manual_01.json            # → out/viz/manual_01.html
+python -m pipe_routing.viz --offline -o out/viz scenarios/procedural/*.json
+```
+
+장애물(회색 박스), 단자(● start / ◆ end, 채움 = 노즐 · 빈 마커 = 경계), 흐름 방향 화살표(D29),
+최소 직진 구간(굵은 선, 중력관은 점선), start–end 짝 표시(가는 점선 — 경로 아님). 범례 클릭으로 배관별 켜고 끄기.
