@@ -103,6 +103,25 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(reloaded.warnings, [])
             self.assertGreaterEqual(reloaded.summary()["obstacle_fill"], 0.12)
 
+    def test_deck_penetrations(self):
+        """D35 — 데크 관통 단자 포함, 중력관은 하부 데크 start·상부 데크 end 금지."""
+        decks = 0
+        for seed in range(10):
+            sc = generate(GeneratorConfig(seed=seed, gravity_ratio=0.5))
+            for p in sc.pipes:
+                for which in ("start", "end"):
+                    t = getattr(p, which)
+                    if t.kind != "boundary" or t.pos[2] not in (0, sc.block.height):
+                        continue
+                    decks += 1
+                    top = t.pos[2] == sc.block.height
+                    want = (-1 if top else 1) if which == "start" else (1 if top else -1)
+                    self.assertEqual(t.dir, (0, 0, want))   # D29·D35 dir 규약
+                    if p.gravity_pipe:
+                        self.assertNotEqual((which, top), ("start", False))
+                        self.assertNotEqual((which, top), ("end", True))
+        self.assertGreater(decks, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,7 +3,7 @@
 v3 `g3_colab.ipynb` 셀 7 의 gen_obstacle_grid 를 옮긴 것이다. 차이:
   - 격자(20×20×10 셀) 대신 mm 좌표 박스 목록을 출력한다 (D10, D5 10mm 스냅)
   - 박스 크기·채움률은 v3 비율을 블록(D4)에 그대로 대응시킨다 (D30)
-  - 배관은 T1·T5 만 (D27), 단자 규약은 D28·D29
+  - 배관은 T1·T5 만 (D27), 단자 규약은 D28·D29, 경계 단자는 6면 모두 (D35)
   - 도달성 검증(v3 의 astar_gnarl)은 라우터가 생기는 4단계 이후로 미룬다 (D31)
 """
 import argparse
@@ -34,6 +34,7 @@ class GeneratorConfig:
     sizes: tuple[str, ...] = NOMINAL_SIZES       # D18
     gravity_ratio: float = 0.3                   # T5 비율 (나머지 T1)
     nozzle_ratio: float = 0.5                    # 단자가 노즐일 확률 (나머지 경계)
+    deck_ratio: float = 0.5                      # 경계 단자 중 데크 관통 비율 (D35, 나머지 측면 격벽)
     min_terminal_dist_mm: int = 5000             # start–end 맨해튼 거리 하한 (v3 min_path_cells 대응)
     max_tries: int = 500                         # 배관 1개 단자 샘플링 시도 횟수
 
@@ -92,12 +93,20 @@ def _sample_nozzle(rng, which, size, obstacles) -> Optional[Terminal]:
     return Terminal(tuple(float(c) for c in pos), "nozzle", d, host.id)
 
 
-def _sample_boundary(rng, which, size) -> Optional[Terminal]:
-    """측면 격벽(x=0, x=W, y=0, y=L) 위 한 점 (D32)."""
+def _sample_boundary(rng, which, size, cfg, gravity) -> Optional[Terminal]:
+    """블록 6면 중 한 면 위 한 점 (D35). 측면 격벽 : 데크 관통 = 1 − deck_ratio : deck_ratio."""
     r = effective_radius(size)
     ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
-    ax = rng.randrange(2)
-    side = rng.choice((-1, 1))
+    if rng.random() < cfg.deck_ratio:
+        ax = 2
+        # 중력관은 하부 데크에서 start, 상부 데크에서 end 할 수 없다 (D35, D20)
+        if gravity:
+            side = 1 if which == "start" else -1
+        else:
+            side = rng.choice((-1, 1))
+    else:
+        ax = rng.randrange(2)
+        side = rng.choice((-1, 1))
     pos = [0.0, 0.0, 0.0]
     for a in range(3):
         if a == ax:
@@ -109,10 +118,10 @@ def _sample_boundary(rng, which, size) -> Optional[Terminal]:
     return Terminal(tuple(pos), "boundary", tuple(d))
 
 
-def _sample_terminal(rng, which, size, cfg, obstacles):
+def _sample_terminal(rng, which, size, cfg, obstacles, gravity):
     if obstacles and rng.random() < cfg.nozzle_ratio:
         return _sample_nozzle(rng, which, size, obstacles)
-    return _sample_boundary(rng, which, size)
+    return _sample_boundary(rng, which, size, cfg, gravity)
 
 
 def gen_pipe(rng: random.Random, cfg: GeneratorConfig, idx: int, block: Block,
@@ -121,8 +130,8 @@ def gen_pipe(rng: random.Random, cfg: GeneratorConfig, idx: int, block: Block,
     size = rng.choice(cfg.sizes)
     slope = default_drain_slope(size) if gravity else None
     for _ in range(cfg.max_tries):
-        s = _sample_terminal(rng, "start", size, cfg, obstacles)
-        e = _sample_terminal(rng, "end", size, cfg, obstacles)
+        s = _sample_terminal(rng, "start", size, cfg, obstacles, gravity)
+        e = _sample_terminal(rng, "end", size, cfg, obstacles, gravity)
         if s is None or e is None:
             continue
         if sum(abs(a - b) for a, b in zip(s.pos, e.pos)) < cfg.min_terminal_dist_mm:

@@ -1,7 +1,7 @@
 # CLAUDE.md — Pipe Routing Walking Skeleton (S0)
 
 **작성일:** 2026-10-08
-**상태:** 1단계 완료 — 결정 D1~D35 확정 (D28~D33 2026-10-08 승인). **다음: 1단계 후속(D35 생성기 수정) → 2단계 (3D 시각화)**
+**상태:** 1단계 완료 — 결정 D1~D35 확정 (D28~D33 2026-10-08 승인). 1단계 후속(D35 생성기 수정) 완료. **다음: 2단계 (3D 시각화)**
 **정본 우선순위:** 본 문서 > v3 레포(`Navaljey/pipe-routing-GNARL` CLAUDE.md) > v2 문서(`pipe-engineering-spec.md`, `evaluation-spec.md`)
 
 ---

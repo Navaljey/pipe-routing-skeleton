@@ -30,6 +30,7 @@
       ],
       "gravity_ratio": 0.3,
       "nozzle_ratio": 0.5,
+      "deck_ratio": 0.5,
       "min_terminal_dist_mm": 5000,
       "max_tries": 500
     },
@@ -459,28 +460,28 @@
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          33520,
-          40000,
-          1910
+          28940,
+          0,
+          8940
         ],
         "kind": "boundary",
         "dir": [
           0,
-          -1,
+          1,
           0
         ]
       },
       "end": {
         "pos": [
           3700,
-          0,
-          140
+          340,
+          0
         ],
         "kind": "boundary",
         "dir": [
           0,
-          -1,
-          0
+          0,
+          -1
         ]
       },
       "valve_positions": [],
@@ -495,31 +496,29 @@
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          30400,
-          28470,
-          8060
+          40000,
+          8400,
+          9550
         ],
-        "kind": "nozzle",
+        "kind": "boundary",
         "dir": [
-          0,
           -1,
+          0,
           0
-        ],
-        "host": "OBS_010"
+        ]
       },
       "end": {
         "pos": [
-          15090,
-          28080,
-          7000
+          20740,
+          17720,
+          0
         ],
-        "kind": "nozzle",
+        "kind": "boundary",
         "dir": [
           0,
           0,
           -1
-        ],
-        "host": "OBS_020"
+        ]
       },
       "valve_positions": [],
       "branch_points": []
@@ -527,51 +526,29 @@
     {
       "id": "P003",
       "type_id": "T1",
-      "nominal_size": "15A",
+      "nominal_size": "100A",
       "gravity_pipe": false,
       "min_slope": null,
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          40000,
-          18940,
-          460
+          16660,
+          6390,
+          4750
         ],
-        "kind": "boundary",
+        "kind": "nozzle",
         "dir": [
           -1,
           0,
           0
-        ]
+        ],
+        "host": "OBS_011"
       },
       "end": {
         "pos": [
-          0,
-          450,
-          6040
-        ],
-        "kind": "boundary",
-        "dir": [
-          -1,
-          0,
-          0
-        ]
-      },
-      "valve_positions": [],
-      "branch_points": []
-    },
-    {
-      "id": "P004",
-      "type_id": "T1",
-      "nominal_size": "25A",
-      "gravity_pipe": false,
-      "min_slope": null,
-      "insulation_thickness": 50,
-      "start": {
-        "pos": [
-          32620,
-          8350,
-          3100
+          20750,
+          23680,
+          4000
         ],
         "kind": "nozzle",
         "dir": [
@@ -579,56 +556,79 @@
           0,
           1
         ],
-        "host": "OBS_022"
+        "host": "OBS_026"
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P004",
+      "type_id": "T1",
+      "nominal_size": "100A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          27160,
+          25140,
+          4040
+        ],
+        "kind": "nozzle",
+        "dir": [
+          -1,
+          0,
+          0
+        ],
+        "host": "OBS_017"
       },
       "end": {
         "pos": [
-          13680,
-          31290,
-          8540
+          1780,
+          28630,
+          0
         ],
-        "kind": "nozzle",
+        "kind": "boundary",
         "dir": [
           0,
           0,
           -1
-        ],
-        "host": "OBS_021"
+        ]
       },
       "valve_positions": [],
       "branch_points": []
     },
     {
       "id": "P005",
-      "type_id": "T5",
-      "nominal_size": "65A",
-      "gravity_pipe": true,
-      "min_slope": 0.01,
+      "type_id": "T1",
+      "nominal_size": "100A",
+      "gravity_pipe": false,
+      "min_slope": null,
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          9310,
-          34370,
-          8410
+          9850,
+          32170,
+          6420
         ],
         "kind": "nozzle",
         "dir": [
-          0,
           -1,
+          0,
           0
         ],
-        "host": "OBS_016"
+        "host": "OBS_021"
       },
       "end": {
         "pos": [
+          31760,
           0,
-          33320,
-          7810
+          7650
         ],
         "kind": "boundary",
         "dir": [
-          -1,
           0,
+          -1,
           0
         ]
       },
@@ -637,34 +637,34 @@
     },
     {
       "id": "P006",
-      "type_id": "T1",
-      "nominal_size": "400A",
-      "gravity_pipe": false,
-      "min_slope": null,
+      "type_id": "T5",
+      "nominal_size": "500A",
+      "gravity_pipe": true,
+      "min_slope": 0.005,
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          37930,
-          40000,
-          3760
+          0,
+          33080,
+          2250
         ],
         "kind": "boundary",
         "dir": [
+          1,
           0,
-          -1,
           0
         ]
       },
       "end": {
         "pos": [
-          0,
-          33030,
-          2200
+          12080,
+          40000,
+          900
         ],
         "kind": "boundary",
         "dir": [
-          -1,
           0,
+          1,
           0
         ]
       },
@@ -674,28 +674,66 @@
     {
       "id": "P007",
       "type_id": "T1",
-      "nominal_size": "400A",
+      "nominal_size": "25A",
       "gravity_pipe": false,
       "min_slope": null,
       "insulation_thickness": 50,
       "start": {
         "pos": [
+          23680,
+          23800,
+          4110
+        ],
+        "kind": "nozzle",
+        "dir": [
           0,
-          31950,
-          7970
+          -1,
+          0
+        ],
+        "host": "OBS_004"
+      },
+      "end": {
+        "pos": [
+          28940,
+          26180,
+          3820
+        ],
+        "kind": "nozzle",
+        "dir": [
+          0,
+          0,
+          1
+        ],
+        "host": "OBS_017"
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P008",
+      "type_id": "T1",
+      "nominal_size": "500A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          38290,
+          12310,
+          0
         ],
         "kind": "boundary",
         "dir": [
-          1,
           0,
-          0
+          0,
+          1
         ]
       },
       "end": {
         "pos": [
-          17660,
-          6010,
-          5790
+          17420,
+          5720,
+          5840
         ],
         "kind": "nozzle",
         "dir": [
@@ -709,17 +747,55 @@
       "branch_points": []
     },
     {
-      "id": "P008",
-      "type_id": "T5",
-      "nominal_size": "150A",
-      "gravity_pipe": true,
-      "min_slope": 0.01,
+      "id": "P009",
+      "type_id": "T1",
+      "nominal_size": "50A",
+      "gravity_pipe": false,
+      "min_slope": null,
       "insulation_thickness": 50,
       "start": {
         "pos": [
-          33530,
-          8700,
-          1780
+          36020,
+          23230,
+          7180
+        ],
+        "kind": "nozzle",
+        "dir": [
+          1,
+          0,
+          0
+        ],
+        "host": "OBS_015"
+      },
+      "end": {
+        "pos": [
+          18870,
+          15660,
+          7920
+        ],
+        "kind": "nozzle",
+        "dir": [
+          0,
+          0,
+          -1
+        ],
+        "host": "OBS_018"
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P010",
+      "type_id": "T1",
+      "nominal_size": "15A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          32260,
+          4850,
+          1850
         ],
         "kind": "nozzle",
         "dir": [
@@ -731,91 +807,16 @@
       },
       "end": {
         "pos": [
-          32940,
-          23860,
-          1090
-        ],
-        "kind": "nozzle",
-        "dir": [
-          -1,
-          0,
-          0
-        ],
-        "host": "OBS_007"
-      },
-      "valve_positions": [],
-      "branch_points": []
-    },
-    {
-      "id": "P009",
-      "type_id": "T5",
-      "nominal_size": "150A",
-      "gravity_pipe": true,
-      "min_slope": 0.01,
-      "insulation_thickness": 50,
-      "start": {
-        "pos": [
-          32090,
-          40000,
-          7730
+          16770,
+          12360,
+          10000
         ],
         "kind": "boundary",
         "dir": [
           0,
-          -1,
-          0
+          0,
+          1
         ]
-      },
-      "end": {
-        "pos": [
-          21910,
-          6930,
-          4980
-        ],
-        "kind": "nozzle",
-        "dir": [
-          -1,
-          0,
-          0
-        ],
-        "host": "OBS_011"
-      },
-      "valve_positions": [],
-      "branch_points": []
-    },
-    {
-      "id": "P010",
-      "type_id": "T1",
-      "nominal_size": "65A",
-      "gravity_pipe": false,
-      "min_slope": null,
-      "insulation_thickness": 50,
-      "start": {
-        "pos": [
-          40000,
-          29540,
-          3920
-        ],
-        "kind": "boundary",
-        "dir": [
-          -1,
-          0,
-          0
-        ]
-      },
-      "end": {
-        "pos": [
-          26920,
-          6540,
-          2270
-        ],
-        "kind": "nozzle",
-        "dir": [
-          0,
-          1,
-          0
-        ],
-        "host": "OBS_006"
       },
       "valve_positions": [],
       "branch_points": []
