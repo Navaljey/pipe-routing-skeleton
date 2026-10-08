@@ -1,1 +1,2 @@
 jsonschema>=4.18
+plotly>=5.24
