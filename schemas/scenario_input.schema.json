@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pipe-routing-skeleton/scenario_input.schema.json",
+  "title": "S0 시나리오 입력 (CLAUDE.md §7.1)",
+  "type": "object",
+  "required": ["block", "obstacles", "pipes"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "선택. 시나리오 이름·생성기 설정 등 기록용. 라우터·검증기는 읽지 않는다",
+      "properties": {
+        "name": {"type": "string"},
+        "source": {"enum": ["manual", "procedural"]}
+      }
+    },
+    "block": {
+      "type": "object",
+      "required": ["width", "length", "height", "unit"],
+      "additionalProperties": false,
+      "properties": {
+        "width": {"$ref": "#/$defs/positive_mm"},
+        "length": {"$ref": "#/$defs/positive_mm"},
+        "height": {"$ref": "#/$defs/positive_mm"},
+        "unit": {"const": "mm"}
+      }
+    },
+    "obstacles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "min", "max"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type": {"type": "string"},
+          "min": {"$ref": "#/$defs/vec3"},
+          "max": {"$ref": "#/$defs/vec3"}
+        }
+      }
+    },
+    "pipes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "type_id", "nominal_size", "gravity_pipe", "min_slope",
+                     "insulation_thickness", "start", "end", "valve_positions", "branch_points"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "type_id": {"enum": ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"]},
+          "nominal_size": {"enum": ["15A", "25A", "50A", "65A", "100A", "150A", "200A", "300A", "400A", "500A"]},
+          "gravity_pipe": {"type": "boolean"},
+          "min_slope": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0, "maximum": 1}]},
+          "insulation_thickness": {"type": "number", "minimum": 0},
+          "start": {"$ref": "#/$defs/terminal"},
+          "end": {"$ref": "#/$defs/terminal"},
+          "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "positive_mm": {"type": "number", "exclusiveMinimum": 0},
+    "vec3": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+    "terminal": {
+      "type": "object",
+      "required": ["pos", "kind", "dir"],
+      "additionalProperties": false,
+      "properties": {
+        "pos": {"$ref": "#/$defs/vec3"},
+        "kind": {"enum": ["nozzle", "boundary"]},
+        "dir": {"type": "array", "items": {"type": "integer", "minimum": -1, "maximum": 1}, "minItems": 3, "maxItems": 3},
+        "host": {"type": "string", "description": "선택. 노즐이 붙은 장애물 id (D28)"}
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "meta": {
+    "name": "manual_01",
+    "source": "manual",
+    "description": "기관실형 수작업 시나리오. 주기관·탱크 2·펌프·열교환기·상부 덕트(블록 횡단) + T1 3개, T5 2개"
+  },
+  "block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"},
+  "obstacles": [
+    {"id": "OBS_001", "type": "main_engine",    "min": [14000, 12000, 0],    "max": [26000, 28000, 4500]},
+    {"id": "OBS_002", "type": "tank",           "min": [2000, 2000, 0],      "max": [8000, 10000, 3000]},
+    {"id": "OBS_003", "type": "tank",           "min": [30000, 30000, 0],    "max": [38000, 38000, 5000]},
+    {"id": "OBS_004", "type": "pump",           "min": [10000, 30000, 0],    "max": [11500, 31500, 1200]},
+    {"id": "OBS_005", "type": "heat_exchanger", "min": [30000, 6000, 1000],  "max": [34000, 9000, 3000]},
+    {"id": "OBS_006", "type": "duct",           "min": [0, 19000, 7500],     "max": [40000, 21000, 8000]}
+  ],
+  "pipes": [
+    {
+      "id": "P001", "type_id": "T1", "nominal_size": "100A",
+      "gravity_pipe": false, "min_slope": null, "insulation_thickness": 50,
+      "start": {"pos": [10750, 30750, 1320], "kind": "nozzle", "dir": [0, 0, 1], "host": "OBS_004"},
+      "end":   {"pos": [29880, 7500, 2000],  "kind": "nozzle", "dir": [1, 0, 0], "host": "OBS_005"},
+      "valve_positions": [], "branch_points": []
+    },
+    {
+      "id": "P002", "type_id": "T1", "nominal_size": "50A",
+      "gravity_pipe": false, "min_slope": null, "insulation_thickness": 50,
+      "start": {"pos": [8100, 6000, 1500], "kind": "nozzle",   "dir": [1, 0, 0], "host": "OBS_002"},
+      "end":   {"pos": [5000, 40000, 6000], "kind": "boundary", "dir": [0, 1, 0]},
+      "valve_positions": [], "branch_points": []
+    },
+    {
+      "id": "P003", "type_id": "T5", "nominal_size": "150A",
+      "gravity_pipe": true, "min_slope": 0.01, "insulation_thickness": 50,
+      "start": {"pos": [29850, 34000, 4500], "kind": "nozzle",   "dir": [-1, 0, 0], "host": "OBS_003"},
+      "end":   {"pos": [0, 34000, 500],      "kind": "boundary", "dir": [-1, 0, 0]},
+      "valve_positions": [], "branch_points": []
+    },
+    {
+      "id": "P004", "type_id": "T1", "nominal_size": "200A",
+      "gravity_pipe": false, "min_slope": null, "insulation_thickness": 50,
+      "start": {"pos": [40000, 15000, 6000], "kind": "boundary", "dir": [-1, 0, 0]},
+      "end":   {"pos": [26170, 15000, 2500], "kind": "nozzle",   "dir": [-1, 0, 0], "host": "OBS_001"},
+      "valve_positions": [], "branch_points": []
+    },
+    {
+      "id": "P005", "type_id": "T5", "nominal_size": "65A",
+      "gravity_pipe": true, "min_slope": 0.01, "insulation_thickness": 50,
+      "start": {"pos": [20000, 11900, 2000], "kind": "nozzle",   "dir": [0, -1, 0], "host": "OBS_001"},
+      "end":   {"pos": [0, 5000, 800],       "kind": "boundary", "dir": [-1, 0, 0]},
+      "valve_positions": [], "branch_points": []
+    }
+  ]
+}
