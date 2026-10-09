@@ -200,10 +200,37 @@ def add_routes(fig: go.Figure, sc: Scenario, results) -> None:
         x, y, z = zip(*r.waypoints)
         fig.add_trace(go.Scatter3d(
             x=x, y=y, z=z, mode="lines+markers", legendgroup=r.pipe_id,
-            name=f"{r.pipe_id} 경로 J={r.J:.1f}kg",
+            name=f"{r.pipe_id} 경로" + (f" J={r.J:.1f}kg" if r.J else ""),
             line=dict(color=color, width=7), marker=dict(size=3, color=color),
             hovertext=[f"{r.pipe_id} [{i}] {list(map(int, p))}" for i, p in enumerate(r.waypoints)],
             hoverinfo="text"))
+
+
+MODULE_COLORS = {"collision": "#d62728", "boundary": "#ff7f0e", "bend": "#9467bd", "gravity_slope": "#17becf",
+                 "valve": "#e377c2", "branch": "#8c564b", "support": "#bcbd22"}
+
+
+def add_verification(fig: go.Figure, report: dict, show_supports: bool = True) -> None:
+    """검증 결과 (5단계): 위반 위치 ✕ (모듈별 색, hover = 메시지), 설치된 서포트 ■."""
+    by_module = {}
+    for rep in report["pipes"].values():
+        for v in rep.violations:
+            by_module.setdefault(v.module, []).append(v)
+    for module, vs in by_module.items():
+        x, y, z = zip(*[v.pos for v in vs])
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z, mode="markers", name=f"위반 {module} ({len(vs)})", legendgroup="violations",
+            marker=dict(size=7, symbol="x", color=MODULE_COLORS.get(module, "red"), line=dict(width=2)),
+            hovertext=[f"<b>{v.pipe_id} {v.module}</b><br>{v.message}<br>{v.pos}" for v in vs], hoverinfo="text"))
+    if show_supports:
+        sup = [(rep.pipe_id, s) for rep in report["pipes"].values() for s in rep.supports]
+        if sup:
+            x, y, z = zip(*[s["pos"] for _, s in sup])
+            fig.add_trace(go.Scatter3d(
+                x=x, y=y, z=z, mode="markers", name=f"서포트 ({len(sup)})", visible="legendonly",
+                marker=dict(size=3, symbol="square", color="#555"),
+                hovertext=[f"{pid} 서포트 → {s['face']} {s['angle_length_mm']:.0f}mm {s['kg']:.2f}kg" for pid, s in sup],
+                hoverinfo="text"))
 
 
 def write_html(fig: go.Figure, path, offline: bool = False) -> None:
