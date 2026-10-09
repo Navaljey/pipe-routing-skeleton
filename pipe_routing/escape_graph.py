@@ -13,10 +13,10 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from .constants import PIPE_SPECS, SNAP_MM, elbow_kg, elbow_tangent
+from .constants import ANGLE_TOL_DEG, PIPE_SPECS, SNAP_MM, elbow_kg, elbow_radius, elbow_tangent
 from .geometry import Vec3
 from .scenario import Pipe, Scenario, boundary_face, load
-from .verifier.geom import elbow_arc_chords, segment_box_distance
+from .verifier.geom import build_centerline, elbow_arc_chords, segment_box_distance, segment_segment_distance
 from .space import ALLOWED_DEFLECTIONS, AXIS_DIRS, DEFLECTION, DIR_INDEX, DIRS, State
 
 EPS = 1e-6
@@ -79,8 +79,12 @@ def planar_segment_box_distance(p0: np.ndarray, p1: np.ndarray, lo, hi, const_ax
 class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
-    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True):
-        """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True)."""
+    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=()):
+        """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
+
+        others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
+        기하는 검증기와 같은 함수(build_centerline, segment_segment_distance)를 쓴다.
+        """
         t0 = time.perf_counter()
         self.pipe = pipe
         self.r = pipe.radius
@@ -105,6 +109,7 @@ class EscapeGraph:
         self.dom_hi = np.array([e - m for e in ext], dtype=float)
         self.box_lo = np.array([o.box.min for o in scenario.obstacles], dtype=float).reshape(-1, 3)
         self.box_hi = np.array([o.box.max for o in scenario.obstacles], dtype=float).reshape(-1, 3)
+        self.pipe_groups = self._pipe_groups(others)   # D50②: [(A, B, slack, r_other, lo, hi)]
 
         # 1) 축별 좌표
         coords = [set() for _ in range(3)]
@@ -116,6 +121,10 @@ class EscapeGraph:
                         coords[ax].add(v)
             for t in (pipe.start, pipe.end):
                 coords[ax].add(float(t.pos[ax]))
+            for lo, hi, ro in self.pipe_segments:   # 놓인 배관의 꺾임점 사이 구간 AABB 를 r + r_other 만큼 팽창한 면 (D38 과 같은 방식)
+                for v in (_snap_down(lo[ax] - self.r - ro), _snap_up(hi[ax] + self.r + ro)):
+                    if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
+                        coords[ax].add(v)
         self.axes = [np.array(sorted(c)) for c in coords]
         self.shape = tuple(len(a) for a in self.axes)
         self._axes_f = [[float(v) for v in a] for a in self.axes]   # position() 용 (numpy 스칼라 변환 비용 회피)
@@ -134,9 +143,17 @@ class EscapeGraph:
         self.node_ok = self.in_domain & clear
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
             self.node_ok[n] = clear[n]
+        # 놓인 배관까지 여유 (거리 − slack − r_other). 엘보 빠른 통과 판정용으로 r + t_135 범위까지 계산
+        self.pipe_margin = np.full(self.shape, np.inf)
+        if self.pipe_groups:
+            self._pipe_node_margin()
+            self.node_ok &= self.pipe_margin >= self.r - EPS
 
         # 3) 축 방향 엣지: axis_ok[ax][idx] = idx → idx+e_ax 엣지 사용 가능
         self.axis_ok = [self._axis_edges(ax) for ax in range(3)]
+        if self.pipe_groups:
+            for ax in range(3):
+                self._pipe_block_axis(ax)
         # 4) 45° 엣지 (D38): diag_ok[d][idx], diag_to[d] = (평면 첫 축 목표 인덱스, 둘째 축 목표 인덱스) 표
         self.diag_ok: dict[int, np.ndarray] = {}
         self.diag_to: dict[int, tuple[np.ndarray, np.ndarray]] = {}
@@ -145,6 +162,9 @@ class EscapeGraph:
                 self.diag_ok[d] = np.zeros(self.shape, dtype=bool)
             elif d not in self.diag_ok:
                 self._diag_edges(d)
+        if self.pipe_groups and allow_45:
+            for d in range(6, len(DIRS)):
+                self._pipe_block_diag(d)
         self.build_sec = time.perf_counter() - t0
 
     # ---------------------------------------------------------------- 구성
@@ -162,6 +182,108 @@ class EscapeGraph:
             g = np.maximum(0.0, np.maximum(lo - pts, pts - hi))
             best = np.minimum(best, np.sqrt((g * g).sum(1)))
         return best
+
+    # ---------------------------------------------------------------- 놓인 배관 (D50②)
+
+    def _pipe_groups(self, others) -> list:
+        """놓인 배관의 실제 중심선(검증기와 같은 함수) → 조각 묶음. 직관 조각 하나, 엘보 호 하나가 각각 한 묶음."""
+        groups = []
+        self.pipe_segments = []   # 격자선용: 꺾임점 사이 구간 AABB (엘보 호는 격자선을 만들지 않고 판정에만 쓴다)
+        for op, wps in others:
+            if not wps:
+                continue
+            W = np.asarray(wps, dtype=float)
+            for a, b in zip(W[:-1], W[1:]):
+                self.pipe_segments.append((np.minimum(a, b), np.maximum(a, b), op.radius))
+            cl = build_centerline(wps, elbow_radius(op.nominal_size), ANGLE_TOL_DEG)
+            by = {}
+            for piece in cl.pieces:
+                by.setdefault((piece.kind, piece.ref), []).append(piece)
+            for pieces in by.values():
+                A = np.array([q.a for q in pieces])
+                B = np.array([q.b for q in pieces])
+                S = np.array([q.slack for q in pieces])
+                groups.append((A, B, S, op.radius, np.minimum(A, B).min(0), np.maximum(A, B).max(0)))
+        if groups:
+            self._pg_A = np.concatenate([g[0] for g in groups])
+            self._pg_B = np.concatenate([g[1] for g in groups])
+            self._pg_S = np.concatenate([g[2] for g in groups])
+            self._pg_R = np.concatenate([np.full(len(g[0]), g[3]) for g in groups])
+            self._pg_lo = np.minimum(self._pg_A, self._pg_B)
+            self._pg_hi = np.maximum(self._pg_A, self._pg_B)
+        return groups
+
+    def _index_range(self, ax: int, lo: float, hi: float) -> tuple[int, int]:
+        """[lo, hi] 와 겹치는 격자 인덱스 구간 (양쪽 한 칸 여유 — 구간을 걸치는 엣지 포함)."""
+        a = self.axes[ax]
+        i0 = max(0, int(np.searchsorted(a, lo, "right")) - 1)
+        i1 = min(len(a), int(np.searchsorted(a, hi, "left")) + 1)
+        return i0, i1
+
+    def _sub(self, lo, hi):
+        return tuple(slice(*self._index_range(ax, lo[ax], hi[ax])) for ax in range(3))
+
+    def _pipe_node_margin(self) -> None:
+        reach = self.r + self.tangent[135]
+        for A, B, S, ro, lo, hi in self.pipe_groups:
+            pad = reach + ro + S.max()
+            sl = self._sub(lo - pad, hi + pad)
+            grids = np.meshgrid(*[self.axes[ax][sl[ax]] for ax in range(3)], indexing="ij")
+            P = np.stack(grids, -1).reshape(-1, 3)
+            if not len(P):
+                continue
+            D = B - A
+            dd = np.where((D * D).sum(1) > 0, (D * D).sum(1), 1.0)
+            t = np.clip(((P[:, None, :] - A[None]) * D[None]).sum(-1) / dd[None], 0, 1)
+            dist = np.linalg.norm(P[:, None, :] - (A[None] + t[..., None] * D[None]), axis=-1)
+            m = (dist - S[None]).min(1) - ro
+            sub = self.pipe_margin[sl]
+            self.pipe_margin[sl] = np.minimum(sub, m.reshape(sub.shape))
+
+    def _segments_clear_of_pipes(self, P0: np.ndarray, P1: np.ndarray, slack: float = 0.0) -> np.ndarray:
+        """선분들이 놓인 배관 조각과 r + r_other 이상 떨어져 있는가 (검증기 _pipe_hits 와 같은 판정)."""
+        free = np.ones(len(P0), dtype=bool)
+        if not len(P0) or not self.pipe_groups:
+            return free
+        slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
+        pad = self.r + slack
+        for A, B, S, ro, lo, hi in self.pipe_groups:
+            g = pad + ro + S.max()
+            cand = np.nonzero(free & np.all((slo < hi + g) & (shi > lo - g), 1))[0]
+            for k0 in range(0, len(cand), 4096):
+                c = cand[k0:k0 + 4096]
+                d, _, _ = segment_segment_distance(P0[c][:, None], P1[c][:, None], A[None], B[None])
+                bad = np.any(d - slack - S[None] < self.r + ro - EPS, 1)
+                free[c[bad]] = False
+        return free
+
+    def _pipe_block_axis(self, ax: int) -> None:
+        ok = self.axis_ok[ax]
+        idx = np.nonzero(ok)
+        if not len(idx[0]):
+            return
+        P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+        nxt = list(idx)
+        nxt[ax] = idx[ax] + 1
+        P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
+        free = self._segments_clear_of_pipes(P0, P1)
+        ok[tuple(i[~free] for i in idx)] = False
+
+    def _pipe_block_diag(self, d: int) -> None:
+        ok = self.diag_ok[d]
+        idx = np.nonzero(ok)
+        if not len(idx[0]):
+            return
+        vec = DIRS[d]
+        a, b = [ax for ax in range(3) if vec[ax] != 0]
+        to_a, to_b = self.diag_to[d]
+        dst = list(idx)
+        dst[a] = to_a[idx[a], idx[b]]
+        dst[b] = to_b[idx[a], idx[b]]
+        P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+        P1 = np.stack([self.axes[k][dst[k]] for k in range(3)], -1)
+        free = self._segments_clear_of_pipes(P0, P1)
+        ok[tuple(i[~free] for i in idx)] = False
 
     def _axis_edges(self, ax: int) -> np.ndarray:
         n = self.shape[ax]
@@ -298,7 +420,7 @@ class EscapeGraph:
         """
         defl = DEFLECTION[d_in][d_out]
         t = self.tangent[defl]
-        if self.clearance[node] >= self.r + t + EPS:
+        if self.clearance[node] >= self.r + t + EPS and self.pipe_margin[node] >= self.r + t + EPS:
             return True
         key = (node, d_in, d_out)
         hit = self._arc_ok.get(key)
@@ -336,6 +458,14 @@ class EscapeGraph:
                     if np.any(dist - sag < self.r - EPS):
                         hit = False
                         break
+            if hit and self.pipe_groups:   # 엘보 호 ↔ 놓인 배관 (D50②)
+                g = self.r + sag + self._pg_R + self._pg_S
+                cand = np.all((self._pg_lo < phi + g[:, None]) & (self._pg_hi > plo - g[:, None]), 1)
+                if np.any(cand):
+                    dist, _, _ = segment_segment_distance(A[:, None], B[:, None], self._pg_A[cand][None],
+                                                          self._pg_B[cand][None])
+                    if np.any(dist - sag - self._pg_S[cand][None] < self.r + self._pg_R[cand][None] - EPS):
+                        hit = False
             self._arc_ok[key] = hit
         return hit
 
