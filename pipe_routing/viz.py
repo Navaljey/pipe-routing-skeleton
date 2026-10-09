@@ -188,6 +188,24 @@ def add_graph(fig: go.Figure, g, axis: int = 2, value: float = None) -> dict:
     return {"axis": "xyz"[axis], "value": float(plane), "nodes": len(ia), "edges_axis": n_axis, "edges_45": n_diag}
 
 
+def add_routes(fig: go.Figure, sc: Scenario, results) -> None:
+    """라우터 결과 경로 (4단계). 성공 배관은 배관 색 굵은 선, 꺾임점 표시. 실패는 범례에만 상태 표기."""
+    color_of = {p.id: _PALETTE[n % len(_PALETTE)] for n, p in enumerate(sc.pipes)}
+    for r in results:
+        color = color_of.get(r.pipe_id, "black")
+        if r.status != "ok":
+            fig.add_trace(go.Scatter3d(x=[None], y=[None], z=[None], mode="lines", name=f"{r.pipe_id} {r.status}",
+                                       line=dict(color=color, width=2, dash="dot"), legendgroup=r.pipe_id))
+            continue
+        x, y, z = zip(*r.waypoints)
+        fig.add_trace(go.Scatter3d(
+            x=x, y=y, z=z, mode="lines+markers", legendgroup=r.pipe_id,
+            name=f"{r.pipe_id} 경로 J={r.J:.1f}kg",
+            line=dict(color=color, width=7), marker=dict(size=3, color=color),
+            hovertext=[f"{r.pipe_id} [{i}] {list(map(int, p))}" for i, p in enumerate(r.waypoints)],
+            hoverinfo="text"))
+
+
 def write_html(fig: go.Figure, path, offline: bool = False) -> None:
     """offline=True 면 plotly.js(약 3.5MB)를 파일에 넣는다. 기본은 CDN 참조."""
     fig.write_html(str(path), include_plotlyjs=True if offline else "cdn", full_html=True)

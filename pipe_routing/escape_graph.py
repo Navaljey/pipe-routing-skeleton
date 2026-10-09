@@ -78,7 +78,8 @@ def planar_segment_box_distance(p0: np.ndarray, p1: np.ndarray, lo, hi, const_ax
 class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
-    def __init__(self, scenario: Scenario, pipe: Pipe):
+    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True):
+        """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True)."""
         t0 = time.perf_counter()
         self.pipe = pipe
         self.r = pipe.radius
@@ -125,7 +126,9 @@ class EscapeGraph:
         self.diag_ok: dict[int, np.ndarray] = {}
         self.diag_to: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         for d in range(6, len(DIRS)):
-            if d not in self.diag_ok:
+            if not allow_45:
+                self.diag_ok[d] = np.zeros(self.shape, dtype=bool)
+            elif d not in self.diag_ok:
                 self._diag_edges(d)
         self.build_sec = time.perf_counter() - t0
 
