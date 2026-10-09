@@ -91,6 +91,13 @@ class AStarTest(unittest.TestCase):
         self.assertEqual(r.status, "timeout")
         self.assertGreaterEqual(r.expanded, 2048)
 
+    def test_no_45_never_cheaper(self):
+        """45° 엣지를 빼면 그래프가 부분집합이므로 최적 J 는 같거나 커진다 (M9 비교 실험의 전제)."""
+        for p in self.sc.pipes:
+            r = astar_route(EscapeGraph(self.sc, p, allow_45=False), p)
+            self.assertEqual(r.length_45_mm, 0)
+            self.assertGreaterEqual(r.J + 1e-6, self.results[p.id].J)
+
 
 if __name__ == "__main__":
     unittest.main()

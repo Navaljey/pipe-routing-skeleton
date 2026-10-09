@@ -163,6 +163,7 @@ def main(argv=None) -> int:
     ap.add_argument("--time-limit", type=float, default=TIME_LIMIT_SEC)
     ap.add_argument("--json", help="결과를 JSON 줄 단위로 저장 (append)")
     ap.add_argument("--viz", metavar="DIR", help="경로를 그린 HTML 을 이 폴더에 저장")
+    ap.add_argument("--no-45", action="store_true", help="45° 엣지 없이 (M9 비교 실험)")
     args = ap.parse_args(argv)
     for path in args.paths:
         sc = load(path)
@@ -171,7 +172,7 @@ def main(argv=None) -> int:
         for p in sc.pipes:
             if args.pipe and p.id != args.pipe:
                 continue
-            g = EscapeGraph(sc, p)
+            g = EscapeGraph(sc, p, allow_45=not args.no_45)
             r = astar_route(g, p, args.time_limit)
             results.append(r)
             extra = (f"J {r.J:9.2f} kg (직관 {r.J_pipe:.2f} + 엘보 {r.J_elbow:.2f})  길이 {r.length_mm / 1000:7.2f} m  "
