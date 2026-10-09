@@ -48,3 +48,14 @@ python -m pipe_routing.viz scenarios/manual/manual_01.json --graph P002 --slice 
 |---|---|
 | `pipe_routing/space.py` | 라우터 슬롯 인터페이스 (`SpaceRepresentation`, `State`, `route`) — D37 |
 | `pipe_routing/escape_graph.py` | S0 표현 escape graph (축 + 평면 내 45°) — D38·D39 |
+
+## 4단계 — 단일 배관 A*
+
+```
+python -m pipe_routing.router_astar scenarios/manual/manual_01.json --viz out/viz   # 경로·J·탐색 통계 + 경로 HTML
+python -m pipe_routing.router_astar scenarios/procedural/*.json --json out/astar.jsonl
+python -m pipe_routing.router_astar --no-45 ...                                       # M9 비교 실험 (45° 엣지 없음)
+```
+
+`pipe_routing/router_astar.py` — 인터페이스(D37)만 쓰는 A*. 비용 = J(직관 + 엘보), 허용 휴리스틱으로 그래프 위 J 최적(D40·D41),
+배관당 60초 초과 시 timeout, 탐색 완료 후 경로 없음은 unreachable.
