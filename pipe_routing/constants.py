@@ -79,3 +79,32 @@ def elbow_kg(nominal_size: str, deflection_deg: int) -> float:
     """§3.4 엘보 청구. 135° = 90° + 45° (D25)."""
     f = FITTINGS[nominal_size]
     return {0: 0.0, 45: f.elbow45, 90: f.elbow90, 135: f.elbow90 + f.elbow45}[deflection_deg]
+
+
+# §3.6 서포트 최대 간격 (mm): (수평, 수직)
+SUPPORT_SPACING = {
+    "15A": (1800, 2500), "25A": (1800, 2500),
+    "50A": (2500, 3000),
+    "65A": (3000, 4000), "100A": (3000, 4000),
+    "150A": (4000, 5000), "200A": (4000, 5000),
+    "300A": (5000, 6000), "400A": (5000, 6000), "500A": (5000, 6000),
+}
+SUPPORT_ANGLE_KG_PER_M = 4.43   # D24 L50×50×6t
+SUPPORT_MARGIN_MM = 100         # D23
+
+# §3.7 / D19 밸브
+VALVE_Z_RANGE = (700, 1500)
+VALVE_FRONT_MM = 1000           # D43 1m × 1m × 1m
+
+# D44 — 검증기 기하
+ELBOW_R_FACTOR = 1.5            # LR 엘보 중심선 반경 = 1.5 × 호칭경(mm) (추정: JIS B2312 LR 정의)
+ANGLE_TOL_DEG = 2.0             # 편향각·방향 허용오차 (중력관 구배로 생기는 기울기 흡수)
+
+
+def elbow_radius(nominal_size: str) -> float:
+    return ELBOW_R_FACTOR * int(nominal_size[:-1])
+
+
+def support_kg(dist_mm: float) -> float:
+    """§3.6 support_kg = 4.43 × (거리 + 100) / 1000."""
+    return SUPPORT_ANGLE_KG_PER_M * (dist_mm + SUPPORT_MARGIN_MM) / 1000

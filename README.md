@@ -59,3 +59,14 @@ python -m pipe_routing.router_astar --no-45 ...                                 
 
 `pipe_routing/router_astar.py` — 인터페이스(D37)만 쓰는 A*. 비용 = J(직관 + 엘보), 허용 휴리스틱으로 그래프 위 J 최적(D40·D41),
 배관당 60초 초과 시 timeout, 탐색 완료 후 경로 없음은 unreachable.
+
+## 5단계 — 검증기 Layer 0
+
+```
+python -m pipe_routing.verifier scenarios/manual/manual_01.json --viz out/viz   # A* 경로 → 7개 모듈 판정 + 위반 위치 HTML
+python -m pipe_routing.verifier scenario.json --routes routes.json               # 다른 라우터(V3 등)의 경로를 판정
+```
+
+`pipe_routing/verifier/` — 라우터와 독립인 고정 심판(§6, D12, D44). 꺾임점 목록만 받아 실제 중심선(직관 + 엘보 호)을 만들고
+collision · boundary · bend · gravity_slope · valve · branch · support 를 판정한다. 모듈은 `MODULES` 레지스트리에 등록된 플러그인.
+경로 JSON: `{"routes": [{"pipe_id": "P001", "waypoints": [[x, y, z], ...], "branches": [[[x, y, z], ...]]}]}`

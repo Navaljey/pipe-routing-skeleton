@@ -39,6 +39,19 @@ class VizTest(unittest.TestCase):
         self.assertEqual(info["nodes"], int(g.node_ok[:, :, g.index[2][1500.0]].sum()))
         self.assertGreater(info["edges_axis"], 0)
 
+    def test_verification_layer(self):
+        from pipe_routing.verifier import PipeRoute, verify
+        from pipe_routing.viz import add_verification
+        sc = load(ROOT / "scenarios" / "manual" / "manual_01.json")
+        p = sc.pipes[2]   # P003 중력관 — 수평 직선 경로는 구배 위반
+        rep = verify(sc, [PipeRoute(p.id, [list(p.start.pos), [20000, 34000, 4500], [20000, 34000, 500],
+                                            list(p.end.pos)])])
+        fig = scenario_figure(sc)
+        n0 = len(fig.data)
+        add_verification(fig, rep)
+        names = [t.name for t in fig.data[n0:]]
+        self.assertTrue(any(n.startswith("위반 gravity_slope") for n in names), names)
+
 
 if __name__ == "__main__":
     unittest.main()
