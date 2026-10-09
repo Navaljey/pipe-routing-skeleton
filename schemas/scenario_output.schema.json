@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pipe-routing-skeleton/scenario_output.schema.json",
+  "title": "S0 출력 (CLAUDE.md §7.2 확장, D49)",
+  "type": "object",
+  "required": ["routes", "global"],
+  "properties": {
+    "scenario": {"type": "string"},
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["pipe_id", "success", "waypoints", "fittings", "supports", "layer0", "J", "fail_causes"],
+        "properties": {
+          "pipe_id": {"type": "string"},
+          "type_id": {"type": "string"},
+          "nominal_size": {"type": "string"},
+          "success": {"type": "boolean"},
+          "waypoints": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+          "fittings": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["type", "pos"],
+              "properties": {"type": {"enum": ["elbow_90", "elbow_45", "tee", "gate_valve"]}, "pos": {"$ref": "#/$defs/vec3"}}
+            }
+          },
+          "supports": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["pos", "face", "angle_length_mm", "kg"],
+              "properties": {
+                "pos": {"$ref": "#/$defs/vec3"},
+                "face": {"enum": ["floor", "ceiling", "wall_x0", "wall_x1", "wall_y0", "wall_y1"]},
+                "angle_length_mm": {"type": "number", "minimum": 0},
+                "kg": {"type": "number", "minimum": 0}
+              }
+            }
+          },
+          "layer0": {
+            "type": "object",
+            "description": "모듈 → true(통과) / false(위반) / null(해당 없음). 경로가 없으면 빈 객체",
+            "propertyNames": {"enum": ["collision", "boundary", "bend", "gravity_slope", "valve", "branch", "support"]},
+            "additionalProperties": {"type": ["boolean", "null"]}
+          },
+          "J": {
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["total", "pipe", "elbow", "tee", "valve", "support"],
+                "properties": {
+                  "total": {"type": "number"}, "pipe": {"type": "number"}, "elbow": {"type": "number"},
+                  "tee": {"type": "number"}, "valve": {"type": "number"}, "support": {"type": "number"}
+                }
+              }
+            ]
+          },
+          "fail_causes": {"type": "array", "items": {"type": "string"}},
+          "violations": {"type": "array"},
+          "metrics": {"type": "object"},
+          "router": {"type": "object"}
+        }
+      }
+    },
+    "global": {
+      "type": "object",
+      "required": ["total_pipes", "success_count", "J_total", "computation_time_sec"],
+      "properties": {
+        "total_pipes": {"type": "integer"},
+        "routed_count": {"type": "integer"},
+        "success_count": {"type": "integer"},
+        "success_rate": {"type": ["number", "null"]},
+        "success_rate_routed": {"type": ["number", "null"]},
+        "J_total": {"type": "number"},
+        "J_breakdown_success": {"type": "object"},
+        "J_total_routed": {"type": "number"},
+        "fail_causes": {"type": "object"},
+        "pairwise_violation": {"type": "integer"},
+        "computation_time_sec": {"type": "number"}
+      }
+    }
+  },
+  "$defs": {
+    "vec3": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}
+  }
+}
