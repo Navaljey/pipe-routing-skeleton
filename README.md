@@ -70,3 +70,19 @@ python -m pipe_routing.verifier scenario.json --routes routes.json              
 `pipe_routing/verifier/` — 라우터와 독립인 고정 심판(§6, D12, D44). 꺾임점 목록만 받아 실제 중심선(직관 + 엘보 호)을 만들고
 collision · boundary · bend · gravity_slope · valve · branch · support 를 판정한다. 모듈은 `MODULES` 레지스트리에 등록된 플러그인.
 경로 JSON: `{"routes": [{"pipe_id": "P001", "waypoints": [[x, y, z], ...], "branches": [[[x, y, z], ...]]}]}`
+
+## 5.5단계 — 라우터 엘보 규칙 정합 (D45~D48)
+
+라우터가 실제 엘보 형상(R = 1.5D)을 반영한다: 직관 길이 = max(§3.3, 엘보 접선 합), 경계 단자 쪽 직관 ≥ r + t, 꺾을 때 엘보 호 ↔ 장애물 이격.
+서포트 지지면은 가까운 순서로 막히지 않는 첫 면 (D46).
+
+## 6단계 — 지표·J 분해·출력 JSON (★ M1)
+
+```
+python -m pipe_routing.pipeline scenarios/manual/manual_01.json -o out/run
+# → out/run/manual_01_output.json (§7.2, schemas/scenario_output.schema.json)
+#   out/run/manual_01_report.md   (요약 · 배관별 J 분해 · 위반 상세)
+#   out/run/manual_01_report.html (경로 · 위반 위치 3D)
+```
+
+라우터 슬롯: `pipeline.run(scenario, router=...)` — `router(scenario, pipe, time_limit)` 가 `RouteResult` 호환 객체를 돌려주면 된다 (D49).
