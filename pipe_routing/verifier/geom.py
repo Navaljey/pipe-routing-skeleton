@@ -112,21 +112,32 @@ def build_centerline(wps, R: float, angle_tol: float, nominal_angles=(45, 90, 13
         t = min(trim_b[i - 1], trim_a[i])   # 겹침으로 접선이 줄었으면 반경도 줄인 호 (양쪽 같게)
         if t <= EPS:
             continue
-        T0, T1 = pts[i] - u0 * t, pts[i] + u1 * t
-        th = math.radians(bend.angle)
-        r_eff = t / math.tan(th / 2)
-        center = T0 + unit(u1 - u0 * np.dot(u0, u1)) * r_eff
-        v0, v1 = T0 - center, T1 - center
-        phi_max = 2 * math.acos(max(-1.0, 1 - SAGITTA_MM / max(r_eff, 1e-9))) if r_eff > SAGITTA_MM else th
-        k = max(1, math.ceil(th / max(phi_max, 1e-6)))
-        sag = r_eff * (1 - math.cos(th / k / 2))
-        prev = T0
-        for j in range(1, k + 1):
-            s = j / k
-            q = center + (math.sin((1 - s) * th) * v0 + math.sin(s * th) * v1) / math.sin(th)
-            cl.pieces.append(Piece(prev, q, "arc", i, slack=sag))
-            prev = q
+        A, B, sag = elbow_arc_chords(pts[i], u0, u1, t, bend.angle)
+        for a, b in zip(A, B):
+            cl.pieces.append(Piece(a, b, "arc", i, slack=sag))
     return cl
+
+
+def elbow_arc_chords(vertex, u0, u1, t: float, angle_deg_: float):
+    """꺾임점 vertex 의 엘보 호를 현 조각으로 (D44). 라우터(D48)와 검증기가 같이 쓴다.
+
+    u0·u1 = 들어오는·나가는 단위 방향, t = 접선 길이 (호 반경 = t / tan(θ/2)).
+    반환: (시작점 배열 (k,3), 끝점 배열 (k,3), sagitta) — 거리 판정 때 sagitta 를 빼면 보수적이다.
+    """
+    vertex = np.asarray(vertex, dtype=float)
+    u0 = np.asarray(u0, dtype=float)
+    u1 = np.asarray(u1, dtype=float)
+    T0, T1 = vertex - u0 * t, vertex + u1 * t
+    th = math.radians(angle_deg_)
+    r_eff = t / math.tan(th / 2)
+    center = T0 + unit(u1 - u0 * np.dot(u0, u1)) * r_eff
+    v0, v1 = T0 - center, T1 - center
+    phi_max = 2 * math.acos(max(-1.0, 1 - SAGITTA_MM / max(r_eff, 1e-9))) if r_eff > SAGITTA_MM else th
+    k = max(1, math.ceil(th / max(phi_max, 1e-6)))
+    sag = r_eff * (1 - math.cos(th / k / 2))
+    s = np.arange(k + 1)[:, None] / k
+    pts = center + (np.sin((1 - s) * th) * v0 + np.sin(s * th) * v1) / math.sin(th)
+    return pts[:-1], pts[1:], sag
 
 
 # ---------------------------------------------------------------- 거리

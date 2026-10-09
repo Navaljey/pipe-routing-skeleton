@@ -16,6 +16,7 @@ import numpy as np
 from .constants import PIPE_SPECS, SNAP_MM, elbow_kg, elbow_tangent
 from .geometry import Vec3
 from .scenario import Pipe, Scenario, boundary_face, load
+from .verifier.geom import elbow_arc_chords, segment_box_distance
 from .space import ALLOWED_DEFLECTIONS, AXIS_DIRS, DEFLECTION, DIR_INDEX, DIRS, State
 
 EPS = 1e-6
@@ -86,7 +87,15 @@ class EscapeGraph:
         self.L = pipe.min_straight
         # D45: 편향각별 엘보 접선 길이, 직진 길이 상한(이후 어떤 꺾임·도착 판정에도 충분한 값)
         self.tangent = {a: elbow_tangent(pipe.nominal_size, a) for a in (0, 45, 90, 135)}
-        self.run_cap = {a: max(self.L, self.tangent[a] + self.tangent[135]) for a in self.tangent}
+        # D47: 경계 단자 쪽 첫·끝 직관 ≥ r + t (엘보가 면의 유효 반경 띠 밖에 놓이도록)
+        self.start_boundary = pipe.start.kind == "boundary"
+        self.end_boundary = pipe.end.kind == "boundary"
+        t135 = self.tangent[135]
+        self.run_cap = {a: max(self.L, self.tangent[a] + t135,
+                               self.r + self.tangent[a] if self.end_boundary else 0.0,
+                               self.r + t135 if (a == 0 and self.start_boundary) else 0.0)
+                        for a in self.tangent}
+        self._arc_ok: dict[tuple, bool] = {}   # D48 캐시: (노드, 들어오는 방향, 나가는 방향) → 엘보 호 이격 OK
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
         ext = scenario.block.extent
         m = _snap_up(self.r)
@@ -118,7 +127,8 @@ class EscapeGraph:
         X, Y, Z = np.meshgrid(*self.axes, indexing="ij")
         pts = np.stack([X, Y, Z], -1).reshape(-1, 3)
         self.in_domain = np.all((pts >= self.dom_lo - EPS) & (pts <= self.dom_hi + EPS), 1).reshape(self.shape)
-        clear = self._point_clearance(pts).reshape(self.shape) >= self.r - EPS
+        self.clearance = self._point_clearance(pts).reshape(self.shape)   # 격자점 ↔ 장애물 최소거리 (D48 거르기용)
+        clear = self.clearance >= self.r - EPS
         self.node_ok = self.in_domain & clear
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
             self.node_ok[n] = clear[n]
@@ -262,22 +272,65 @@ class EscapeGraph:
         return State(self.start_node, DIR_INDEX[self.pipe.start.dir], 0.0, 0)
 
     def is_goal(self, state: State, pipe: Pipe = None) -> bool:
-        # D45 ③: 마지막 꺾임 → end 단자 직관 ≥ 그 엘보 접선 길이
-        return (state.node == self.end_node and DIRS[state.dir] == self.pipe.end.dir
-                and state.run >= self.tangent[state.bend] - EPS)
+        # D45 ③: 마지막 꺾임 → end 단자 직관 ≥ 그 엘보 접선 길이. D47: 경계 end 면 ≥ r + t
+        if state.node != self.end_node or DIRS[state.dir] != self.pipe.end.dir:
+            return False
+        need = self.tangent[state.bend]
+        if state.bend and self.end_boundary:
+            need += self.r
+        return state.run >= need - EPS
+
+    def turn_need(self, state: State, defl: int) -> float:
+        """꺾기 전에 필요한 직관 길이 (D45 ①②, D47)."""
+        t_new = self.tangent[defl]
+        need = max(self.L, self.tangent[state.bend] + t_new)
+        if state.bend == 0 and self.start_boundary:
+            need = max(need, self.r + t_new)
+        return need
+
+    def elbow_clear(self, node, d_in: int, d_out: int) -> bool:
+        """D48: 이 노드에서 d_in → d_out 으로 꺾을 때 엘보 호(R = 1.5D)가 장애물과 r 이상 떨어져 있는가.
+
+        호의 모든 점은 꺾임점에서 접선 길이 t 이내이므로, 꺾임점 이격 ≥ r + t 이면 정밀 판정 없이 통과.
+        """
+        defl = DEFLECTION[d_in][d_out]
+        t = self.tangent[defl]
+        if self.clearance[node] >= self.r + t + EPS:
+            return True
+        key = (node, d_in, d_out)
+        hit = self._arc_ok.get(key)
+        if hit is None:
+            u0 = np.array(DIRS[d_in], dtype=float)
+            u1 = np.array(DIRS[d_out], dtype=float)
+            A, B, sag = elbow_arc_chords(self.position(node), u0 / np.linalg.norm(u0), u1 / np.linalg.norm(u1),
+                                         t, defl)
+            # 호를 감싸는 박스(현 끝점들의 AABB)와 장애물 거리가 r 이상이면 정밀 판정 생략
+            plo = np.minimum(A.min(0), B.min(0))
+            phi = np.maximum(A.max(0), B.max(0))
+            gap = np.maximum(0.0, np.maximum(self.box_lo - phi, plo - self.box_hi))
+            near = np.sqrt((gap * gap).sum(1)) < self.r + sag
+            hit = True
+            for lo, hi in zip(self.box_lo[near], self.box_hi[near]):
+                dist, _ = segment_box_distance(A, B, lo, hi)
+                if np.any(dist - sag < self.r - EPS):
+                    hit = False
+                    break
+            self._arc_ok[key] = hit
+        return hit
 
     def neighbors(self, state: State, pipe: Pipe = None) -> Iterator[State]:
-        """D45 ①②: 꺾기 전 직관 ≥ max(§3.3, t_직전엘보 + t_이번엘보) (start 단자 이후 첫 꺾임은 t_직전 = 0)."""
+        """D45 ①②·D47: 꺾기 전 직관 ≥ turn_need. D48: 꺾을 때 엘보 호 ↔ 장애물 이격 ≥ r."""
         row = DEFLECTION[state.dir]
-        t_prev = self.tangent[state.bend]
         for d in range(len(DIRS)):
             defl = row[d]
             if defl not in ALLOWED_DEFLECTIONS:
                 continue
-            if defl and state.run < max(self.L, t_prev + self.tangent[defl]) - EPS:
+            if defl and state.run < self.turn_need(state, defl) - EPS:
                 continue
             nxt = self._step(state.node, d)
             if nxt is None:
+                continue
+            if defl and not self.elbow_clear(state.node, state.dir, d):
                 continue
             length = self.edge_length(state.node, nxt)
             if defl:

@@ -142,6 +142,59 @@ class AStarTest(unittest.TestCase):
             rep = verify(self.sc, [PipeRoute(p.id, r.waypoints)], modules=["bend"])["pipes"][p.id]
             self.assertEqual([v.message for v in rep.violations if "직관" in v.message], [], p.id)
 
+    def test_d47_deck_start_turn_needs_r_plus_t(self):
+        """경계 단자(하부 데크) start: 첫 꺾임 전 직관 ≥ max(§3.3, r + t) (D47)."""
+        from pipe_routing.space import DIR_INDEX, State
+        data = json.loads(MANUAL.read_text(encoding="utf-8"))
+        data["obstacles"] = []
+        d = data["pipes"][0]
+        d["nominal_size"] = "25A"   # r 77 + t90 37.5 = 114.5 > §3.3 100
+        d["start"] = {"pos": [20000, 5000, 0], "kind": "boundary", "dir": [0, 0, 1]}
+        d["end"] = {"pos": [40000, 5000, 5000], "kind": "boundary", "dir": [1, 0, 0]}
+        data["pipes"] = [d]
+        sc = from_dict(data)
+        p = sc.pipes[0]
+        g = EscapeGraph(sc, p)
+        self.assertAlmostEqual(g.turn_need(g.start_state(), 90), p.radius + 37.5)
+        self.assertAlmostEqual(g.turn_need(State(g.start_node, 0, 0.0, 90), 90), 100)   # 첫 꺾임 이후는 D45 그대로
+        r = astar_route(g, p)
+        self.assertEqual(r.status, "ok")
+        first = r.waypoints[1][2] - r.waypoints[0][2]
+        self.assertGreaterEqual(first + 1e-6, p.radius + 37.5)
+
+    def test_d48_elbow_into_obstacle_corner_refused(self):
+        """직관은 이격을 지키지만 엘보 호가 장애물 안쪽 모서리를 파고드는 꺾임은 neighbors 에서 빠진다 (D48)."""
+        from pipe_routing.space import DIR_INDEX, State
+        data = json.loads(MANUAL.read_text(encoding="utf-8"))
+        d = data["pipes"][0]
+        d["start"] = {"pos": [0, 5000, 1000], "kind": "boundary", "dir": [1, 0, 0]}
+        d["end"] = {"pos": [40000, 5000, 1000], "kind": "boundary", "dir": [1, 0, 0]}
+        data["pipes"] = [d]
+        corner = {"id": "C", "type": "box", "min": [15000, 5120, 0], "max": [19880, 9000, 2000]}
+        state_dirs = (DIR_INDEX[(1, 0, 0)], DIR_INDEX[(0, 1, 0)])
+        far = {"id": "F", "type": "box", "min": [15000, 30000, 0], "max": [19880, 31000, 2000]}   # 같은 x 격자선만 만든다
+        for obstacles, allowed in (([corner], False), ([far], True)):
+            data["obstacles"] = obstacles
+            sc = from_dict(data)
+            g = EscapeGraph(sc, sc.pipes[0])
+            node = g.node_of((20000, 5000, 1000))
+            st = State(node, state_dirs[0], 5000.0, 0)
+            dirs = {nb.dir for nb in g.neighbors(st)}
+            self.assertEqual(state_dirs[1] in dirs, allowed)
+
+    def test_routes_pass_verifier_boundary_and_bend_obstacles(self):
+        """A* 경로를 검증기로 판정: boundary 위반 0, 장애물 기인 bend 위반 0 (D47·D48). 배관 간 간섭은 7단계 대상이라 제외."""
+        from pipe_routing.verifier import PipeRoute, verify
+        for path in (MANUAL, ROOT / "scenarios" / "procedural" / "proc_000.json"):
+            sc = load(path)
+            pipes = sc.pipes if path == MANUAL else [p for p in sc.pipes
+                                                     if "boundary" in (p.start.kind, p.end.kind)][:3]
+            for p in pipes:
+                r = astar_route(EscapeGraph(sc, p), p)
+                self.assertEqual(r.status, "ok")
+                rep = verify(sc, [PipeRoute(p.id, r.waypoints)], modules=["boundary", "bend"])["pipes"][p.id]
+                self.assertEqual([v.message for v in rep.violations], [], f"{path.name} {p.id}")
+
 
 if __name__ == "__main__":
     unittest.main()
