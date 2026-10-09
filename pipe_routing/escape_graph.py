@@ -95,7 +95,8 @@ class EscapeGraph:
                                self.r + self.tangent[a] if self.end_boundary else 0.0,
                                self.r + t135 if (a == 0 and self.start_boundary) else 0.0)
                         for a in self.tangent}
-        self._arc_ok: dict[tuple, bool] = {}   # D48 캐시: (노드, 들어오는 방향, 나가는 방향) → 엘보 호 이격 OK
+        self._arc_ok: dict[tuple, bool] = {}
+        self._arc_tpl: dict[tuple, tuple] = {}   # D48 캐시: (노드, 들어오는 방향, 나가는 방향) → 엘보 호 이격 OK
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
         ext = scenario.block.extent
         m = _snap_up(self.r)
@@ -117,6 +118,7 @@ class EscapeGraph:
                 coords[ax].add(float(t.pos[ax]))
         self.axes = [np.array(sorted(c)) for c in coords]
         self.shape = tuple(len(a) for a in self.axes)
+        self._axes_f = [[float(v) for v in a] for a in self.axes]   # position() 용 (numpy 스칼라 변환 비용 회피)
         self.index = [{v: i for i, v in enumerate(a)} for a in self.axes]
 
         self.start_node = self.node_of(pipe.start.pos)
@@ -151,7 +153,8 @@ class EscapeGraph:
         return tuple(self.index[ax][float(pos[ax])] for ax in range(3))
 
     def position(self, node) -> Vec3:
-        return tuple(float(self.axes[ax][node[ax]]) for ax in range(3))
+        X, Y, Z = self._axes_f
+        return (X[node[0]], Y[node[1]], Z[node[2]])
 
     def _point_clearance(self, pts: np.ndarray) -> np.ndarray:
         best = np.full(len(pts), np.inf)
@@ -300,21 +303,39 @@ class EscapeGraph:
         key = (node, d_in, d_out)
         hit = self._arc_ok.get(key)
         if hit is None:
-            u0 = np.array(DIRS[d_in], dtype=float)
-            u1 = np.array(DIRS[d_out], dtype=float)
-            A, B, sag = elbow_arc_chords(self.position(node), u0 / np.linalg.norm(u0), u1 / np.linalg.norm(u1),
-                                         t, defl)
+            # 호 모양은 꺾임점 위치와 무관 — 방향 조합별 형판(꺾임점 기준 상대 좌표)을 한 번만 만든다
+            tpl = self._arc_tpl.get((d_in, d_out))
+            if tpl is None:
+                u0 = np.array(DIRS[d_in], dtype=float)
+                u1 = np.array(DIRS[d_out], dtype=float)
+                A0, B0, sag = elbow_arc_chords(np.zeros(3), u0 / np.linalg.norm(u0), u1 / np.linalg.norm(u1), t, defl)
+                tpl = (A0, B0, (A0 + B0) / 2, np.linalg.norm(B0 - A0, axis=1) / 2, sag,
+                       np.minimum(A0.min(0), B0.min(0)), np.maximum(A0.max(0), B0.max(0)))
+                self._arc_tpl[(d_in, d_out)] = tpl
+            A0, B0, M0, half, sag, plo0, phi0 = tpl
+            v = np.array(self.position(node))
+            A, B, mid = A0 + v, B0 + v, M0 + v
             # 호를 감싸는 박스(현 끝점들의 AABB)와 장애물 거리가 r 이상이면 정밀 판정 생략
-            plo = np.minimum(A.min(0), B.min(0))
-            phi = np.maximum(A.max(0), B.max(0))
+            plo, phi = plo0 + v, phi0 + v
             gap = np.maximum(0.0, np.maximum(self.box_lo - phi, plo - self.box_hi))
             near = np.sqrt((gap * gap).sum(1)) < self.r + sag
             hit = True
             for lo, hi in zip(self.box_lo[near], self.box_hi[near]):
-                dist, _ = segment_box_distance(A, B, lo, hi)
-                if np.any(dist - sag < self.r - EPS):
+                # 정밀 판정(황금분할) 전에 확실한 경우를 거른다 — 판정 결과는 정밀 판정과 같다
+                #   하한: 현 중점 거리 − 반 길이 ≥ r + sag 이면 그 현은 통과
+                #   상한: 현 끝점 거리 − sag < r 이면 충돌 확정 (정밀 판정도 끝점을 후보로 본다)
+                def pdist(q):
+                    g = np.maximum(0.0, np.maximum(lo - q, q - hi))
+                    return np.sqrt((g * g).sum(1))
+                if np.any(np.minimum(pdist(A), pdist(B)) - sag < self.r - EPS):
                     hit = False
                     break
+                amb = pdist(mid) - half - sag < self.r - EPS
+                if np.any(amb):
+                    dist, _ = segment_box_distance(A[amb], B[amb], lo, hi)
+                    if np.any(dist - sag < self.r - EPS):
+                        hit = False
+                        break
             self._arc_ok[key] = hit
         return hit
 
