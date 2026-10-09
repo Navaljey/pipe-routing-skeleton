@@ -1,7 +1,7 @@
 # CLAUDE.md — Pipe Routing Walking Skeleton (S0)
 
 **작성일:** 2026-10-08
-**상태:** 6단계(지표·J 분해·출력 JSON) 완료 — **★ M1 달성** (수작업 시나리오 입력→라우팅→검증→출력 관통). 결정 D1~D49 (D49 승인 대기). 다음: 7단계 (다중 배관)
+**상태:** 6단계 완료 — ★ M1 달성. 결정 D1~D50 (D49 승인 2026-10-09, D50 승인). **진행: 7단계 (다중 배관, D50)**
 **정본 우선순위:** 본 문서 > v3 레포(`Navaljey/pipe-routing-GNARL` CLAUDE.md) > v2 문서(`pipe-engineering-spec.md`, `evaluation-spec.md`)
 
 ---
@@ -27,7 +27,7 @@
 
 ---
 
-## 1. 결정 기록 (D1~D49)
+## 1. 결정 기록 (D1~D50)
 
 ### 1.1 프로그램 구조
 
@@ -125,7 +125,13 @@
 
 | ID | 결정 |
 |---|---|
-| D49 | 파이프라인·J 분해·출력 (`pipe_routing/pipeline.py`, `python -m pipe_routing.pipeline <json>... -o out/run`). **라우터 슬롯** = `router(scenario, pipe, time_limit)` → `RouteResult` 호환(status, waypoints, J, expanded, search_sec); 기본 S0 A*, V3 는 같은 형태의 함수를 넘긴다(§9-5). 순서: 배관마다 라우팅(그래프 재생성, D11) → 전 배관 함께 검증(D44) → J 분해 → 출력. **J 정의:** 직관 = 꺾임점 사이 중심선 길이 합 × kg/m — 라우터 비용(D37·D41)과 **같은 정의**라 A* 가 최소화한 값과 출력의 직관+엘보가 일치한다(엘보 구간 길이를 직관에서 빼지 않음). 엘보·티·밸브 = 검증기 관이음 목록 × §3.2 (135° = 90°+45°, D25), 서포트 = 검증기 서포트 kg 합(D46). 경로가 없는 배관(timeout·unreachable)은 J = null. **출력 JSON** = §7.2 상위 호환(`schemas/scenario_output.schema.json`): routes[] 에 §7.2 필드 + `fail_causes`(라우터 실패 `router:timeout`·`router:unreachable` 또는 위반 모듈 목록, §9-2) · `violations` · `metrics`(§6.2 보조: 길이·엘보 수·서포트 수) · `router`(확장 수·탐색·그래프 시간). `layer0` 는 §6.1 7개 모듈 전부(null = 해당 없음). global: total_pipes · routed_count · success_count · success_rate(전체) · success_rate_routed(경로 있는 배관, D34) · **J_total = Layer 0 통과 배관 합(§6.3)** · J_breakdown_success · J_total_routed · fail_causes 집계 · pairwise_violation(배관 쌍 수) · 계산 시간(라우팅·검증). **리포트** = 같은 이름의 `_report.md`(요약·배관별 표·위반 상세)와 `_report.html`(경로·위반 3D). **M1 판정 (2026-10-09):** manual_01 5배관 전부 경로 생성·검증·J 분해·출력 JSON(스키마 통과)·리포트 생성 — Layer 0 통과 3/5 (P003·P005 T5 구배 위반, D27 기준선), J_total 2,168.05 kg (직관 1,586.37 · 엘보 57.00 · 서포트 524.68), 계산 3.6초 |
+| D49 | 파이프라인·J 분해·출력 (`pipe_routing/pipeline.py`, `python -m pipe_routing.pipeline <json>... -o out/run`). **라우터 슬롯** = `router(scenario, pipe, time_limit)` → `RouteResult` 호환(status, waypoints, J, expanded, search_sec); 기본 S0 A*, V3 는 같은 형태의 함수를 넘긴다(§9-5). 순서: 배관마다 라우팅(그래프 재생성, D11) → 전 배관 함께 검증(D44) → J 분해 → 출력. **J 정의:** 직관 = 꺾임점 사이 중심선 길이 합 × kg/m — 라우터 비용(D37·D41)과 **같은 정의**라 A* 가 최소화한 값과 출력의 직관+엘보가 일치한다(엘보 구간 길이를 직관에서 빼지 않음). 엘보·티·밸브 = 검증기 관이음 목록 × §3.2 (135° = 90°+45°, D25), 서포트 = 검증기 서포트 kg 합(D46). 경로가 없는 배관(timeout·unreachable)은 J = null. **출력 JSON** = §7.2 상위 호환(`schemas/scenario_output.schema.json`): routes[] 에 §7.2 필드 + `fail_causes`(라우터 실패 `router:timeout`·`router:unreachable` 또는 위반 모듈 목록, §9-2) · `violations` · `metrics`(§6.2 보조: 길이·엘보 수·서포트 수) · `router`(확장 수·탐색·그래프 시간). `layer0` 는 §6.1 7개 모듈 전부(null = 해당 없음). global: total_pipes · routed_count · success_count · success_rate(전체) · success_rate_routed(경로 있는 배관, D34) · **J_total = Layer 0 통과 배관 합(§6.3)** · J_breakdown_success · J_total_routed · fail_causes 집계 · pairwise_violation(배관 쌍 수) · 계산 시간(라우팅·검증). **리포트** = 같은 이름의 `_report.md`(요약·배관별 표·위반 상세)와 `_report.html`(경로·위반 3D). **M1 판정 (2026-10-09):** manual_01 5배관 전부 경로 생성·검증·J 분해·출력 JSON(스키마 통과)·리포트 생성 — Layer 0 통과 3/5 (P003·P005 T5 구배 위반, D27 기준선), J_total 2,168.05 kg (직관 1,586.37 · 엘보 57.00 · 서포트 524.68), 계산 3.6초. **(2026-10-09 승인 시 보완)** J 는 "실중량"이 아니라 **"설계 비용 지표(kg 환산)"** 다. 직관을 꺾임점 사이 길이로 계산하면서 엘보 중량을 더하므로, 90° 엘보당 약 2R × kg/m 의 꺾임 페널티가 내재돼 있다(엘보 중량 ≈ 엘보 호 길이 × kg/m 이므로 실중량만으로는 꺾임 비용이 없다). v3 J 와 같은 정의이므로 유지한다. 리포트·출력 JSON 에 보조 지표 **"실중량(kg)"** 을 추가한다: 직관 = (꺾임점 사이 길이 − 각 엘보 접선 2t) × kg/m + 엘보·티·밸브·서포트. J 계산과 최적화에는 쓰지 않는다 |
+
+### 1.10 다중 배관 (7단계 착수 전 추가)
+
+| ID | 결정 |
+|---|---|
+| D50 | 7단계 규칙 (2026-10-09). ① **배관 순서:** 호칭경 내림차순, 같으면 start–end 맨해튼 거리 내림차순. ② 각 배관은 **이미 놓인 배관(직관 + 엘보 호)을 장애물로** 보고 라우팅한다. 이격은 r₁ + r₂ (D17). 라우터의 배관 간 판정은 **검증기와 같은 기하 함수**를 쓴다(5.5단계 교훈: 라우터–검증기 정합). ③ 그래프는 배관마다 재생성(D11), 재생성 시간을 배관별로 기록. ④ **rip-up & reroute:** 배관이 실패하면 그 배관의 단독 경로와 충돌하는 기존 배관을 걷어내고, 실패 배관을 먼저 깐 뒤 걷어낸 배관을 다시 깐다. 시나리오당 최대 3회. 결과가 나빠지면(성공 수 감소) 직전 상태로 되돌린다. ⑤ 시간 제한: 배관당 60초(D40) 유지, 시나리오 전체 시간도 기록. ⑥ **실패 원인 분류(D8 근거):** 최종 실패 배관을 빈 상태에서 단독으로 다시 라우팅해, 단독 성공이면 "간섭", 단독 실패(timeout·unreachable 포함)면 "개별 경로". ⑦ 중력관 구배는 여전히 라우터 대상이 아니다(D27). ⑧ 다중 배관 슬롯은 라우터 슬롯처럼 교체 가능한 함수로 둔다(D3: V3 가 순서·rip-up 판단에 들어갈 자리) |
 
 ---
 
@@ -425,6 +431,7 @@ J = Σ 직관 길이(m) × kg/m
 | ~~M12~~ | ~~서포트 지지면 대체~~ → **D46로 해제** | 해제 |
 | ~~M13~~ | ~~§3.3 최소 직진 vs LR 엘보~~ → **D45로 해제** | 해제 |
 | ~~M14~~ | ~~경계 단자 인접 엘보의 벽 쪽 이격~~ → **D47로 해제** ((a)안) | 해제 |
+| M15 | 꺾임 비용(용접·제작비 등)을 J 의 별도 항으로 명시할지 (현재는 J 정의에 2R × kg/m 정도로 내재, D49 보완) | V3 비교 단계 |
 
 ---
 
