@@ -98,6 +98,50 @@ class AStarTest(unittest.TestCase):
             self.assertEqual(r.length_45_mm, 0)
             self.assertGreaterEqual(r.J + 1e-6, self.results[p.id].J)
 
+    def test_d45_neighbors_respect_elbow_tangents(self):
+        """모든 이웃 이동: 꺾을 때 직관 ≥ max(§3.3, t_직전 + t_이번) (D45 ①②)."""
+        from pipe_routing.constants import elbow_tangent
+        from pipe_routing.space import DEFLECTION
+        from collections import deque
+        for p in self.sc.pipes:
+            g = self.graphs[p.id]
+            s0 = g.start_state()
+            seen, q = {s0}, deque([s0])
+            turns = 0
+            while q and len(seen) < 4000:
+                st = q.popleft()
+                for nb in g.neighbors(st):
+                    defl = DEFLECTION[st.dir][nb.dir]
+                    if defl:
+                        turns += 1
+                        need = max(p.min_straight, elbow_tangent(p.nominal_size, st.bend)
+                                   + elbow_tangent(p.nominal_size, defl))
+                        self.assertGreaterEqual(st.run + 1e-6, need)
+                        self.assertEqual(nb.bend, defl)
+                    if nb not in seen:
+                        seen.add(nb); q.append(nb)
+            self.assertGreater(turns, 0)
+
+    def test_d45_goal_needs_tangent(self):
+        """end 단자 도착 판정: 마지막 꺾임 이후 직관 ≥ 그 엘보 접선 (D45 ③)."""
+        from pipe_routing.constants import elbow_tangent
+        from pipe_routing.space import DIR_INDEX, State
+        p = self.sc.pipes[0]
+        g = self.graphs[p.id]
+        d = DIR_INDEX[p.end.dir]
+        t = elbow_tangent(p.nominal_size, 90)
+        self.assertFalse(g.is_goal(State(g.end_node, d, t - 1, 90)))
+        self.assertTrue(g.is_goal(State(g.end_node, d, t, 90)))
+        self.assertTrue(g.is_goal(State(g.end_node, d, 0.0, 0)))
+
+    def test_routes_pass_verifier_straight_lengths(self):
+        """A* 경로를 검증기(실제 엘보 형상)로 판정해도 직관 길이 위반이 없다 — 라우터·검증기 규칙 정합 (D45)."""
+        from pipe_routing.verifier import PipeRoute, verify
+        for p in self.sc.pipes:
+            r = self.results[p.id]
+            rep = verify(self.sc, [PipeRoute(p.id, r.waypoints)], modules=["bend"])["pipes"][p.id]
+            self.assertEqual([v.message for v in rep.violations if "직관" in v.message], [], p.id)
+
 
 if __name__ == "__main__":
     unittest.main()

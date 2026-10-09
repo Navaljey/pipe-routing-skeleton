@@ -1,4 +1,5 @@
 """물리 상수 (CLAUDE.md §3). 규격표 상수이며 탐색·튜닝 대상이 아니다."""
+import math
 from dataclasses import dataclass
 
 # D4 — 단위 블록 (mm)
@@ -26,12 +27,12 @@ PIPE_SPECS = {
     "15A": PipeSpec(21.7, 1.27, 100),
     "25A": PipeSpec(34.0, 2.57, 100),
     "50A": PipeSpec(60.5, 5.44, 150),
-    "65A": PipeSpec(76.3, 9.11, 150),
+    "65A": PipeSpec(76.3, 9.11, 200),     # D45: 3D = 195 → 10mm 올림 (v3 150 은 50mm 격자 반올림)
     "100A": PipeSpec(114.3, 16.10, 300),
     "150A": PipeSpec(165.2, 28.20, 450),
     "200A": PipeSpec(216.3, 42.50, 600),
     "300A": PipeSpec(318.5, 79.70, 900),
-    "400A": PipeSpec(406.4, 124.00, 1200),  # 최소 직진 추정: (M2)
+    "400A": PipeSpec(406.4, 124.00, 1200),  # = 3D (D45, M2 해제)
     "500A": PipeSpec(508.0, 185.00, 1500),
 }
 NOMINAL_SIZES = tuple(PIPE_SPECS)
@@ -97,12 +98,19 @@ VALVE_Z_RANGE = (700, 1500)
 VALVE_FRONT_MM = 1000           # D43 1m × 1m × 1m
 
 # D44 — 검증기 기하
-ELBOW_R_FACTOR = 1.5            # LR 엘보 중심선 반경 = 1.5 × 호칭경(mm) (추정: JIS B2312 LR 정의)
+ELBOW_R_FACTOR = 1.5            # LR 엘보 중심선 반경 = 1.5 × 호칭경(mm) (JIS B2312 LR 정의, D44)
 ANGLE_TOL_DEG = 2.0             # 편향각·방향 허용오차 (중력관 구배로 생기는 기울기 흡수)
 
 
 def elbow_radius(nominal_size: str) -> float:
     return ELBOW_R_FACTOR * int(nominal_size[:-1])
+
+
+def elbow_tangent(nominal_size: str, deflection_deg: float) -> float:
+    """D45 — 엘보 접선 길이 t = R·tan(θ/2). 135° 는 호 하나 (D44). θ = 0 이면 0."""
+    if deflection_deg <= 0:
+        return 0.0
+    return elbow_radius(nominal_size) * math.tan(math.radians(deflection_deg) / 2)
 
 
 def support_kg(dist_mm: float) -> float:

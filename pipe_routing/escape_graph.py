@@ -13,7 +13,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from .constants import PIPE_SPECS, SNAP_MM, elbow_kg
+from .constants import PIPE_SPECS, SNAP_MM, elbow_kg, elbow_tangent
 from .geometry import Vec3
 from .scenario import Pipe, Scenario, boundary_face, load
 from .space import ALLOWED_DEFLECTIONS, AXIS_DIRS, DEFLECTION, DIR_INDEX, DIRS, State
@@ -84,6 +84,9 @@ class EscapeGraph:
         self.pipe = pipe
         self.r = pipe.radius
         self.L = pipe.min_straight
+        # D45: 편향각별 엘보 접선 길이, 직진 길이 상한(이후 어떤 꺾임·도착 판정에도 충분한 값)
+        self.tangent = {a: elbow_tangent(pipe.nominal_size, a) for a in (0, 45, 90, 135)}
+        self.run_cap = {a: max(self.L, self.tangent[a] + self.tangent[135]) for a in self.tangent}
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
         ext = scenario.block.extent
         m = _snap_up(self.r)
@@ -256,24 +259,32 @@ class EscapeGraph:
         return math.dist(self.position(n1), self.position(n2))
 
     def start_state(self, pipe: Pipe = None) -> State:
-        return State(self.start_node, DIR_INDEX[self.pipe.start.dir], 0)
+        return State(self.start_node, DIR_INDEX[self.pipe.start.dir], 0.0, 0)
 
     def is_goal(self, state: State, pipe: Pipe = None) -> bool:
-        return state.node == self.end_node and DIRS[state.dir] == self.pipe.end.dir
+        # D45 ③: 마지막 꺾임 → end 단자 직관 ≥ 그 엘보 접선 길이
+        return (state.node == self.end_node and DIRS[state.dir] == self.pipe.end.dir
+                and state.run >= self.tangent[state.bend] - EPS)
 
     def neighbors(self, state: State, pipe: Pipe = None) -> Iterator[State]:
+        """D45 ①②: 꺾기 전 직관 ≥ max(§3.3, t_직전엘보 + t_이번엘보) (start 단자 이후 첫 꺾임은 t_직전 = 0)."""
         row = DEFLECTION[state.dir]
+        t_prev = self.tangent[state.bend]
         for d in range(len(DIRS)):
             defl = row[d]
             if defl not in ALLOWED_DEFLECTIONS:
                 continue
-            if defl and state.run < self.L:   # §3.3 꺾기 전 직진 부족
+            if defl and state.run < max(self.L, t_prev + self.tangent[defl]) - EPS:
                 continue
             nxt = self._step(state.node, d)
             if nxt is None:
                 continue
-            run = (state.run if defl == 0 else 0) + int(round(self.edge_length(state.node, nxt)))
-            yield State(nxt, d, min(run, self.L))
+            length = self.edge_length(state.node, nxt)
+            if defl:
+                run, bend = length, defl
+            else:
+                run, bend = state.run + length, state.bend
+            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend)
 
     def cost(self, a: State, b: State, pipe: Pipe = None) -> float:
         return (self.edge_length(a.node, b.node) / 1000 * self.kg_per_m
