@@ -115,7 +115,7 @@ class GraphTest(unittest.TestCase):
                     self.assertIn(defl, ALLOWED_DEFLECTIONS)
                     if defl:
                         self.assertGreaterEqual(st.run, g.L)
-                    self.assertLessEqual(nb.run, g.L)
+                    self.assertLessEqual(nb.run, g.run_cap[nb.bend] + 1e-6)   # D45 상한
                     self.assertGreater(g.cost(st, nb), 0)
                     if nb not in seen:
                         seen.add(nb); q.append(nb)

@@ -34,11 +34,16 @@ class State(NamedTuple):
 
     node: 표현이 정하는 노드 키 (escape graph 는 격자 인덱스 (i, j, k))
     dir:  진입 방향 인덱스 (DIRS). 시작 상태는 start 단자 dir
-    run:  마지막 꺾임 이후 직진 길이 mm, 최소 직진 길이(§3.3)에서 상한 — 꺾임 허용 판정용
+    run:  마지막 꺾임(또는 start 단자) 이후 직진 길이 mm. 이후 어떤 판정에도 충분한 값에서 상한
+    bend: 마지막 꺾임의 편향각 (0 = 아직 꺾지 않음). 엘보 접선 길이 판정용 (D45)
+
+    지배 관계 (라우터 가지치기용): 같은 node·dir 에서 run 이 크거나 같고 bend 가 작거나 같으면
+    이후 허용 이동이 포함관계로 넓다 (접선 길이는 편향각에 대해 단조 증가).
     """
     node: tuple
     dir: int
-    run: int
+    run: float
+    bend: int = 0
 
 
 class SpaceRepresentation(Protocol):
@@ -49,7 +54,7 @@ class SpaceRepresentation(Protocol):
     def is_goal(self, state: State, pipe: Pipe) -> bool: ...
 
     def neighbors(self, state: State, pipe: Pipe) -> Iterable[State]:
-        """이동 가능한 다음 상태. 편향각(D15)·최소 직진(§3.3)·충돌(D17)을 이미 만족한다."""
+        """이동 가능한 다음 상태. 편향각(D15)·직관 길이(§3.3, D45)·충돌(D17)을 이미 만족한다."""
         ...
 
     def cost(self, a: State, b: State, pipe: Pipe) -> float:

@@ -108,7 +108,11 @@ def boundary(ctx: Context, pr: PipeRoute):
 
 @register("bend")
 def bend(ctx: Context, pr: PipeRoute):
-    """편향각 ∈ {45, 90, 135}, 최소 직진(§3.3, 마지막 구간 면제 = 노즐 종단 예외), 엘보 접선 겹침, 엘보 호 충돌."""
+    """편향각 ∈ {45, 90, 135}, 직관 길이(D45), 엘보 호 충돌(엘보 점유 공간).
+
+    직관 길이 (D45, t = 엘보 접선 길이 R·tan(θ/2)):
+      start → 첫 꺾임 ≥ max(§3.3, t_첫), 꺾임 사이 ≥ max(§3.3, t_앞 + t_뒤), 마지막 꺾임 → end ≥ t_마지막
+    """
     pipe = ctx.pipes[pr.pipe_id]
     main = ctx.centerlines[pipe.id][0]
     P = main.points
@@ -116,14 +120,23 @@ def bend(ctx: Context, pr: PipeRoute):
     for b in main.bends:
         if b.nominal is None:
             out.append(Violation("bend", pipe.id, _pt(b.pos), f"편향각 {b.angle:.1f}° ∉ {{45, 90, 135}}", b.angle))
-    for i in range(len(P) - 2):       # 마지막 구간(end 단자로 들어가는 구간)은 면제
-        L = float(np.linalg.norm(P[i + 1] - P[i]))
-        if L < pipe.min_straight - EPS:
+    n = len(P)
+    tan = {b.vertex: b.tangent for b in main.bends}
+    Ls = pipe.min_straight
+    for i in range(n - 1):
+        if n == 2:
+            break                     # 꺾임 없음
+        ta = tan.get(i, 0.0)
+        tb = tan.get(i + 1, 0.0)
+        if math.isinf(ta) or math.isinf(tb):
+            continue                  # 180° 역행 — 편향각 위반으로 이미 보고
+        need = ta if i == n - 2 else max(Ls, ta + tb)
+        length = float(np.linalg.norm(P[i + 1] - P[i]))
+        if length < need - EPS:
+            where = "start→첫 꺾임" if i == 0 else ("마지막 꺾임→end" if i == n - 2 else "꺾임 사이")
+            basis = (f"엘보 접선 {ta:.0f}" if i == n - 2 else f"§3.3 {Ls}, 엘보 접선 {ta:.0f}+{tb:.0f}")
             out.append(Violation("bend", pipe.id, _pt((P[i] + P[i + 1]) / 2),
-                                 f"직진 {L:.0f}mm < 최소 직진 {pipe.min_straight}mm (§3.3)", L))
-    for i, need, L in main.overlaps:
-        out.append(Violation("bend", pipe.id, _pt((P[i] + P[i + 1]) / 2),
-                             f"엘보 접선 합 {need:.0f}mm > 구간 길이 {L:.0f}mm (엘보가 들어가지 않음)", need))
+                                 f"{where} 직관 {length:.0f}mm < 필요 {need:.0f}mm ({basis}, D45)", length))
     A, B, S, _ = main.arrays(("arc",))
     out += _obstacle_hits(ctx, A, B, S, pipe.radius, "bend", pipe.id, "엘보")
     out += _pipe_hits(ctx, A, B, S, pipe.radius, "bend", pipe.id, "엘보")
@@ -260,10 +273,10 @@ _CHUNK = 64
 
 
 def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray) -> list:
-    """후보 위치마다 서포트 (face, 길이, kg) 또는 None (D21~D23).
+    """후보 위치마다 서포트 (face, 거리, kg) 또는 None (D21~D23, D46).
 
-    지지면 = 배관 축과 평행하지 않은 법선의 구조면 중 **가장 가까운 면** 하나. 지지선(배관 중심 → 면 수직)이
-    장애물과 닿거나 다른 배관 유효 반경 안을 지나면 그 위치는 불가.
+    지지면 = 배관 축과 평행하지 않은 법선의 구조면을 가까운 순서로 시도해, 지지선(배관 중심 → 면 수직)이
+    장애물과 닿지 않고 다른 배관 유효 반경 안을 지나지 않는 첫 면 (D46). 모두 막히면 None.
     """
     ext = np.array(ctx.scenario.block.extent)
     oA, oB, oR, oS, _ = ctx.others(pid)
@@ -271,23 +284,28 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
-        best = []
-        for p, u in zip(P, U):
-            cand = [(abs(p[ax] - side * ext[ax]), name, ax, side) for name, ax, side in FACES
-                    if abs(u[ax]) < 1 - 1e-9]
-            best.append(min(cand))
-        Q = P.copy()
-        for i, (_, _, ax, side) in enumerate(best):
-            Q[i, ax] = side * ext[ax]
-        blocked = np.zeros(len(P), dtype=bool)
-        for o in ctx.scenario.obstacles:
-            d, _ = segment_box_distance(P, Q, o.box.min, o.box.max, iters=40)
-            blocked |= d <= EPS
-        if len(oA):
-            d, _, _ = segment_segment_distance(P[:, None], Q[:, None], oA[None], oB[None])
-            blocked |= np.any(d - oS[None] < oR[None] - EPS, 1)
-        for i, (dist, name, _, _) in enumerate(best):
-            res.append(None if blocked[i] else (name, float(dist), support_kg(dist)))
+        dist = np.full((len(P), len(FACES)), np.inf)    # 평행 면은 inf (후보 아님)
+        blocked = np.zeros((len(P), len(FACES)), dtype=bool)
+        for f, (_, ax, side) in enumerate(FACES):
+            ok = np.abs(U[:, ax]) < 1 - 1e-9
+            dist[ok, f] = np.abs(P[ok, ax] - side * ext[ax])
+            Q = P.copy()
+            Q[:, ax] = side * ext[ax]
+            for o in ctx.scenario.obstacles:
+                d, _ = segment_box_distance(P, Q, o.box.min, o.box.max, iters=40)
+                blocked[:, f] |= d <= EPS
+            if len(oA):
+                d, _, _ = segment_segment_distance(P[:, None], Q[:, None], oA[None], oB[None])
+                blocked[:, f] |= np.any(d - oS[None] < oR[None] - EPS, 1)
+        for i in range(len(P)):
+            pick = None
+            for f in np.argsort(dist[i], kind="stable"):
+                if math.isinf(dist[i, f]):
+                    break
+                if not blocked[i, f]:
+                    pick = (FACES[f][0], float(dist[i, f]), support_kg(float(dist[i, f])))
+                    break
+            res.append(pick)
     return res
 
 
