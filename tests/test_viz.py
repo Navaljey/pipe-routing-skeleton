@@ -26,6 +26,19 @@ class VizTest(unittest.TestCase):
             self.assertIn("plotly", html)
             self.assertIn("P001", html)
 
+    def test_graph_slice(self):
+        from pipe_routing.escape_graph import EscapeGraph
+        from pipe_routing.viz import add_graph
+        sc = load(ROOT / "scenarios" / "manual" / "manual_01.json")
+        g = EscapeGraph(sc, sc.pipes[1])
+        fig = scenario_figure(sc)
+        n0 = len(fig.data)
+        info = add_graph(fig, g, 2, 1500)
+        self.assertEqual(len(fig.data), n0 + 4)   # 노드, 축 엣지, 45° 엣지, 팽창 장애물
+        self.assertEqual(info["value"], 1500)
+        self.assertEqual(info["nodes"], int(g.node_ok[:, :, g.index[2][1500.0]].sum()))
+        self.assertGreater(info["edges_axis"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

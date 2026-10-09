@@ -122,6 +122,72 @@ def scenario_figure(sc: Scenario, connect: bool = True) -> go.Figure:
     return fig
 
 
+def add_graph(fig: go.Figure, g, axis: int = 2, value: float = None) -> dict:
+    """escape graph 한 단면(axis = value 평면)의 노드·축 엣지·45° 엣지와 팽창 장애물 (3단계).
+
+    전체 그래프(노드 10만 단위)는 HTML 로 그리기에 너무 커서 단면만 그린다.
+    value 기본값 = 해당 배관 start 단자 좌표. 격자 좌표가 아니면 가장 가까운 격자 평면.
+    """
+    import numpy as np
+    from .space import DIRS
+    coords = g.axes[axis]
+    if value is None:
+        value = g.pipe.start.pos[axis]
+    k = int(np.abs(coords - value).argmin())
+    plane = coords[k]
+    sl = [slice(None)] * 3
+    sl[axis] = k
+    sl = tuple(sl)
+
+    def pts(idx_arrays):
+        out = [None, None, None]
+        it = iter(idx_arrays)
+        for ax in range(3):
+            out[ax] = np.full(len(idx_arrays[0]), plane) if ax == axis else g.axes[ax][next(it)]
+        return out
+
+    ia, ib = np.nonzero(g.node_ok[sl])
+    x, y, z = pts((ia, ib))
+    fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode="markers", name=f"노드 ({len(ia)})",
+                               legendgroup="graph", marker=dict(size=1.6, color="#333"), hoverinfo="skip"))
+
+    def lines(name, color, width, segs):
+        xs, ys, zs = [], [], []
+        for p0, p1 in segs:
+            for q in (p0, p1, (None, None, None)):
+                xs.append(q[0]); ys.append(q[1]); zs.append(q[2])
+        fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", name=name, legendgroup="graph",
+                                   line=dict(color=color, width=width), hoverinfo="skip"))
+        return len(segs)
+
+    other = [ax for ax in range(3) if ax != axis]
+    axis_segs = []
+    for ax in other:
+        for idx in zip(*np.nonzero(g.axis_ok[ax][sl])):
+            node = list(idx); node.insert(axis, k)
+            nxt = list(node); nxt[ax] += 1
+            axis_segs.append((g.position(tuple(node)), g.position(tuple(nxt))))
+    diag_segs = []
+    for d, vec in enumerate(DIRS):
+        # 이 평면 안의 45° 방향 중 반쪽만 (반대 방향은 같은 엣지)
+        if d < 6 or vec[axis] != 0 or vec[other[0]] < 0:
+            continue
+        for idx in zip(*np.nonzero(g.diag_ok[d][sl])):
+            node = list(idx); node.insert(axis, k)
+            diag_segs.append((g.position(tuple(node)), g.position(g._step(tuple(node), d))))
+    n_axis = lines(f"축 엣지 ({len(axis_segs)})", "#4c78a8", 1.5, axis_segs)
+    n_diag = lines(f"45° 엣지 ({len(diag_segs)})", "#e45756", 1, diag_segs)
+
+    from .escape_graph import _snap_down, _snap_up
+    inflated = [Box(tuple(_snap_down(v - g.r) for v in lo), tuple(_snap_up(v + g.r) for v in hi))
+                for lo, hi in zip(g.box_lo, g.box_hi)]
+    xs, ys, zs = _edge_lines(inflated)
+    fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", name=f"팽창 장애물 (r={g.r:.2f})",
+                               legendgroup="graph", visible="legendonly",
+                               line=dict(color="#e45756", width=1, dash="dash"), hoverinfo="skip"))
+    return {"axis": "xyz"[axis], "value": float(plane), "nodes": len(ia), "edges_axis": n_axis, "edges_45": n_diag}
+
+
 def write_html(fig: go.Figure, path, offline: bool = False) -> None:
     """offline=True 면 plotly.js(약 3.5MB)를 파일에 넣는다. 기본은 CDN 참조."""
     fig.write_html(str(path), include_plotlyjs=True if offline else "cdn", full_html=True)
@@ -133,13 +199,34 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", default="out/viz", help="HTML 출력 폴더")
     ap.add_argument("--offline", action="store_true", help="plotly.js 를 HTML 에 포함")
     ap.add_argument("--no-connect", action="store_true", help="start–end 점선 숨김")
+    ap.add_argument("--graph", metavar="PIPE_ID", help="이 배관의 escape graph 단면을 겹쳐 그린다 (3단계)")
+    ap.add_argument("--slice", default="z", metavar="AXIS[=MM]",
+                    help="그래프 단면. 예: z (start 단자 높이), z=1500, x=20000")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for path in args.paths:
         sc = load(path)
-        dst = out / (Path(path).stem + ".html")
-        write_html(scenario_figure(sc, not args.no_connect), dst, args.offline)
+        fig = scenario_figure(sc, not args.no_connect)
+        suffix = ""
+        if args.graph:
+            from .escape_graph import EscapeGraph
+            pipe = next((p for p in sc.pipes if p.id == args.graph), None)
+            if pipe is None:
+                print(f"{path}: 배관 {args.graph} 없음 — 건너뜀")
+                continue
+            g = EscapeGraph(sc, pipe)
+            ax_name, _, val = args.slice.partition("=")
+            info = add_graph(fig, g, "xyz".index(ax_name), float(val) if val else None)
+            st = g.stats()
+            fig.update_layout(title=dict(text=fig.layout.title.text + (
+                f"<br>{pipe.id} escape graph: 노드 {st['nodes']:,} · 엣지 {st['edges']:,} "
+                f"(축 {st['edges_axis']:,}, 45° {st['edges_45']:,}) · {st['build_sec']:.2f}s — "
+                f"단면 {info['axis']}={info['value']:.0f}: 노드 {info['nodes']:,}, "
+                f"축 {info['edges_axis']:,}, 45° {info['edges_45']:,}")))
+            suffix = f"_{pipe.id}_{info['axis']}{info['value']:.0f}"
+        dst = out / (Path(path).stem + suffix + ".html")
+        write_html(fig, dst, args.offline)
         print(f"{path} → {dst}")
     return 0
 

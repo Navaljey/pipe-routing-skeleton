@@ -36,3 +36,15 @@ python -m pipe_routing.viz --offline -o out/viz scenarios/procedural/*.json
 
 장애물(회색 박스), 단자(● start / ◆ end, 채움 = 노즐 · 빈 마커 = 경계), 흐름 방향 화살표(D29),
 최소 직진 구간(굵은 선, 중력관은 점선), start–end 짝 표시(가는 점선 — 경로 아님). 범례 클릭으로 배관별 켜고 끄기.
+
+## 3단계 — 인터페이스 + escape graph
+
+```
+python -m pipe_routing.escape_graph scenarios/manual/manual_01.json        # 배관별 노드·엣지 수
+python -m pipe_routing.viz scenarios/manual/manual_01.json --graph P002 --slice z=1500   # 그래프 단면 표시
+```
+
+| 경로 | 내용 |
+|---|---|
+| `pipe_routing/space.py` | 라우터 슬롯 인터페이스 (`SpaceRepresentation`, `State`, `route`) — D37 |
+| `pipe_routing/escape_graph.py` | S0 표현 escape graph (축 + 평면 내 45°) — D38·D39 |

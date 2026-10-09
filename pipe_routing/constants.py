@@ -50,3 +50,32 @@ def effective_radius(nominal_size: str, insulation_mm: float = INSULATION_MM) ->
 def default_drain_slope(nominal_size: str) -> float:
     """§3.5 — 배수관 일반 1/100, 200A 이상 1/200."""
     return 1 / 200 if int(nominal_size[:-1]) >= 200 else 1 / 100
+
+
+@dataclass(frozen=True)
+class FittingSpec:
+    elbow90: float   # kg (§3.2)
+    elbow45: float
+    tee: float
+    gate_valve: float
+
+
+# §3.2 관이음 중량 (JIS B2312 LR). 15A·50A·150A·400A 는 D26 보간값 (추정:)
+FITTINGS = {
+    "15A": FittingSpec(0.11, 0.06, 0.20, 0.82),
+    "25A": FittingSpec(0.30, 0.17, 0.54, 2.0),
+    "50A": FittingSpec(1.08, 0.60, 1.94, 6.30),
+    "65A": FittingSpec(1.80, 0.99, 3.24, 10.0),
+    "100A": FittingSpec(3.80, 2.09, 6.84, 20.0),
+    "150A": FittingSpec(9.33, 5.13, 16.79, 44.53),
+    "200A": FittingSpec(18.0, 9.90, 32.4, 80.0),
+    "300A": FittingSpec(51.0, 28.1, 91.8, 210.0),
+    "400A": FittingSpec(102.72, 56.47, 184.89, 402.43),
+    "500A": FittingSpec(195.0, 107.0, 351.0, 730.0),
+}
+
+
+def elbow_kg(nominal_size: str, deflection_deg: int) -> float:
+    """§3.4 엘보 청구. 135° = 90° + 45° (D25)."""
+    f = FITTINGS[nominal_size]
+    return {0: 0.0, 45: f.elbow45, 90: f.elbow90, 135: f.elbow90 + f.elbow45}[deflection_deg]
