@@ -67,52 +67,79 @@ if HAVE_NUMBA:
         return n / m
 
     @njit(cache=True)
-    def _search(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head, cl_run, cl_bend, cl_g,
-                cl_next, arc):
-        """A* 본체. 상태는 호출 사이에 유지된다 (ctr/fctr/리스트/딕셔너리). 반환: 코드.
+    def _search(T, C, G, ctr, fctr, H, S, K, open_head, closed_head, arc):
+        """A* 본체. 탐색 상태는 호출 사이에 유지된다 (배열 + ctr/fctr). 반환: 코드.
 
-        T = 그래프 표 (튜플), C = 상수 (튜플). ctr: [expanded, generated, tie, pending_id, (미사용), found_id]
+        T = 그래프 표, C = 상수, G = 엘보 호 거르기 표.
+        H = 우선순위 큐 (f, 삽입 순번, g, 상태 id) 배열 — (f, 순번) 최소 힙. 순번이 유일하므로 꺼내는 순서는
+            파이썬 heapq 와 같다
+        S = 상태 배열 (노드 평탄 인덱스, 방향, 직진 길이, 편향각 인덱스, g_best, 부모, 같은 (노드, 방향) 다음 상태)
+        K = 확정 목록 (run, bend, g, 다음) — (노드, 방향)별 연결 리스트, 머리는 closed_head
+        open_head[(노드, 방향)] = 그 (노드, 방향)의 첫 상태 id — 파이썬 g_best 딕셔너리의 키 (노드, 방향, run, bend) 조회와 같다
+        ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
         (axis_ok, diag_ok, diag_to_a, diag_to_b, diag_axes, len_ax, diag_len, axes_x, axes_y, axes_z,
          hdist, clearance, pipe_margin, end_node) = T
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
+        hf, ht, hg, hid = H
+        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next = S
+        c_run, c_bend, c_g, c_next = K
         ny = axes_y.shape[0]
         nz = axes_z.shape[0]
+        end_flat = (end_node[0] * ny + end_node[1]) * nz + end_node[2]
         while True:
+            # 배열 여유: 한 번 펼칠 때 상태·큐는 최대 18개, 확정 목록은 1개 늘어난다
+            if ctr[4] + 18 > hf.shape[0] or ctr[6] + 18 > s_node.shape[0] or ctr[7] + 1 > c_run.shape[0]:
+                return 4
             if ctr[3] >= 0:
                 cur = ctr[3]
                 g = fctr[0]
             else:
-                if len(heap) == 0:
+                if ctr[4] == 0:
                     return 0
-                item = _heappop(heap)
-                g = item[2]
-                cur = item[3]
-                if g > sg[cur] + 1e-9:
+                # pop (f, 순번) 최소
+                g = hg[0]
+                cur = hid[0]
+                n = ctr[4] - 1
+                ctr[4] = n
+                if n > 0:
+                    lf, lt, lg, li = hf[n], ht[n], hg[n], hid[n]
+                    pos = 0
+                    while True:
+                        c = 2 * pos + 1
+                        if c >= n:
+                            break
+                        if c + 1 < n and (hf[c + 1] < hf[c] or (hf[c + 1] == hf[c] and ht[c + 1] < ht[c])):
+                            c += 1
+                        if hf[c] < lf or (hf[c] == lf and ht[c] < lt):
+                            hf[pos], ht[pos], hg[pos], hid[pos] = hf[c], ht[c], hg[c], hid[c]
+                            pos = c
+                        else:
+                            break
+                    hf[pos], ht[pos], hg[pos], hid[pos] = lf, lt, lg, li
+                if g > s_g[cur] + 1e-9:
                     continue
-                ci, cj, ck, cd = sn[cur][0], sn[cur][1], sn[cur][2], sd[cur]
-                crun, cb = srun[cur], sbend[cur]
-                ckey = ((ci * ny + cj) * nz + ck) * 18 + cd
-                # 지배 가지치기
+                cflat = s_node[cur]
+                cd = s_dir[cur]
+                crun, cb = s_run[cur], s_bend[cur]
+                ckey = cflat * 18 + cd
                 dom = False
-                h = closed_head[ckey] if ckey in closed_head else np.int64(-1)
+                h = closed_head[ckey]
                 while h >= 0:
-                    if cl_run[h] >= crun and cl_bend[h] <= cb and cl_g[h] <= g + 1e-9:
+                    if c_run[h] >= crun and c_bend[h] <= cb and c_g[h] <= g + 1e-9:
                         dom = True
                         break
-                    h = cl_next[h]
+                    h = c_next[h]
                 if dom:
                     continue
-                cl_run.append(crun)
-                cl_bend.append(cb)
-                cl_g.append(g)
-                cl_next.append(closed_head[ckey] if ckey in closed_head else np.int64(-1))
-                closed_head[ckey] = len(cl_run) - 1
+                m = ctr[7]
+                c_run[m], c_bend[m], c_g[m], c_next[m] = crun, cb, g, closed_head[ckey]
+                closed_head[ckey] = m
+                ctr[7] = m + 1
                 ctr[0] += 1
-                if ci == end_node[0] and cj == end_node[1] and ck == end_node[2] and cd == end_dir \
-                        and crun >= goal_need_m[cb]:
+                if cflat == end_flat and cd == end_dir and crun >= goal_need_m[cb]:
                     ctr[5] = cur
                     return 1
                 if ctr[0] % check_every == 0:
@@ -120,10 +147,12 @@ if HAVE_NUMBA:
                     fctr[0] = g
                     return 3
             ctr[3] = -1
-            ci, cj, ck, cd = sn[cur][0], sn[cur][1], sn[cur][2], sd[cur]
-            crun, cb = srun[cur], sbend[cur]
-            flat = (ci * ny + cj) * nz + ck
-            # 2) 이웃 펼치기 (EscapeGraph.neighbors 와 같은 순서·조건)
+            cflat = s_node[cur]
+            cd = s_dir[cur]
+            crun, cb = s_run[cur], s_bend[cur]
+            ci = cflat // (ny * nz)
+            cj = (cflat // nz) % ny
+            ck = cflat % nz
             for d in range(18):
                 di = defl_idx[cd, d]
                 if di < 0:
@@ -135,7 +164,7 @@ if HAVE_NUMBA:
                     continue
                 if di > 0:
                     if not (clearance[ci, cj, ck] >= thr[di] and pipe_margin[ci, cj, ck] >= thr[di]):
-                        k = (flat * 18 + cd) * 18 + d
+                        k = (cflat * 18 + cd) * 18 + d
                         if k in arc:
                             ok_arc = arc[k]
                         else:
@@ -174,33 +203,32 @@ if HAVE_NUMBA:
                 cap = run_cap[nb]
                 run = _round6(run if run <= cap else cap)
                 ng = g + (length / 1000 * kgpm + ekg[di])
-                key2 = (np.int64(((ni * ny + nj) * nz + nk) * 18 + d), np.int64(nb), run, np.int64(0))
-                sid = gbest[key2] if key2 in gbest else np.int64(-1)
-                if sid >= 0 and not (ng + 1e-9 < sg[sid]):
+                nflat = (ni * ny + nj) * nz + nk
+                nkey = nflat * 18 + d
+                sid = open_head[nkey]
+                while sid >= 0:
+                    if s_run[sid] == run and s_bend[sid] == nb:
+                        break
+                    sid = s_next[sid]
+                if sid >= 0 and not (ng + 1e-9 < s_g[sid]):
                     continue
-                # 지배 확인
-                ckey2 = key2[0]
                 dom = False
-                h = closed_head[ckey2] if ckey2 in closed_head else np.int64(-1)
+                h = closed_head[nkey]
                 while h >= 0:
-                    if cl_run[h] >= run and cl_bend[h] <= nb and cl_g[h] <= ng + 1e-9:
+                    if c_run[h] >= run and c_bend[h] <= nb and c_g[h] <= ng + 1e-9:
                         dom = True
                         break
-                    h = cl_next[h]
+                    h = c_next[h]
                 if dom:
                     continue
                 if sid < 0:
-                    sid = len(sn)
-                    sn.append((ni, nj, nk))
-                    sd.append(d)
-                    srun.append(run)
-                    sbend.append(nb)
-                    sg.append(ng)
-                    spar.append(cur)
-                    gbest[key2] = sid
-                else:
-                    sg[sid] = ng
-                    spar[sid] = cur
+                    sid = ctr[6]
+                    ctr[6] = sid + 1
+                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid] = nflat, d, run, nb
+                    s_next[sid] = open_head[nkey]
+                    open_head[nkey] = sid
+                s_g[sid] = ng
+                s_par[sid] = cur
                 # 휴리스틱 (router_astar.heuristic_factory 와 같은 식)
                 dist = hdist[ni, nj, nk]
                 if d != end_dir:
@@ -216,7 +244,18 @@ if HAVE_NUMBA:
                         and abs(v2 - tt * e2) < 1e-6
                     bends = 0 if on_ray else 2
                 f = ng + (dist * kgmm + bends * e45)
-                _heappush(heap, (f, ctr[2], ng, sid))
+                # push
+                pos = ctr[4]
+                ctr[4] = pos + 1
+                tie = ctr[2]
+                while pos > 0:
+                    par = (pos - 1) >> 1
+                    if f < hf[par] or (f == hf[par] and tie < ht[par]):
+                        hf[pos], ht[pos], hg[pos], hid[pos] = hf[par], ht[par], hg[par], hid[par]
+                        pos = par
+                    else:
+                        break
+                hf[pos], ht[pos], hg[pos], hid[pos] = f, tie, ng, sid
                 ctr[2] += 1
                 ctr[1] += 1
 
@@ -447,42 +486,44 @@ def _consts(space, pipe, goal):
     return None, C
 
 
+def _grow(arrs, need):
+    """배열 묶음을 need 이상으로 (두 배씩) 늘린다."""
+    cap = len(arrs[0])
+    while cap < need:
+        cap *= 2
+    return tuple(np.concatenate([a, np.zeros(cap - len(a), a.dtype)]) for a in arrs)
+
+
 def astar_route_fast(space, pipe, time_limit, h_start):
     """router_astar.astar_route 와 같은 결과를 내는 컴파일 구현. 반환: (status, goal_state_chain | None, expanded, generated)."""
     t0 = time.perf_counter()
     T, C = _tables(space, pipe)
     G = _arc_tables(space)
-    ny, nz = space.shape[1], space.shape[2]
+    nx, ny, nz = space.shape
     _CURRENT.update(space=space, ny=ny, nz=nz)
     s0 = space.start_state(pipe)
-    heap = List.empty_list(types.Tuple((types.float64, types.int64, types.float64, types.int64)))
-    sn = List.empty_list(types.UniTuple(types.int64, 3))
-    sd = List.empty_list(types.int64)
-    srun = List.empty_list(types.float64)
-    sbend = List.empty_list(types.int64)
-    sg = List.empty_list(types.float64)
-    spar = List.empty_list(types.int64)
-    gbest = Dict.empty(_key_t, types.int64)
-    closed_head = Dict.empty(types.int64, types.int64)
-    cl_run = List.empty_list(types.float64)
-    cl_bend = List.empty_list(types.int64)
-    cl_g = List.empty_list(types.float64)
-    cl_next = List.empty_list(types.int64)
+    cap = 1 << 16
+    H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
+    S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
+         np.zeros(cap, np.int64), np.zeros(cap, np.int64))
+    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
+    open_head = np.full(nx * ny * nz * 18, -1, dtype=np.int32)
+    closed_head = np.full(nx * ny * nz * 18, -1, dtype=np.int32)
     arc = Dict.empty(types.int64, types.int8)
-    sn.append(tuple(int(v) for v in s0.node))
-    sd.append(s0.dir)
-    srun.append(s0.run)
-    sbend.append(ANG.index(s0.bend))
-    sg.append(0.0)
-    spar.append(-1)
     n0 = s0.node
-    gbest[(((n0[0] * ny + n0[1]) * nz + n0[2]) * 18 + s0.dir, ANG.index(s0.bend), float(s0.run), 0)] = 0
-    heap.append((h_start, 0, 0.0, 0))
-    ctr = np.array([0, 0, 1, -1, 0, -1], dtype=np.int64)
+    f0 = (n0[0] * ny + n0[1]) * nz + n0[2]
+    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0] = f0, s0.dir, s0.run, ANG.index(s0.bend), 0.0, -1, -1
+    open_head[f0 * 18 + s0.dir] = 0
+    H[0][0], H[1][0], H[2][0], H[3][0] = h_start, 0, 0.0, 0
+    ctr = np.array([0, 0, 1, -1, 1, -1, 1, 0], dtype=np.int64)
     fctr = np.zeros(1)
     while True:
-        code = _search(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head, cl_run, cl_bend,
-                       cl_g, cl_next, arc)
+        code = _search(T, C, G, ctr, fctr, H, S, K, open_head, closed_head, arc)
+        if code == 4:
+            H = _grow(H, ctr[4] + 18)
+            S = _grow(S, ctr[6] + 18)
+            K = _grow(K, ctr[7] + 1)
+            continue
         if code == _CHECK_TIME:
             if time.perf_counter() - t0 > time_limit:
                 return "timeout", None, int(ctr[0]), int(ctr[1])
@@ -493,8 +534,10 @@ def astar_route_fast(space, pipe, time_limit, h_start):
         chain = []
         i = int(ctr[5])
         while i >= 0:
-            chain.append(State(tuple(int(v) for v in sn[i]), int(sd[i]), float(srun[i]), ANG[sbend[i]]))
-            i = int(spar[i])
+            f = int(S[0][i])
+            node = (f // (ny * nz), (f // nz) % ny, f % nz)
+            chain.append(State(node, int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])]))
+            i = int(S[5][i])
         chain.reverse()
         return "ok", chain, int(ctr[0]), int(ctr[1])
 
