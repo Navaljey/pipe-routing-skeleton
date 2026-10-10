@@ -18,6 +18,7 @@ from typing import Callable
 import jsonschema
 
 from .constants import FITTINGS, PIPE_SPECS
+from .layered import layered_router_a, make_layered_router
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
 from .verifier import MODULE_ORDER, PipeRoute, verify
@@ -65,7 +66,7 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
 
 # ---------------------------------------------------------------- 실행
 
-def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
+def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 60.0,
         planner: Callable = sequential_ripup_planner) -> dict:
     """시나리오 1개 실행 → §7.2 출력 dict."""
     t0 = time.perf_counter()
@@ -97,6 +98,8 @@ def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
                            for x in v.violations],
             "metrics": metrics(r, v),
             "router": {"status": r.status, "expanded": r.expanded, "search_sec": round(r.search_sec, 3),
+                       "name": getattr(router, "__name__", ""),
+                       "support_est": round(getattr(r, "J_support_est", 0.0), 3) if r.status == "ok" else None,
                        "graph_sec": round(getattr(r, "graph_sec", 0.0), 3),
                        "attempts": len(tries),
                        "graph_sec_total": round(sum(a["graph_sec"] for a in tries), 3),
@@ -119,8 +122,17 @@ def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
         "graph_regen_sec_total": round(sum(a["graph_sec"] for t in plan.attempts.values() for a in t), 3),
         "routing_attempts": sum(len(t) for t in plan.attempts.values()),
         "planner_events": plan.events,
+        "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+
+
+def _peak_rss_mb():
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)   # Linux: KB
+    except Exception:
+        return None
 
 
 def fail_causes(router_status: str, v) -> list:
@@ -152,6 +164,15 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
     pairwise = sum(1 for x in routes for v in x["violations"]
                    if v["module"] in ("collision", "bend") and v["other"] and not v["other"].startswith("OBS"))
     jsum = lambda xs, k: round(sum(x["J"][k] for x in xs), 4)
+    # D57·§9-6: 라우터 추정 서포트 vs 검증기 서포트 (경로 있는 배관)
+    est = [(x["router"].get("support_est") or 0.0, x["J"]["support"]) for x in routed]
+    rel = sorted((e - v) / v for e, v in est if v > 0)
+    sup_err = {
+        "est_total": round(sum(e for e, _ in est), 4), "verifier_total": round(sum(v for _, v in est), 4),
+        "rel_median": round(rel[len(rel) // 2], 4) if rel else None,
+        "rel_max_abs": round(max(abs(x) for x in rel), 4) if rel else None,
+        "over": sum(1 for x in rel if x > 0), "under": sum(1 for x in rel if x < 0),
+    }
     return {
         "total_pipes": len(routes),
         "routed_count": len(routed),
@@ -168,6 +189,7 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
         "computation_time_sec": round(total_sec, 3),
         "routing_time_sec": round(route_sec, 3),
         "verify_time_sec": round(verify_sec, 3),
+        "support_estimate": sup_err,
     }
 
 
@@ -196,6 +218,11 @@ def report_md(out: dict, scenario_path: str = "") -> str:
              if g.get("fail_class_status") else "") + " |",
           f"| 실패 원인 | {', '.join(f'{k} {v}' for k, v in g['fail_causes'].items()) or '없음'} |",
           f"| 배관 간 이격 위반 쌍 | {g['pairwise_violation']} |",
+          "| 라우터 추정 서포트 / 검증기 서포트 (D57) | "
+          + (f"{g['support_estimate']['est_total']:,.2f} / {g['support_estimate']['verifier_total']:,.2f} kg, "
+             f"배관별 상대 오차 중앙 {g['support_estimate']['rel_median']} · 최대 |{g['support_estimate']['rel_max_abs']}| · "
+             f"과대 {g['support_estimate']['over']} / 과소 {g['support_estimate']['under']}" if g.get("support_estimate") else "-")
+          + " |",
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
     L += ["## 배관별", "",
@@ -232,13 +259,16 @@ def main(argv=None) -> int:
     ap.add_argument("--no-viz", action="store_true", help="HTML 리포트(경로·위반 3D) 생략")
     ap.add_argument("--planner", choices=("sequential", "independent"), default="sequential",
                     help="다중 배관 슬롯: sequential = 순서 + rip-up (D50), independent = 배관 단독 (6단계 비교용)")
-    ap.add_argument("--router", choices=("astar", "layered-a", "layered-b"), default="astar",
-                    help="라우터 슬롯: astar = S0 기본 (escape graph + A*), layered-a/b = M18 대안 표현 실험 (layered.py)")
+    ap.add_argument("--router", choices=("layered-a", "layered-b", "astar"), default="layered-a",
+                    help="라우터 슬롯: layered-a = 기본 (D55 2층 구조 A), layered-b = 국소 이격선 (비교용), "
+                         "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
+    ap.add_argument("--no-support-cost", action="store_true",
+                    help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
     args = ap.parse_args(argv)
-    router = astar_router
-    if args.router != "astar":
-        from .layered import layered_router_a, layered_router_b
-        router = layered_router_a if args.router == "layered-a" else layered_router_b
+    if args.router == "astar":
+        router = astar_router
+    else:
+        router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:

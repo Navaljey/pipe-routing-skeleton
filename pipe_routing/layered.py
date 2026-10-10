@@ -20,10 +20,11 @@ import time
 
 import numpy as np
 
-from .constants import PIPE_SPECS, elbow_kg, elbow_tangent
+from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent, support_kg
 from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
-from .space import DIRS
+from .space import DEFLECTION, DIRS
+from .verifier.geom import support_faces
 
 _FIXED: dict = {}   # (id(scenario), 구경) → (scenario, 고정 레이어 EscapeGraph)
 
@@ -44,6 +45,66 @@ def clear_cache():
     _FIXED.clear()
 
 
+def support_edge_cost(ext, box_lo, box_hi, size: str, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+    """D57 직관 구간의 추정 서포트 비용 (kg) — 구간 길이 ÷ 최대 간격 × 서포트 1개 kg.
+
+    지지면 = 검증기와 같은 규칙·함수(support_faces, D46): 배관 축과 평행하지 않은 법선의 면 중 고정 장애물에 막히지 않는
+    가장 가까운 면. 다른 놓인 배관에 의한 막힘은 무시 (D57 근사).
+    `추정:` ① 거리·막힘은 구간 중점 한 곳에서 본다 (45° 구간처럼 거리가 변하거나 구간 중간에 막히는 면이 바뀌어도 중점 값)
+            ② 모든 면이 막히면 막힘을 무시한 가장 먼 후보 면 거리로 친다 (보수적, 검증기는 이 위치에 서포트를 못 둔다)
+            ③ 단자를 고정점으로 보는 효과(간격 계산이 단자에서 끊김)는 넣지 않는다 — 길이에 비례하는 밀도로만 본다
+            ④ 수직 구간 = 수직 최대 간격, 그 밖(45° 포함) = 수평 최대 간격 (검증기와 같음)
+    """
+    if not len(P0):
+        return np.zeros(0)
+    D = P1 - P0
+    L = np.linalg.norm(D, axis=1)
+    U = D / np.where(L > 0, L, 1.0)[:, None]
+    dist, blocked = support_faces(ext, box_lo, box_hi, (P0 + P1) / 2, U)
+    d_ok = np.where(blocked, np.inf, dist)
+    dmin = d_ok.min(1)
+    far = np.where(np.isfinite(dist), dist, -np.inf).max(1)
+    dmin = np.where(np.isfinite(dmin), dmin, far)
+    hmax, vmax = SUPPORT_SPACING[size]
+    smax = np.where(np.abs(U[:, 2]) >= 1 - 1e-9, vmax, hmax)
+    return L / smax * support_kg(dmin)
+
+
+def _fixed_support(F, sc, size):
+    """고정 레이어 엣지의 추정 서포트 비용 (구경별 1회, 고정 레이어에 캐시). axis[ax][idx], diag[d][idx] (idx = 출발 격자점)."""
+    hit = getattr(F, "_support_cache", None)
+    if hit is not None:
+        return hit
+    ext = np.array(sc.block.extent, dtype=float)
+    axis = []
+    for ax in range(3):
+        arr = np.zeros(F.shape)
+        idx = np.nonzero(F.axis_ok[ax])
+        if len(idx[0]):
+            P0 = np.stack([F.axes[k][idx[k]] for k in range(3)], -1)
+            nxt = list(idx)
+            nxt[ax] = idx[ax] + 1
+            P1 = np.stack([F.axes[k][nxt[k]] for k in range(3)], -1)
+            arr[idx] = support_edge_cost(ext, F.box_lo, F.box_hi, size, P0, P1)
+        axis.append(arr)
+    diag = {}
+    for d in range(6, 18):
+        arr = np.zeros(F.shape)
+        idx = np.nonzero(F.diag_ok[d])
+        if len(idx[0]):
+            pa, pb = [k for k in range(3) if DIRS[d][k] != 0]
+            to_a, to_b = F.diag_to[d]
+            dst = list(idx)
+            dst[pa] = to_a[idx[pa], idx[pb]]
+            dst[pb] = to_b[idx[pa], idx[pb]]
+            P0 = np.stack([F.axes[k][idx[k]] for k in range(3)], -1)
+            P1 = np.stack([F.axes[k][dst[k]] for k in range(3)], -1)
+            arr[idx] = support_edge_cost(ext, F.box_lo, F.box_hi, size, P0, P1)
+        diag[d] = arr
+    F._support_cache = (axis, diag)
+    return F._support_cache
+
+
 class LayeredGraph:
     """SpaceRepresentation (§4.1) — 노드 = 정수 id. 엘보·도착·직관 규칙은 EscapeGraph 와 같은 함수를 빌려 쓴다."""
 
@@ -56,7 +117,8 @@ class LayeredGraph:
     _point_clearance = EscapeGraph._point_clearance
     _segments_clear = EscapeGraph._segments_clear
 
-    def __init__(self, sc, pipe, others=(), local_lines=False):
+    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True):
+        """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용)."""
         t0 = time.perf_counter()
         F, fixed_sec = fixed_layer(sc, pipe)
         self.fixed = F
@@ -126,6 +188,10 @@ class LayeredGraph:
         # 3) 엣지 → 이웃 표
         self.step = np.full((N, 18), -1, dtype=np.int64)
         self.elen = np.zeros((N, 18))
+        self.scost = np.zeros((N, 18))
+        self.use_support_cost = support_cost
+        self._ext = np.array(sc.block.extent, dtype=float)
+        self._sup = _fixed_support(F, sc, pipe.nominal_size) if support_cost else None
         n_axis = self._axis_edges(F, is_base, bi, first)
         n_diag = self._diag_edges(F)
         self.n_edges = n_axis + n_diag
@@ -206,6 +272,16 @@ class LayeredGraph:
             dp, dm = 2 * ax, 2 * ax + 1    # +축, −축 (AXIS_DIRS 순서)
             self.step[a, dp], self.elen[a, dp] = b, L
             self.step[b, dm], self.elen[b, dm] = a, L
+            if self._sup is not None:      # D57: 고정 레이어 인접 엣지는 캐시, 그 밖(패치)은 같은 함수로 계산
+                adj = adj[sel]
+                sc_ = np.empty(len(a))
+                ia = Fidx[a[adj]]
+                sc_[adj] = self._sup[0][ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+                rest = np.nonzero(~adj)[0]
+                sc_[rest] = support_edge_cost(self._ext, self.box_lo, self.box_hi, self.pipe.nominal_size,
+                                              self.pos[a[rest]], self.pos[b[rest]])
+                self.scost[a, dp] = sc_
+                self.scost[b, dm] = sc_
             n += len(a)
         return n
 
@@ -225,10 +301,14 @@ class LayeredGraph:
             d_id = self._ids_from_fixed(F, dst)
             keep = self.node_valid[s_id] & self.node_valid[d_id]
             s_id, d_id = s_id[keep], d_id[keep]
+            src = tuple(i[keep] for i in src)
             free = self._pipes_clear(self.pos[s_id], self.pos[d_id])
             s_id, d_id = s_id[free], d_id[free]
+            src = tuple(i[free] for i in src)
             self.step[s_id, d] = d_id
             self.elen[s_id, d] = np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1)
+            if self._sup is not None:
+                self.scost[s_id, d] = self._sup[1][d][src]
             n += len(s_id)
         return n // 2
 
@@ -303,10 +383,36 @@ class LayeredGraph:
     def edge_length(self, n1, n2) -> float:
         return math.dist(self.position(n1), self.position(n2))
 
+    def support_cost(self, a, b) -> float:
+        """D57 추정 서포트 (a → b 엣지)."""
+        return float(self.scost[a.node, b.dir])
+
     def cost(self, a, b, pipe=None) -> float:
-        from .space import DEFLECTION
+        """ΔJ_router = 직관 + 엘보 + 추정 서포트 (D57). 컴파일 탐색과 같은 연산 순서."""
         return (self.edge_length(a.node, b.node) / 1000 * self.kg_per_m
-                + elbow_kg(self.pipe.nominal_size, DEFLECTION[a.dir][b.dir]))
+                + elbow_kg(self.pipe.nominal_size, DEFLECTION[a.dir][b.dir]) + self.support_cost(a, b))
+
+    def neighbors(self, state, pipe=None):
+        """파이썬 구현 (시험·Dijkstra 대조용). EscapeGraph.neighbors 와 같은 규칙, 이웃 표 위에서."""
+        from .space import ALLOWED_DEFLECTIONS, State
+        row = DEFLECTION[state.dir]
+        for d in range(len(DIRS)):
+            defl = row[d]
+            if defl not in ALLOWED_DEFLECTIONS:
+                continue
+            if defl and state.run < self.turn_need(state, defl) - EPS:
+                continue
+            nxt = int(self.step[state.node, d])
+            if nxt < 0:
+                continue
+            if defl and not self.elbow_clear(state.node, state.dir, d):
+                continue
+            length = float(self.elen[state.node, d])
+            if defl:
+                run, bend = length, defl
+            else:
+                run, bend = state.run + length, state.bend
+            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend)
 
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),
@@ -325,19 +431,17 @@ def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
     return _finish_chain(g, pipe, chain, expanded, generated, time.perf_counter() - t0)
 
 
-def layered_router_a(sc, pipe, time_limit, placed=()):
-    """변형 A 라우터 슬롯: 고정 레이어 + 표시."""
-    g = LayeredGraph(sc, pipe, placed, local_lines=False)
-    r = _route(g, pipe, time_limit)
-    r.graph_sec = g.build_sec
-    r.graph_stats = g.stats()
-    return r
+def make_layered_router(local_lines: bool = False, support_cost: bool = True):
+    """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용."""
+    def router(sc, pipe, time_limit, placed=()):
+        g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost)
+        r = _route(g, pipe, time_limit)
+        r.graph_sec = g.build_sec
+        r.graph_stats = g.stats()
+        return r
+    router.__name__ = f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
+    return router
 
 
-def layered_router_b(sc, pipe, time_limit, placed=()):
-    """변형 B 라우터 슬롯: 고정 레이어 + 표시 + 국소 이격선."""
-    g = LayeredGraph(sc, pipe, placed, local_lines=True)
-    r = _route(g, pipe, time_limit)
-    r.graph_sec = g.build_sec
-    r.graph_stats = g.stats()
-    return r
+layered_router_a = make_layered_router(False, True)   # 기본 (D55·D57)
+layered_router_b = make_layered_router(True, True)    # 비교용 (D55)

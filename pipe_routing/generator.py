@@ -189,12 +189,13 @@ def main(argv=None) -> int:
     ap.add_argument("--seed", type=int, default=20261008, help="세트 기준 시드 (i 번째 = seed + i)")
     ap.add_argument("--n-pipes", type=int, default=GeneratorConfig.n_pipes)
     ap.add_argument("--fill", type=float, default=GeneratorConfig.obstacle_fill)
+    ap.add_argument("--prefix", default="proc", help="시나리오 이름 앞부분 (밀집 세트 등, D58)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill)
-        name = f"proc_{i:03d}"
+        name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")
         print(f"{name}: {json.dumps(sc.summary(), ensure_ascii=False)}")

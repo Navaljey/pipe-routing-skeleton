@@ -520,7 +520,7 @@ if HAVE_NUMBA:
         ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
-        (step, elen, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
+        (step, elen, scost, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
         hf, ht, hg, hid = H
@@ -619,7 +619,7 @@ if HAVE_NUMBA:
                     nb = cb
                 cap = run_cap[nb]
                 run = _round6(run if run <= cap else cap)
-                ng = g + (length / 1000 * kgpm + ekg[di])
+                ng = g + (length / 1000 * kgpm + ekg[di] + scost[cflat, d])   # D57 추정 서포트 포함
                 nkey = nflat * 18 + d
                 sid = open_head[nkey]
                 while sid >= 0:
@@ -685,7 +685,7 @@ def astar_route_generic(space, pipe, time_limit, h_start):
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
     P = space.pos
-    T = (space.step, space.elen, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
+    T = (space.step, space.elen, space.scost, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node))
     _, C = _consts(space, pipe, goal)
     G = _arc_tables(space)

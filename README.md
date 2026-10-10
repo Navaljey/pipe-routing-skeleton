@@ -99,3 +99,10 @@ python -m pipe_routing.scaling scenarios/procedural/proc_000.json --runs out/run
 다중 배관 슬롯: `planner(scenario, router, time_limit)` → `PlanResult`, 라우터 슬롯은 `router(scenario, pipe, time_limit, placed)`.
 실패 3분류 (D51): 간섭-차단 / 간섭-탐색 / 개별 경로. rip-up 은 성공 수가 늘 때만 유지 (D52).
 A* 는 numba 가 있으면 컴파일 구현을 쓴다 (D53, 파이썬 구현과 경로·J·확장 수가 같다). 없으면 파이썬 구현.
+
+## 7.6·8단계 — 기본 표현 A + 추정 서포트, 밀집 세트
+
+기본 라우터 = 2층 구조 A + 라우터 추정 서포트 (D55·D57). 비교: `--router layered-b | astar`, `--no-support-cost`.
+밀집 세트 (D58): `scenarios/dense/dense30_*.json`, `dense50_*.json`
+(`python -m pipe_routing.generator --out scenarios/dense --n 5 --seed 20262008 --n-pipes 30 --prefix dense30`, 50개는 seed 20263008).
+슬롯 인터페이스 (§9-5): [docs/slots.md](docs/slots.md)

@@ -5,7 +5,7 @@ import numpy as np
 
 from ..constants import SUPPORT_SPACING, VALVE_FRONT_MM, VALVE_Z_RANGE, support_kg
 from .core import Context, PipeRoute, Violation, register
-from .geom import EPS, angle_deg, boxes_overlap, segment_box_distance, segment_segment_distance, unit
+from .geom import EPS, angle_deg, boxes_overlap, segment_box_distance, segment_segment_distance, support_faces, unit
 
 ON_LINE_MM = 1.0   # 밸브·분기점이 직관 위에 있다고 볼 거리 허용오차
 
@@ -280,20 +280,16 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     """
     ext = np.array(ctx.scenario.block.extent)
     oA, oB, oR, oS, _ = ctx.others(pid)
+    box_lo = [o.box.min for o in ctx.scenario.obstacles]
+    box_hi = [o.box.max for o in ctx.scenario.obstacles]
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
-        dist = np.full((len(P), len(FACES)), np.inf)    # 평행 면은 inf (후보 아님)
-        blocked = np.zeros((len(P), len(FACES)), dtype=bool)
+        dist, blocked = support_faces(ext, box_lo, box_hi, P, U)   # 평행 면은 inf, 장애물 막힘 (라우터 D57 과 같은 함수)
         for f, (_, ax, side) in enumerate(FACES):
-            ok = np.abs(U[:, ax]) < 1 - 1e-9
-            dist[ok, f] = np.abs(P[ok, ax] - side * ext[ax])
             Q = P.copy()
             Q[:, ax] = side * ext[ax]
-            for o in ctx.scenario.obstacles:
-                d, _ = segment_box_distance(P, Q, o.box.min, o.box.max, iters=40)
-                blocked[:, f] |= d <= EPS
             if len(oA):
                 d, _, _ = segment_segment_distance(P[:, None], Q[:, None], oA[None], oB[None])
                 blocked[:, f] |= np.any(d - oS[None] < oR[None] - EPS, 1)

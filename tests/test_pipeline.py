@@ -34,14 +34,16 @@ class PipelineTest(unittest.TestCase):
         self.assertTrue(all("gravity_slope" in x["fail_causes"] for x in gravity))   # D27 기준선
 
     def test_J_matches_router_cost(self):
-        """직관 + 엘보 = A* 비용 J (D49: 같은 정의)."""
-        from pipe_routing.escape_graph import EscapeGraph
-        from pipe_routing.router_astar import astar_route
+        """직관 + 엘보 = 라우터 비용의 직관 + 엘보 (D49: 같은 정의). 라우터 비용의 나머지는 추정 서포트 (D57)."""
+        from pipe_routing.layered import LayeredGraph, _route, clear_cache
         from pipe_routing.multi import independent_planner
-        out = run(self.sc, planner=independent_planner)   # 배관 단독 경로 = 단독 A* 와 같은 경로
+        out = run(self.sc, planner=independent_planner)   # 배관 단독 경로 = 단독 라우팅과 같은 경로
+        clear_cache()
         for p, x in zip(self.sc.pipes, out["routes"]):
-            r = astar_route(EscapeGraph(self.sc, p), p)
-            self.assertAlmostEqual(x["J"]["pipe"] + x["J"]["elbow"], r.J, places=2)
+            r = _route(LayeredGraph(self.sc, p), p, 60)
+            self.assertAlmostEqual(x["J"]["pipe"] + x["J"]["elbow"], r.J_pipe + r.J_elbow, places=2)
+            self.assertAlmostEqual(r.J, r.J_pipe + r.J_elbow + r.J_support_est, places=6)
+            self.assertAlmostEqual(x["router"]["support_est"], r.J_support_est, places=2)
 
     def test_global(self):
         g = self.out["global"]

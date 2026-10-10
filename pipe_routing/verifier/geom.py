@@ -142,6 +142,41 @@ def elbow_arc_chords(vertex, u0, u1, t: float, angle_deg_: float):
 
 # ---------------------------------------------------------------- 거리
 
+def axis_segment_box_distance(P: np.ndarray, ax: int, target: float, lo, hi) -> np.ndarray:
+    """축 방향 선분들 (P → P 의 ax 좌표만 target 으로 바꾼 점) ↔ 박스 하나 사이 유클리드 최소거리. 닫힌 식 (정확).
+
+    서포트 지지선(배관 중심 → 구조면 수직)은 항상 축 방향이므로 검증기(D46)·라우터(D57)가 같이 쓴다.
+    """
+    lo = np.asarray(lo, dtype=float)
+    hi = np.asarray(hi, dtype=float)
+    a = np.minimum(P[:, ax], target)
+    b = np.maximum(P[:, ax], target)
+    g2 = np.zeros(len(P))
+    for k in range(3):
+        if k == ax:
+            g = np.maximum(0.0, np.maximum(lo[k] - b, a - hi[k]))
+        else:
+            g = np.maximum(0.0, np.maximum(lo[k] - P[:, k], P[:, k] - hi[k]))
+        g2 += g * g
+    return np.sqrt(g2)
+
+
+def support_faces(ext, box_lo, box_hi, P: np.ndarray, U: np.ndarray):
+    """서포트 지지면 후보 (D46). 반환: (거리 (N, 6), 장애물에 막힘 (N, 6)).
+
+    면 순서 = FACES (floor, ceiling, wall_x0, wall_x1, wall_y0, wall_y1). 배관 축(U)과 평행한 법선의 면은 거리 inf.
+    막힘 = 지지선이 장애물 박스와 닿음 (거리 ≤ EPS). 다른 배관에 의한 막힘은 호출자가 더한다 (검증기만, D57).
+    """
+    dist = np.full((len(P), 6), np.inf)
+    blocked = np.zeros((len(P), 6), dtype=bool)
+    for f, (ax, side) in enumerate(((2, 0), (2, 1), (0, 0), (0, 1), (1, 0), (1, 1))):
+        ok = np.abs(U[:, ax]) < 1 - 1e-9
+        dist[ok, f] = np.abs(P[ok, ax] - side * ext[ax])
+        for lo, hi in zip(box_lo, box_hi):
+            blocked[:, f] |= axis_segment_box_distance(P, ax, side * ext[ax], lo, hi) <= EPS
+    return dist, blocked
+
+
 def segment_box_distance(A: np.ndarray, B: np.ndarray, lo, hi, iters: int = 60):
     """선분 N개 ↔ 박스 1개 최소거리와 최근접점. 박스까지 거리는 t 에 대해 볼록 → 황금분할 탐색."""
     lo = np.asarray(lo, dtype=float)
