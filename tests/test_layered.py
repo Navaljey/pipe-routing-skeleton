@@ -20,7 +20,8 @@ class LayeredTest(unittest.TestCase):
             clear_cache()
             res = sequential_ripup_planner(self.sc, router=router)
             ok = {pid: r for pid, r in res.routes.items() if r.status == "ok"}
-            self.assertEqual(len(ok), len(self.sc.pipes))
+            # 압력관은 전부 경로 (중력관은 계단식 하향 규칙 D61 — 고정 격자로 못 갈 수 있다)
+            self.assertTrue(all(p.id in ok for p in self.sc.pipes if not p.gravity_pipe))
             rep = verify(self.sc, [PipeRoute(pid, r.waypoints) for pid, r in ok.items()], modules=["collision", "bend"])
             self.assertEqual([v.message for x in rep["pipes"].values() for v in x.violations], [], router.__name__)
 

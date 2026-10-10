@@ -23,6 +23,8 @@ import numpy as np
 from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent, support_kg
 from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
+from .gravity import gravity_lmax, move_kind
+from .gravity import step as gstep
 from .space import DEFLECTION, DIRS
 
 ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
@@ -156,6 +158,7 @@ class LayeredGraph:
                         for a in self.tangent}
         self._arc_ok, self._arc_tpl = {}, {}
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
+        self.lmax = gravity_lmax(pipe.nominal_size) if pipe.gravity_pipe else 0.0   # D62
         self.box_lo, self.box_hi = F.box_lo, F.box_hi
         self.dom_lo, self.dom_hi = F.dom_lo, F.dom_hi
         self.pipe_groups = self._pipe_groups(list(others) + list(reserved))
@@ -531,11 +534,17 @@ class LayeredGraph:
             if defl and not self.elbow_clear(state.node, state.dir, d):
                 continue
             length = float(self.elen[state.node, d])
+            hz = 0.0
+            if self.pipe.gravity_pipe:   # D61: gravity.step (검증기와 같은 함수, D63)
+                h2, ok = gstep(state.hz, move_kind(DIRS[d]), length, self.lmax)
+                if not ok:
+                    continue
+                hz = round(h2, 6)
             if defl:
                 run, bend = length, defl
             else:
                 run, bend = state.run + length, state.bend
-            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend, nm)
+            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend, nm, hz)
 
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),

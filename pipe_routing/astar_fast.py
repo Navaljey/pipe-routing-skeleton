@@ -516,6 +516,7 @@ if HAVE_NUMBA:
             파이썬 heapq 와 같다
         S = 상태 배열 (노드, 방향, 직진 길이, 편향각 인덱스, g_best, 부모, 같은 (노드, 방향) 다음 상태, 끝 꺾임 허용 마스크)
         K = 확정 목록 (run, bend, g, 다음, 마스크) — (노드, 방향)별 연결 리스트, 머리는 closed_head
+        D61: 중력관은 상태에 마지막 하향 이후 수평 누적 h (지배 = h ≤ 도 포함). 압력관은 h = 0 그대로
         D60: 마스크 = 들어온 엣지의 끝에서 허용되는 꺾임 등급(0/45/90/135 → 비트 0~3). 엣지 emask[n, d] 의 비트
              (시작 등급 i × 4 + 끝 등급 j) = 시작·끝을 그 엘보 접선만큼 깎았을 때 놓인 배관과 이격 통과 (엘보 호가
              꺾임점을 깎아 지나가는 실제 형상). 지배 = run ≥ · bend ≤ · 마스크 ⊇ · g ≤
@@ -523,12 +524,14 @@ if HAVE_NUMBA:
         ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
-        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
+        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat, dkind, gpar) = T
+        gflag = gpar[0] > 0.5   # D61 중력관
+        lmax = gpar[1]
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
         hf, ht, hg, hid = H
-        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next, s_mask = S
-        c_run, c_bend, c_g, c_next, c_mask = K
+        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next, s_mask, s_h = S
+        c_run, c_bend, c_g, c_next, c_mask, c_h = K
         while True:
             # 배열 여유: 한 번 펼칠 때 상태·큐는 최대 18개, 확정 목록은 1개 늘어난다
             if ctr[4] + 18 > hf.shape[0] or ctr[6] + 18 > s_node.shape[0] or ctr[7] + 1 > c_run.shape[0]:
@@ -563,19 +566,20 @@ if HAVE_NUMBA:
                     continue
                 cflat = s_node[cur]
                 cd = s_dir[cur]
-                crun, cb, cm = s_run[cur], s_bend[cur], s_mask[cur]
+                crun, cb, cm, chz = s_run[cur], s_bend[cur], s_mask[cur], s_h[cur]
                 ckey = cflat * 18 + cd
                 dom = False
                 h = closed_head[ckey]
                 while h >= 0:
-                    if c_run[h] >= crun and c_bend[h] <= cb and (c_mask[h] & cm) == cm and c_g[h] <= g + 1e-9:
+                    if c_run[h] >= crun and c_bend[h] <= cb and (c_mask[h] & cm) == cm and c_h[h] <= chz \
+                            and c_g[h] <= g + 1e-9:
                         dom = True
                         break
                     h = c_next[h]
                 if dom:
                     continue
                 m = ctr[7]
-                c_run[m], c_bend[m], c_g[m], c_next[m], c_mask[m] = crun, cb, g, closed_head[ckey], cm
+                c_run[m], c_bend[m], c_g[m], c_next[m], c_mask[m], c_h[m] = crun, cb, g, closed_head[ckey], cm, chz
                 closed_head[ckey] = m
                 ctr[7] = m + 1
                 ctr[0] += 1
@@ -589,7 +593,7 @@ if HAVE_NUMBA:
             ctr[3] = -1
             cflat = s_node[cur]
             cd = s_dir[cur]
-            crun, cb, cm = s_run[cur], s_bend[cur], s_mask[cur]
+            crun, cb, cm, chz = s_run[cur], s_bend[cur], s_mask[cur], s_h[cur]
             for d in range(18):
                 di = defl_idx[cd, d]
                 if di < 0:
@@ -619,6 +623,16 @@ if HAVE_NUMBA:
                         if ok_arc == 0:
                             continue
                 length = elen[cflat, d]
+                nhz = 0.0
+                if gflag:   # D61·D63: 상향 금지, 하향이면 0, 수평이면 누적 ≤ L_max (gravity.step 과 같은 식)
+                    kd = dkind[d]
+                    if kd == 2:
+                        continue
+                    if kd == 0:
+                        hraw = chz + length
+                        if not (hraw <= lmax + 1e-6):
+                            continue
+                        nhz = _round6(hraw)
                 if di > 0:
                     run = length
                     nb = di
@@ -631,7 +645,7 @@ if HAVE_NUMBA:
                 nkey = nflat * 18 + d
                 sid = open_head[nkey]
                 while sid >= 0:
-                    if s_run[sid] == run and s_bend[sid] == nb and s_mask[sid] == nm:
+                    if s_run[sid] == run and s_bend[sid] == nb and s_mask[sid] == nm and s_h[sid] == nhz:
                         break
                     sid = s_next[sid]
                 if sid >= 0 and not (ng + 1e-9 < s_g[sid]):
@@ -639,7 +653,8 @@ if HAVE_NUMBA:
                 dom = False
                 h = closed_head[nkey]
                 while h >= 0:
-                    if c_run[h] >= run and c_bend[h] <= nb and (c_mask[h] & nm) == nm and c_g[h] <= ng + 1e-9:
+                    if c_run[h] >= run and c_bend[h] <= nb and (c_mask[h] & nm) == nm and c_h[h] <= nhz \
+                            and c_g[h] <= ng + 1e-9:
                         dom = True
                         break
                     h = c_next[h]
@@ -648,7 +663,7 @@ if HAVE_NUMBA:
                 if sid < 0:
                     sid = ctr[6]
                     ctr[6] = sid + 1
-                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid], s_mask[sid] = nflat, d, run, nb, nm
+                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid], s_mask[sid], s_h[sid] = nflat, d, run, nb, nm, nhz
                     s_next[sid] = open_head[nkey]
                     open_head[nkey] = sid
                 s_g[sid] = ng
@@ -688,13 +703,28 @@ def _arc_callback_generic(k):
     return 1 if space.elbow_clear(k // 324, (k // 18) % 18, k % 18) else 0
 
 
+def _lmax(pipe) -> float:
+    from .gravity import gravity_lmax
+    return gravity_lmax(pipe.nominal_size) if pipe.gravity_pipe else 0.0
+
+
+def _dir_kinds():
+    """방향별 중력 이동 종류 (0 수평 · 1 하향 · 2 상향) — gravity.move_kind 와 같은 판정 (D63)."""
+    from .gravity import DOWN, UP, move_kind
+    return np.array([2 if move_kind(v) == UP else (1 if move_kind(v) == DOWN else 0) for v in DIRS], dtype=np.int64)
+
+
+_DKIND = _dir_kinds()
+
+
 def astar_route_generic(space, pipe, time_limit, h_start):
     """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태."""
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
     P = space.pos
     T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
-         np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node))
+         np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node),
+         _DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, _lmax(pipe)]))
     _, C = _consts(space, pipe, goal)
     G = _arc_tables(space)
     _CURRENT.update(space=space)
@@ -702,14 +732,16 @@ def astar_route_generic(space, pipe, time_limit, h_start):
     cap = 1 << 16
     H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
     S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
-         np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap, np.int64))
-    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap, np.int64))
+         np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap))
+    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap, np.int64),
+         np.zeros(cap))
     N = len(P)
     open_head = np.full(N * 18, -1, dtype=np.int32)
     closed_head = np.full(N * 18, -1, dtype=np.int32)
     arc = Dict.empty(types.int64, types.int8)
     f0 = int(s0.node)
-    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0], S[7][0] = f0, s0.dir, s0.run, 0, 0.0, -1, -1, 15
+    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0], S[7][0], S[8][0] = (
+        f0, s0.dir, s0.run, 0, 0.0, -1, -1, 15, 0.0)
     open_head[f0 * 18 + s0.dir] = 0
     H[0][0], H[1][0], H[2][0], H[3][0] = h_start, 0, 0.0, 0
     ctr = np.array([0, 0, 1, -1, 1, -1, 1, 0], dtype=np.int64)
@@ -730,7 +762,8 @@ def astar_route_generic(space, pipe, time_limit, h_start):
         chain = []
         i = int(ctr[5])
         while i >= 0:
-            chain.append(State(int(S[0][i]), int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])], int(S[7][i])))
+            chain.append(State(int(S[0][i]), int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])], int(S[7][i]),
+                               float(S[8][i])))
             i = int(S[5][i])
         chain.reverse()
         return "ok", chain, int(ctr[0]), int(ctr[1])

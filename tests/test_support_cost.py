@@ -72,8 +72,9 @@ class SupportCostTest(unittest.TestCase):
             g = LayeredGraph(sc, p)
             fast = _route(g, p, 60)
             dij = astar_route(g, p, 120, heuristic=lambda s: 0.0)       # 파이썬 구현, 휴리스틱 0
-            self.assertEqual(fast.status, "ok")
-            self.assertTrue(math.isclose(fast.J, dij.J, rel_tol=1e-9, abs_tol=1e-6), (p.id, fast.J, dij.J))
+            self.assertEqual(fast.status, dij.status, p.id)
+            if fast.status == "ok":
+                self.assertTrue(math.isclose(fast.J, dij.J, rel_tol=1e-9, abs_tol=1e-6), (p.id, fast.J, dij.J))
 
     def test_pipeline_default_is_layered_a_with_support(self):
         sc = load(MANUAL)
