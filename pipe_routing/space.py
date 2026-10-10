@@ -44,6 +44,7 @@ class State(NamedTuple):
     dir: int
     run: float
     bend: int = 0
+    ends: int = 15   # D60: 들어온 엣지 끝에서 허용되는 꺾임 등급 비트 (0/45/90/135). 15 = 제약 없음
 
 
 class SpaceRepresentation(Protocol):

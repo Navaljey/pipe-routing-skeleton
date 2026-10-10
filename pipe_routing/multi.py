@@ -15,8 +15,9 @@ from .verifier.geom import EPS, build_centerline, segment_segment_distance
 
 MAX_RIPUPS = 3   # D50④ 시나리오당
 # D51 실패 3분류: 간섭-차단 (단독 경로가 놓인 배관과 충돌) / 간섭-탐색 (충돌 없는데 실패, 성능) / 개별 경로 (단독 실패)
-FAIL_CLASSES = ("interference_block", "interference_search", "individual")
-FAIL_CLASS_KO = {"interference_block": "간섭-차단", "interference_search": "간섭-탐색", "individual": "개별 경로"}
+FAIL_CLASSES = ("interference_block", "interference_search", "individual", "router_mismatch")
+FAIL_CLASS_KO = {"interference_block": "간섭-차단", "interference_search": "간섭-탐색", "individual": "개별 경로",
+                 "router_mismatch": "라우터 규칙 불일치"}   # D60: 간섭-탐색은 timeout 만
 
 
 @dataclass
@@ -143,17 +144,29 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after}")
             tried.clear()                            # 상태가 바뀌었으니 다른 실패 배관을 다시 시도할 수 있다
 
-    # D50⑥ · D51: 최종 실패 배관 3분류
+    # D50⑥ · D51 · D60: 최종 실패 배관 분류
     for pid in order:
         if pid not in placed:
             s = solo(pid)
             blockers = [] if s.status != "ok" else [
                 q for q in order if q in placed
                 and routes_conflict(pipes[pid], s.waypoints, pipes[q], placed[q].waypoints)]
-            cls = "individual" if s.status != "ok" else ("interference_block" if blockers else "interference_search")
+            seq = routes[pid].status
+            if s.status != "ok":
+                cls = "individual"
+            elif blockers:
+                cls = "interference_block"
+            elif seq == "timeout":
+                cls = "interference_search"
+            else:   # D60: 충돌 없는 단독 경로가 있는데 순차에서 unreachable — 라우터 규칙이 검증기와 어긋남
+                cls = "router_mismatch"
+            detail = {"class": cls, "seq_status": seq, "solo_status": s.status, "blockers": blockers}
+            alt = getattr(router, "without_reservations", None)
+            if cls == "individual" and alt is not None:   # D59: 예약을 빼면 단독으로 되는가 = 예약끼리 충돌
+                r2 = alt(sc, pipes[pid], time_limit, [])
+                detail["reservation_conflict"] = r2.status == "ok"
             res.fail_class[pid] = cls
-            res.fail_detail[pid] = {"class": cls, "seq_status": routes[pid].status, "solo_status": s.status,
-                                    "blockers": blockers}
+            res.fail_detail[pid] = detail
     res.routes = routes
     res.total_sec = time.perf_counter() - t0
     return res

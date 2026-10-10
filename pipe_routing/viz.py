@@ -188,7 +188,7 @@ def add_graph(fig: go.Figure, g, axis: int = 2, value: float = None) -> dict:
     return {"axis": "xyz"[axis], "value": float(plane), "nodes": len(ia), "edges_axis": n_axis, "edges_45": n_diag}
 
 
-def add_routes(fig: go.Figure, sc: Scenario, results) -> None:
+def add_routes(fig: go.Figure, sc: Scenario, results, line_width: int = 7) -> None:
     """라우터 결과 경로 (4단계). 성공 배관은 배관 색 굵은 선, 꺾임점 표시. 실패는 범례에만 상태 표기."""
     color_of = {p.id: _PALETTE[n % len(_PALETTE)] for n, p in enumerate(sc.pipes)}
     for r in results:
@@ -201,9 +201,87 @@ def add_routes(fig: go.Figure, sc: Scenario, results) -> None:
         fig.add_trace(go.Scatter3d(
             x=x, y=y, z=z, mode="lines+markers", legendgroup=r.pipe_id,
             name=f"{r.pipe_id} 경로" + (f" J={r.J:.1f}kg" if r.J else ""),
-            line=dict(color=color, width=7), marker=dict(size=3, color=color),
+            line=dict(color=color, width=line_width), marker=dict(size=3 if line_width > 3 else 1.5, color=color),
             hovertext=[f"{r.pipe_id} [{i}] {list(map(int, p))}" for i, p in enumerate(r.waypoints)],
             hoverinfo="text"))
+
+
+def _tube_mesh(A, B, radius: float, sides: int = 12):
+    """선분들(A[i]→B[i])마다 반경 radius 의 열린 원통 → (x, y, z, i, j, k) Mesh3d 배열."""
+    import numpy as np
+    xs, ys, zs, I, J, K = [], [], [], [], [], []
+    th = np.linspace(0, 2 * np.pi, sides, endpoint=False)
+    base = 0
+    for a, b in zip(np.asarray(A, float), np.asarray(B, float)):
+        d = b - a
+        L = np.linalg.norm(d)
+        if L < 1e-9:
+            continue
+        u = d / L
+        ref = np.array([0.0, 0.0, 1.0]) if abs(u[2]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        e1 = np.cross(u, ref)
+        e1 /= np.linalg.norm(e1)
+        e2 = np.cross(u, e1)
+        ring = radius * (np.cos(th)[:, None] * e1 + np.sin(th)[:, None] * e2)
+        for c in (a, b):
+            pts = np.round(c + ring).astype(int)   # 1 mm 정수 — HTML 크기 (D5 정밀도 10 mm 보다 촘촘)
+            xs += pts[:, 0].tolist(); ys += pts[:, 1].tolist(); zs += pts[:, 2].tolist()
+        for q in range(sides):
+            q1 = (q + 1) % sides
+            p0, p1, p2, p3 = base + q, base + q1, base + sides + q, base + sides + q1
+            I += [p0, p1]; J += [p1, p3]; K += [p2, p2]
+        base += 2 * sides
+    return xs, ys, zs, I, J, K
+
+
+def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: bool = True,
+                   colors: dict = None, opacity: float = 0.55) -> None:
+    """배관을 실제 굵기의 관으로 (CLAUDE.md §0 보고 규칙): 반경 = 외경/2 + 보온재. 중심선 = 직관 + 엘보 호 (D44, R = 1.5D).
+
+    routes = {pipe_id: waypoints}. show_clearance 면 유효 반경(D17 = 외경/2 + 보온재 + 10mm) 관을 범례에서 켤 수 있게
+    추가한다 — 두 배관의 유효 반경 관이 겹치지 않으면 배관 간 이격 통과 (r₁ + r₂).
+    """
+    from .constants import ANGLE_TOL_DEG, elbow_radius
+    from .verifier.geom import build_centerline
+    pipes = {p.id: p for p in sc.pipes}
+    color_of = colors or {p.id: _PALETTE[n % len(_PALETTE)] for n, p in enumerate(sc.pipes)}
+    first_clear = True
+    for pid, wps in routes.items():
+        if not wps or pid not in pipes:
+            continue
+        p = pipes[pid]
+        cl = build_centerline(wps, elbow_radius(p.nominal_size), ANGLE_TOL_DEG)
+        A, B = [], []
+        # 그리기용: 엘보 호의 현 조각(검증 정밀도 0.1 mm)을 호마다 최대 8 조각으로 다시 묶는다 — HTML 크기
+        groups = []
+        for q in cl.pieces:
+            if groups and q.kind == "arc" and groups[-1][0] == ("arc", q.ref):
+                groups[-1][1].append(q)
+            else:
+                groups.append(((q.kind, q.ref), [q]))
+        for (kind, _), qs in groups:
+            if kind != "arc":
+                A += [q.a for q in qs]; B += [q.b for q in qs]
+                continue
+            pts = [qs[0].a] + [q.b for q in qs]
+            step = max(1, -(-(len(pts) - 1) // 8))
+            sel = pts[::step] + ([pts[-1]] if (len(pts) - 1) % step else [])
+            A += sel[:-1]; B += sel[1:]
+        r_body = PIPE_SPECS[p.nominal_size].od / 2 + p.insulation_thickness
+        for r, name, op, vis in ((r_body, f"{pid} 관 (외경+보온재 Ø{2 * r_body:.0f})", opacity, True),
+                                 (p.radius, f"{pid} 유효 반경 r={p.radius:.0f} (D17)", 0.12, "legendonly")):
+            if vis == "legendonly" and not show_clearance:
+                continue
+            x, y, z, i, j, k = _tube_mesh(A, B, r)
+            clear = vis == "legendonly"
+            fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color=color_of.get(pid, "gray"), opacity=op,
+                                    name="유효 반경 관 (D17, 전 배관)" if clear else name,
+                                    showlegend=(first_clear if clear else True), visible=vis, flatshading=True,
+                                    legendgroup=f"tube_{pid}" if vis is True else "clearance",
+                                    hovertext=f"{pid} {p.nominal_size} OD {PIPE_SPECS[p.nominal_size].od} + 보온 "
+                                              f"{p.insulation_thickness:.0f} mm", hoverinfo="text"))
+            if clear:
+                first_clear = False
 
 
 MODULE_COLORS = {"collision": "#d62728", "boundary": "#ff7f0e", "bend": "#9467bd", "gravity_slope": "#17becf",

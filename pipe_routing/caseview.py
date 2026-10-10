@@ -18,7 +18,7 @@ from .multi import _pieces, routes_conflict
 from .router_astar import RouteResult
 from .scenario import load
 from .verifier.geom import segment_segment_distance
-from .viz import add_routes, scenario_figure, write_html
+from .viz import add_pipe_tubes, add_routes, scenario_figure, write_html
 
 
 def closest(p1, w1, p2, w2):
@@ -40,7 +40,12 @@ def case_figure(sc, out: dict, pid: str, margin_mm: float = 4000.0, close: bool 
     blockers = [q for q in routes if q != pid and solo.status == "ok"
                 and routes_conflict(p, solo.waypoints, pipes[q], routes[q])]
     fig = scenario_figure(sc, connect=False)
-    add_routes(fig, sc, [RouteResult(q, "ok", waypoints=w) for q, w in routes.items() if q not in blockers])
+    add_routes(fig, sc, [RouteResult(q, "ok", waypoints=w) for q, w in routes.items() if q not in blockers], line_width=2)
+    # 실제 굵기 관 (§0 보고 규칙): 놓인 배관 전부 + 실패 배관 단독 경로(빨강). 유효 반경 관은 범례에서 켠다
+    tubes = dict(routes)
+    if solo.status == "ok":
+        tubes[pid] = solo.waypoints
+    add_pipe_tubes(fig, sc, tubes, colors={**{q: ("black" if q in blockers else "#888") for q in routes}, pid: "red"})
     pts = [np.array(p.start.pos), np.array(p.end.pos)]
     notes = []
     for q in blockers:

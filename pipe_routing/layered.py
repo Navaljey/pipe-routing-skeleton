@@ -24,6 +24,8 @@ from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent, sup
 from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
 from .space import DEFLECTION, DIRS
+
+ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
 from .verifier.geom import support_faces
 
 _FIXED: dict = {}   # (id(scenario), 구경) → (scenario, 고정 레이어 EscapeGraph)
@@ -43,6 +45,25 @@ def fixed_layer(sc, pipe):
 
 def clear_cache():
     _FIXED.clear()
+
+
+def terminal_reservations(sc, exclude=()) -> list:
+    """D59 단자 예약 구역: [(배관, [단자 위치, 직진 구간 끝])]. exclude = 예약하지 않을 배관 id (놓인 배관·자기 자신).
+
+    구간 길이: 노즐 = max(§3.3, t₉₀), 경계 = r + t₉₀ (D47). 방향: start 는 dir 쪽, end 는 dir 반대쪽(배관이 들어오는 쪽).
+    t₉₀ = 그 배관 90° 엘보 접선 길이 (D45). `추정:` 엘보 각도는 90° 기준 (가장 흔한 꺾임, 135° 보다 짧다).
+    """
+    out = []
+    for p in sc.pipes:
+        if p.id in exclude:
+            continue
+        t90 = elbow_tangent(p.nominal_size, 90)
+        for term, sgn in ((p.start, 1.0), (p.end, -1.0)):
+            L = (p.radius + t90) if term.kind == "boundary" else max(p.min_straight, t90)
+            a = np.array(term.pos, dtype=float)
+            b = a + sgn * L * np.array(term.dir, dtype=float)
+            out.append((p, [a.tolist(), b.tolist()]))
+    return out
 
 
 def support_edge_cost(ext, box_lo, box_hi, size: str, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
@@ -111,14 +132,14 @@ class LayeredGraph:
     elbow_clear = EscapeGraph.elbow_clear
     arc_template = EscapeGraph.arc_template
     turn_need = EscapeGraph.turn_need
-    is_goal = EscapeGraph.is_goal
     start_state = EscapeGraph.start_state
     _pipe_groups = EscapeGraph._pipe_groups
     _point_clearance = EscapeGraph._point_clearance
     _segments_clear = EscapeGraph._segments_clear
 
-    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True):
-        """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용)."""
+    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=()):
+        """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
+        reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음)."""
         t0 = time.perf_counter()
         F, fixed_sec = fixed_layer(sc, pipe)
         self.fixed = F
@@ -137,7 +158,8 @@ class LayeredGraph:
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
         self.box_lo, self.box_hi = F.box_lo, F.box_hi
         self.dom_lo, self.dom_hi = F.dom_lo, F.dom_hi
-        self.pipe_groups = self._pipe_groups(others)
+        self.pipe_groups = self._pipe_groups(list(others) + list(reserved))
+        self.n_reserved = len(reserved)
         self.local_lines = local_lines
 
         # 1) 축 좌표 = 고정 레이어 + (B) 국소 이격선 좌표
@@ -178,8 +200,9 @@ class LayeredGraph:
         in_dom = np.all((self.pos >= self.dom_lo - EPS) & (self.pos <= self.dom_hi + EPS), 1)
         ok = is_base | (in_dom & (clear >= self.r - EPS))
         self.clearance = clear
+        # D60: 놓인 배관(·예약)과의 이격은 노드가 아니라 엣지(꺾임 접선만큼 깎은 직관)와 엘보 호로 판정한다.
+        # pipe_margin 은 엘보 빠른 통과 판정(이격 ≥ r + t)에만 쓴다
         self.pipe_margin = self._node_margin(self.pos)
-        ok &= self.pipe_margin >= self.r - EPS
         self.node_valid = ok
         self.n_patch_nodes = int(np.sum(~is_base & ok))
         self.start_node = self._id_of(pipe.start.pos)
@@ -189,6 +212,7 @@ class LayeredGraph:
         self.step = np.full((N, 18), -1, dtype=np.int64)
         self.elen = np.zeros((N, 18))
         self.scost = np.zeros((N, 18))
+        self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
         self.use_support_cost = support_cost
         self._ext = np.array(sc.block.extent, dtype=float)
         self._sup = _fixed_support(F, sc, pipe.nominal_size) if support_cost else None
@@ -244,6 +268,91 @@ class LayeredGraph:
             EscapeGraph._block_cand(self, free, w, P0, P1, A, B, S, ro)
         return free
 
+    def _pipes_mask(self, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+        """D60: 엣지마다 16비트 마스크 — 비트 (i × 4 + j) = 시작을 꺾임 등급 i, 끝을 등급 j 의 엘보 접선만큼 깎은
+        직관이 놓인 배관(·예약)과 r + r_o 이상 (검증기와 같은 거리 식). 등급 0/45/90/135. 0 = 어떤 경우에도 못 씀.
+
+        엣지 위 점 p(s) 와 조각 사이 거리는 s 에 대해 볼록 → 막힌 부분은 조각마다 한 구간 [b0, b1].
+        깎기 (ts, te) 로 허용 ⇔ 모든 구간이 b1 ≤ ts 또는 b0 ≥ L − te. 깎기가 엣지보다 길면 엣지 길이까지만
+        (그 앞 엣지는 깎지 않고 판정 — 보수적).
+        """
+        n = len(P0)
+        mask = np.full(n, 0xFFFF, dtype=np.int64)
+        if not n or not self.pipe_groups:
+            return mask
+        full = self._pipes_clear(P0, P1)
+        bad = np.nonzero(~full)[0]
+        if not len(bad):
+            return mask
+        tr = np.array([0.0, self.tangent[45], self.tangent[90], self.tangent[135]])
+        Q0, Q1 = P0[bad], P1[bad]
+        D = Q1 - Q0
+        L = np.linalg.norm(D, axis=1)
+        U = D / np.where(L > 0, L, 1)[:, None]
+        m = np.full(len(bad), 0xFFFF, dtype=np.int64)
+        slo, shi = np.minimum(Q0, Q1), np.maximum(Q0, Q1)
+        from .verifier.geom import segment_segment_distance
+
+        def pdist(X, A, B):   # 점 ↔ 선분 거리 (브로드캐스트)
+            AB = B - A
+            dd = np.maximum((AB * AB).sum(-1), 1e-12)
+            t = np.clip(((X - A) * AB).sum(-1) / dd, 0, 1)
+            return np.linalg.norm(X - (A + t[..., None] * AB), axis=-1)
+
+        # (엣지, 조각) 쌍을 모든 묶음에서 모은 뒤 이분 탐색을 한 번에 — 쌍마다 같은 식 (결과 같음)
+        E, AA, BB, SS, NN, SST = [], [], [], [], [], []
+        for A, B, S, ro, lo, hi in self.pipe_groups:
+            g = self.r + ro + S.max()
+            near = np.nonzero(np.all((slo < hi + g) & (shi > lo - g), 1))[0]
+            if not len(near):
+                continue
+            need = self.r + ro
+            d, c1, _ = segment_segment_distance(Q0[near][:, None], Q1[near][:, None], A[None], B[None])
+            hit_e, hit_k = np.nonzero(d - S[None] < need - EPS)
+            if not len(hit_e):
+                continue
+            e = near[hit_e]
+            E.append(e); AA.append(A[hit_k]); BB.append(B[hit_k]); SS.append(S[hit_k])
+            NN.append(np.full(len(e), need))
+            SST.append(np.linalg.norm(c1[hit_e, hit_k] - Q0[e], axis=1))
+        if E:
+            e = np.concatenate(E); Ak = np.concatenate(AA); Bk = np.concatenate(BB)
+            Sk = np.concatenate(SS); need = np.concatenate(NN); s_star = np.concatenate(SST)
+            f = lambda sv: pdist(Q0[e] + sv[:, None] * U[e], Ak, Bk) - Sk - need
+            lo_s, hi_s = np.zeros(len(e)), s_star.copy()
+            for _ in range(40):
+                mid = (lo_s + hi_s) / 2
+                blocked = f(mid) < -EPS
+                hi_s = np.where(blocked, mid, hi_s)
+                lo_s = np.where(blocked, lo_s, mid)
+            b0 = np.where(f(np.zeros(len(e))) < -EPS, 0.0, lo_s)
+            lo_s, hi_s = s_star.copy(), L[e].copy()
+            for _ in range(40):
+                mid = (lo_s + hi_s) / 2
+                blocked = f(mid) < -EPS
+                lo_s = np.where(blocked, mid, lo_s)
+                hi_s = np.where(blocked, hi_s, mid)
+            b1 = np.where(f(L[e]) < -EPS, L[e], hi_s)
+            ok = np.zeros(len(e), dtype=np.int64)
+            for i in range(4):
+                ts = np.minimum(tr[i], L[e])
+                for j in range(4):
+                    te = np.minimum(tr[j], L[e])
+                    good = (b1 <= ts + 1e-6) | (b0 >= L[e] - te - 1e-6)
+                    ok |= good.astype(np.int64) << (i * 4 + j)
+            np.bitwise_and.at(m, e, ok)
+        mask[bad] = m
+        return mask
+
+    @staticmethod
+    def _swap_mask(m: np.ndarray) -> np.ndarray:
+        """반대 방향 엣지 마스크 (시작·끝 등급 맞바꿈)."""
+        out = np.zeros_like(m)
+        for i in range(4):
+            for j in range(4):
+                out |= ((m >> (i * 4 + j)) & 1) << (j * 4 + i)
+        return out
+
     def _axis_edges(self, F, is_base, bi, first) -> int:
         n = 0
         Fidx = np.full((len(self.flat), 3), -1)
@@ -266,12 +375,15 @@ class LayeredGraph:
             if len(rest):
                 free[rest] = self._segments_clear(P0[rest], P1[rest], o1)
             sel = np.nonzero(free)[0]
-            sel = sel[self._pipes_clear(P0[sel], P1[sel])]
+            em = self._pipes_mask(P0[sel], P1[sel])
+            sel, em = sel[em != 0], em[em != 0]
             a, b = a[sel], b[sel]
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
             dp, dm = 2 * ax, 2 * ax + 1    # +축, −축 (AXIS_DIRS 순서)
             self.step[a, dp], self.elen[a, dp] = b, L
             self.step[b, dm], self.elen[b, dm] = a, L
+            self.emask[a, dp] = em
+            self.emask[b, dm] = self._swap_mask(em)
             if self._sup is not None:      # D57: 고정 레이어 인접 엣지는 캐시, 그 밖(패치)은 같은 함수로 계산
                 adj = adj[sel]
                 sc_ = np.empty(len(a))
@@ -302,10 +414,12 @@ class LayeredGraph:
             keep = self.node_valid[s_id] & self.node_valid[d_id]
             s_id, d_id = s_id[keep], d_id[keep]
             src = tuple(i[keep] for i in src)
-            free = self._pipes_clear(self.pos[s_id], self.pos[d_id])
-            s_id, d_id = s_id[free], d_id[free]
+            em = self._pipes_mask(self.pos[s_id], self.pos[d_id])
+            free = em != 0
+            s_id, d_id, em = s_id[free], d_id[free], em[free]
             src = tuple(i[free] for i in src)
             self.step[s_id, d] = d_id
+            self.emask[s_id, d] = em
             self.elen[s_id, d] = np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1)
             if self._sup is not None:
                 self.scost[s_id, d] = self._sup[1][d][src]
@@ -383,6 +497,10 @@ class LayeredGraph:
     def edge_length(self, n1, n2) -> float:
         return math.dist(self.position(n1), self.position(n2))
 
+    def is_goal(self, state, pipe=None) -> bool:
+        """EscapeGraph.is_goal + D60: 마지막 엣지가 끝을 깎지 않은 직관으로 도착할 수 있어야 한다."""
+        return bool(state.ends & 1) and EscapeGraph.is_goal(self, state, pipe)
+
     def support_cost(self, a, b) -> float:
         """D57 추정 서포트 (a → b 엣지)."""
         return float(self.scost[a.node, b.dir])
@@ -402,8 +520,13 @@ class LayeredGraph:
                 continue
             if defl and state.run < self.turn_need(state, defl) - EPS:
                 continue
+            if not ((state.ends >> ANG_INDEX[defl]) & 1):   # D60
+                continue
             nxt = int(self.step[state.node, d])
             if nxt < 0:
+                continue
+            nm = (int(self.emask[state.node, d]) >> (ANG_INDEX[defl] * 4)) & 15
+            if nm == 0:
                 continue
             if defl and not self.elbow_clear(state.node, state.dir, d):
                 continue
@@ -412,7 +535,7 @@ class LayeredGraph:
                 run, bend = length, defl
             else:
                 run, bend = state.run + length, state.bend
-            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend)
+            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend, nm)
 
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),
@@ -431,15 +554,20 @@ def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
     return _finish_chain(g, pipe, chain, expanded, generated, time.perf_counter() - t0)
 
 
-def make_layered_router(local_lines: bool = False, support_cost: bool = True):
-    """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용."""
+def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True):
+    """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
+    reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다)."""
     def router(sc, pipe, time_limit, placed=()):
-        g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost)
+        reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
+        g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved)
         r = _route(g, pipe, time_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
-    router.__name__ = f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
+    router.__name__ = (f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
+                       f"{'' if reserve else '_noreserve'}")
+    if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
+        router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False)
     return router
 
 

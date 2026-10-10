@@ -145,6 +145,18 @@ class RipupTest(unittest.TestCase):
         self.assertEqual(res.fail_detail["B"], {"class": "interference_search", "seq_status": "timeout",
                                                 "solo_status": "ok", "blockers": []})
 
+    def test_router_mismatch(self):
+        """D60: 단독 경로가 놓인 배관과 충돌하지 않는데 순차에서 unreachable → "라우터 규칙 불일치" (간섭-탐색 아님)."""
+        sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 30000)])
+        table = {"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(30000)}
+
+        def router(sc_, pipe, limit, placed=()):
+            if pipe.id == "B" and placed:
+                return RouteResult("B", "unreachable", search_sec=0.0)
+            return MockRouter(table)(sc_, pipe, limit, placed)
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.fail_class, {"B": "router_mismatch"})
+
     def test_independent_planner(self):
         sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 20100)])
         router = MockRouter({"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(20100)})
