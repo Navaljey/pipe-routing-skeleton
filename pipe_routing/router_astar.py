@@ -30,6 +30,7 @@ class RouteResult:
     J: Optional[float] = None         # 직관 + 엘보 (kg). 서포트 제외
     J_pipe: Optional[float] = None
     J_elbow: Optional[float] = None
+    J_support_est: float = 0.0        # D57 라우터 추정 서포트 (kg). 표현이 넣지 않으면 0
     length_mm: Optional[float] = None
     waypoints: list = field(default_factory=list)   # 꺾이는 점 (mm), start·end 포함
     bends: dict = field(default_factory=dict)       # {"45": n, "90": n, "135": n}
@@ -168,7 +169,10 @@ def _finish_chain(space, pipe, states, expanded, generated, sec) -> RouteResult:
             if states[i - 1].dir != states[i].dir or i == 1:
                 n45 += 1
     J_pipe = length * kgmm
-    return RouteResult(pipe.id, "ok", J=J, J_pipe=J_pipe, J_elbow=J - J_pipe, length_mm=length,
+    # D57: 표현이 추정 서포트를 비용에 넣으면(LayeredGraph) 따로 떼어 둔다. J = 직관 + 엘보 + 추정 서포트
+    J_sup = sum(space.support_cost(a, b) for a, b in zip(states, states[1:])) if hasattr(space, "support_cost") else 0.0
+    return RouteResult(pipe.id, "ok", J=J, J_pipe=J_pipe, J_elbow=J - J_pipe - J_sup, J_support_est=J_sup,
+                       length_mm=length,
                        waypoints=[list(p) for p in waypoints], bends=bends, length_45_mm=len45,
                        n_segments_45=n45, expanded=expanded, generated=generated, search_sec=sec,
                        states=states)
