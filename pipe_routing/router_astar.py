@@ -79,11 +79,25 @@ def heuristic_factory(space: SpaceRepresentation, pipe: Pipe):
 
 
 def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME_LIMIT_SEC,
-                heuristic=None) -> RouteResult:
-    """heuristic=None 이면 heuristic_factory (D41). 시험용으로 lambda s: 0 (Dijkstra) 을 넣을 수 있다."""
+                heuristic=None, impl: str = "auto") -> RouteResult:
+    """heuristic=None 이면 heuristic_factory (D41). 시험용으로 lambda s: 0 (Dijkstra) 을 넣을 수 있다.
+
+    impl: "auto" = escape graph 이고 기본 휴리스틱이며 numba 가 있으면 컴파일 구현(astar_fast, M10), 아니면 파이썬.
+          "python" / "fast" 로 강제할 수 있다. 두 구현의 결과(경로·J·확장 수)는 같다 (D40①, tests/test_astar_fast.py).
+    """
     t0 = time.perf_counter()
     h = heuristic or heuristic_factory(space, pipe)
     start = space.start_state(pipe)
+    if impl != "python" and heuristic is None and hasattr(space, "axis_ok"):
+        from . import astar_fast
+        if astar_fast.HAVE_NUMBA:
+            status, chain, expanded, generated = astar_fast.astar_route_fast(space, pipe, time_limit, h(start))
+            if status != "ok":
+                return RouteResult(pipe.id, status, expanded=expanded, generated=generated,
+                                   search_sec=time.perf_counter() - t0)
+            return _finish_chain(space, pipe, chain, expanded, generated, time.perf_counter() - t0)
+        if impl == "fast":
+            raise RuntimeError("numba 가 없어 컴파일 구현을 쓸 수 없다")
     tie = itertools.count()
     open_heap = [(h(start), next(tie), 0.0, start)]
     g_best = {start: 0.0}
@@ -130,6 +144,10 @@ def _finish(space, pipe, goal_state, parent, expanded, generated, sec) -> RouteR
         states.append(s)
         s = parent[s]
     states.reverse()
+    return _finish_chain(space, pipe, states, expanded, generated, sec)
+
+
+def _finish_chain(space, pipe, states, expanded, generated, sec) -> RouteResult:
     kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
     pts = [space.position(s.node) for s in states]
     length = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))

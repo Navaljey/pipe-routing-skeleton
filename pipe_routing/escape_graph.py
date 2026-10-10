@@ -79,13 +79,15 @@ def planar_segment_box_distance(p0: np.ndarray, p1: np.ndarray, lo, hi, const_ax
 class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
-    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=()):
+    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
         기하는 검증기와 같은 함수(build_centerline, segment_segment_distance)를 쓴다.
+        fast_build=False 는 가속(M10) 전 구성 방식 — 그래프 동일성 시험용. 결과는 같다.
         """
         t0 = time.perf_counter()
+        self.fast_build = fast_build
         self.pipe = pipe
         self.r = pipe.radius
         self.L = pipe.min_straight
@@ -138,7 +140,7 @@ class EscapeGraph:
         X, Y, Z = np.meshgrid(*self.axes, indexing="ij")
         pts = np.stack([X, Y, Z], -1).reshape(-1, 3)
         self.in_domain = np.all((pts >= self.dom_lo - EPS) & (pts <= self.dom_hi + EPS), 1).reshape(self.shape)
-        self.clearance = self._point_clearance(pts).reshape(self.shape)   # 격자점 ↔ 장애물 최소거리 (D48 거르기용)
+        self.clearance = self._grid_clearance(pts).reshape(self.shape)   # 격자점 ↔ 장애물 최소거리 (D48 거르기용)
         clear = self.clearance >= self.r - EPS
         self.node_ok = self.in_domain & clear
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
@@ -175,6 +177,21 @@ class EscapeGraph:
     def position(self, node) -> Vec3:
         X, Y, Z = self._axes_f
         return (X[node[0]], Y[node[1]], Z[node[2]])
+
+    def _grid_clearance(self, pts: np.ndarray) -> np.ndarray:
+        """격자점(pts = 격자 순서) ↔ 장애물 최소거리. fast_build 면 박스에서 r + t_135 + 10mm 보다 먼 격자점은 그 박스를
+        계산하지 않는다 (M10). 이 값은 판정(≥ r, ≥ r + t)에만 쓰이고 판정 문턱은 모두 그 거리 이하라 판정 결과는 같다 —
+        먼 점의 값만 실제 거리 대신 더 큰 값(다른 박스까지 거리 또는 inf)이 된다."""
+        if not self.fast_build:
+            return self._point_clearance(pts)
+        best = np.full(self.shape, np.inf)
+        P = pts.reshape(self.shape + (3,))
+        reach = self.r + self.tangent[135] + 10.0
+        for lo, hi in zip(self.box_lo, self.box_hi):
+            sl = tuple(self._span(k, lo[k], hi[k], reach, reach) for k in range(3))
+            g = np.maximum(0.0, np.maximum(lo - P[sl], P[sl] - hi))
+            best[sl] = np.minimum(best[sl], np.sqrt((g * g).sum(-1)))
+        return best.reshape(-1)
 
     def _point_clearance(self, pts: np.ndarray) -> np.ndarray:
         best = np.full(len(pts), np.inf)
@@ -250,40 +267,103 @@ class EscapeGraph:
         for A, B, S, ro, lo, hi in self.pipe_groups:
             g = pad + ro + S.max()
             cand = np.nonzero(free & np.all((slo < hi + g) & (shi > lo - g), 1))[0]
-            for k0 in range(0, len(cand), 4096):
-                c = cand[k0:k0 + 4096]
-                d, _, _ = segment_segment_distance(P0[c][:, None], P1[c][:, None], A[None], B[None])
-                bad = np.any(d - slack - S[None] < self.r + ro - EPS, 1)
-                free[c[bad]] = False
+            self._block_cand(free, cand, P0, P1, A, B, S, ro, slack)
         return free
+
+    def _block_cand(self, free, cand, P0, P1, A, B, S, ro, slack=0.0) -> None:
+        for k0 in range(0, len(cand), 4096):
+            c = cand[k0:k0 + 4096]
+            d, _, _ = segment_segment_distance(P0[c][:, None], P1[c][:, None], A[None], B[None])
+            bad = np.any(d - slack - S[None] < self.r + ro - EPS, 1)
+            free[c[bad]] = False
+
+    def _span(self, ax: int, lo: float, hi: float, ext_lo: float = 0.0, ext_hi: float = 0.0) -> slice:
+        """시작 인덱스 범위 (상위집합): 시작 좌표가 (lo − ext_lo, hi + ext_hi) 와 걸칠 수 있는 격자 인덱스. 한 칸씩 여유.
+
+        M10 가속: 조각마다 전체 엣지를 훑지 않고 이 범위만 본다. 범위 안에서는 원래와 같은 AABB·거리 판정을 하므로
+        결과(막히는 엣지 집합)는 같다 (tests/test_astar_fast.py 그래프 동일성 시험).
+        """
+        a = self.axes[ax]
+        i0 = max(0, int(np.searchsorted(a, lo - ext_lo, "left")) - 2)
+        i1 = min(len(a), int(np.searchsorted(a, hi + ext_hi, "right")) + 1)
+        return slice(i0, i1)
 
     def _pipe_block_axis(self, ax: int) -> None:
         ok = self.axis_ok[ax]
-        idx = np.nonzero(ok)
-        if not len(idx[0]):
+        if not self.fast_build:
+            idx = np.nonzero(ok)
+            if not len(idx[0]):
+                return
+            P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+            nxt = list(idx)
+            nxt[ax] = idx[ax] + 1
+            P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
+            free = self._segments_clear_of_pipes(P0, P1)
+            ok[tuple(i[~free] for i in idx)] = False
             return
-        P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
-        nxt = list(idx)
-        nxt[ax] = idx[ax] + 1
-        P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
-        free = self._segments_clear_of_pipes(P0, P1)
-        ok[tuple(i[~free] for i in idx)] = False
+        for A, B, S, ro, lo, hi in self.pipe_groups:
+            g = self.r + 0.0 + ro + S.max()
+            sl = tuple(self._span(k, lo[k], hi[k], g, g) for k in range(3))
+            sub = np.nonzero(ok[sl])
+            if not len(sub[0]):
+                continue
+            idx = tuple(sub[k] + sl[k].start for k in range(3))
+            P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+            nxt = list(idx)
+            nxt[ax] = idx[ax] + 1
+            P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
+            free = np.ones(len(P0), dtype=bool)
+            slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
+            cand = np.nonzero(np.all((slo < hi + g) & (shi > lo - g), 1))[0]
+            self._block_cand(free, cand, P0, P1, A, B, S, ro)
+            ok[tuple(i[~free] for i in idx)] = False
 
     def _pipe_block_diag(self, d: int) -> None:
         ok = self.diag_ok[d]
-        idx = np.nonzero(ok)
-        if not len(idx[0]):
-            return
         vec = DIRS[d]
         a, b = [ax for ax in range(3) if vec[ax] != 0]
         to_a, to_b = self.diag_to[d]
-        dst = list(idx)
-        dst[a] = to_a[idx[a], idx[b]]
-        dst[b] = to_b[idx[a], idx[b]]
-        P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
-        P1 = np.stack([self.axes[k][dst[k]] for k in range(3)], -1)
-        free = self._segments_clear_of_pipes(P0, P1)
-        ok[tuple(i[~free] for i in idx)] = False
+
+        def edges(idx):
+            dst = list(idx)
+            dst[a] = to_a[idx[a], idx[b]]
+            dst[b] = to_b[idx[a], idx[b]]
+            P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+            P1 = np.stack([self.axes[k][dst[k]] for k in range(3)], -1)
+            return P0, P1
+
+        if not self.fast_build:
+            idx = np.nonzero(ok)
+            if not len(idx[0]):
+                return
+            P0, P1 = edges(idx)
+            free = self._segments_clear_of_pipes(P0, P1)
+            ok[tuple(i[~free] for i in idx)] = False
+            return
+        # 이 방향 엣지의 최대 이동 길이 (평면 두 축 같음) — 시작 인덱스 범위를 넓히는 데 쓴다
+        ia, ib = np.nonzero(to_a >= 0)
+        tmax = float(np.abs(self.axes[a][to_a[ia, ib]] - self.axes[a][ia]).max()) if len(ia) else 0.0
+        for A, B, S, ro, lo, hi in self.pipe_groups:
+            g = self.r + 0.0 + ro + S.max()
+            sl = []
+            for k in range(3):
+                if vec[k] > 0:
+                    sl.append(self._span(k, lo[k], hi[k], g + tmax, g))
+                elif vec[k] < 0:
+                    sl.append(self._span(k, lo[k], hi[k], g, g + tmax))
+                else:
+                    sl.append(self._span(k, lo[k], hi[k], g, g))
+            sl = tuple(sl)
+            sub = np.nonzero(ok[sl])
+            if not len(sub[0]):
+                continue
+            idx = tuple(sub[k] + sl[k].start for k in range(3))
+            P0, P1 = edges(idx)
+            free = np.ones(len(P0), dtype=bool)
+            slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
+            cand = np.nonzero(np.all((slo < hi + g) & (shi > lo - g), 1))[0]
+            self._block_cand(free, cand, P0, P1, A, B, S, ro)
+            ok[tuple(i[~free] for i in idx)] = False
 
     def _axis_edges(self, ax: int) -> np.ndarray:
         n = self.shape[ax]
@@ -300,6 +380,12 @@ class EscapeGraph:
         hi_pts[..., ax] = nxt[ax]
         best = np.full(lo_pts.shape[:-1], np.inf)
         for blo, bhi in zip(self.box_lo, self.box_hi):
+            if self.fast_build:
+                # M10: 박스에서 r 보다 먼 엣지는 판정(≥ r)에 영향이 없다 → 박스 근처 인덱스 범위만 계산 (결과 같음)
+                sl = tuple(self._span(k, blo[k], bhi[k], self.r, self.r) for k in range(3))
+                g = np.maximum(0.0, np.maximum(blo - hi_pts[sl], lo_pts[sl] - bhi))
+                best[sl] = np.minimum(best[sl], np.sqrt((g * g).sum(-1)))
+                continue
             g = np.maximum(0.0, np.maximum(blo - hi_pts, lo_pts - bhi))
             best = np.minimum(best, np.sqrt((g * g).sum(-1)))
         edge = np.moveaxis(best >= self.r - EPS, ax, 0) & both
@@ -425,16 +511,7 @@ class EscapeGraph:
         key = (node, d_in, d_out)
         hit = self._arc_ok.get(key)
         if hit is None:
-            # 호 모양은 꺾임점 위치와 무관 — 방향 조합별 형판(꺾임점 기준 상대 좌표)을 한 번만 만든다
-            tpl = self._arc_tpl.get((d_in, d_out))
-            if tpl is None:
-                u0 = np.array(DIRS[d_in], dtype=float)
-                u1 = np.array(DIRS[d_out], dtype=float)
-                A0, B0, sag = elbow_arc_chords(np.zeros(3), u0 / np.linalg.norm(u0), u1 / np.linalg.norm(u1), t, defl)
-                tpl = (A0, B0, (A0 + B0) / 2, np.linalg.norm(B0 - A0, axis=1) / 2, sag,
-                       np.minimum(A0.min(0), B0.min(0)), np.maximum(A0.max(0), B0.max(0)))
-                self._arc_tpl[(d_in, d_out)] = tpl
-            A0, B0, M0, half, sag, plo0, phi0 = tpl
+            A0, B0, M0, half, sag, plo0, phi0 = self.arc_template(d_in, d_out)
             v = np.array(self.position(node))
             A, B, mid = A0 + v, B0 + v, M0 + v
             # 호를 감싸는 박스(현 끝점들의 AABB)와 장애물 거리가 r 이상이면 정밀 판정 생략
@@ -468,6 +545,23 @@ class EscapeGraph:
                         hit = False
             self._arc_ok[key] = hit
         return hit
+
+    def arc_template(self, d_in: int, d_out: int) -> tuple:
+        """호 모양은 꺾임점 위치와 무관 — 방향 조합별 형판(꺾임점 기준 상대 좌표)을 한 번만 만든다.
+
+        반환: (현 시작점, 현 끝점, 현 중점, 현 반 길이, sagitta, 현 끝점 AABB 하한, 상한)
+        """
+        tpl = self._arc_tpl.get((d_in, d_out))
+        if tpl is None:
+            defl = DEFLECTION[d_in][d_out]
+            u0 = np.array(DIRS[d_in], dtype=float)
+            u1 = np.array(DIRS[d_out], dtype=float)
+            A0, B0, sag = elbow_arc_chords(np.zeros(3), u0 / np.linalg.norm(u0), u1 / np.linalg.norm(u1),
+                                           self.tangent[defl], defl)
+            tpl = (A0, B0, (A0 + B0) / 2, np.linalg.norm(B0 - A0, axis=1) / 2, sag,
+                   np.minimum(A0.min(0), B0.min(0)), np.maximum(A0.max(0), B0.max(0)))
+            self._arc_tpl[(d_in, d_out)] = tpl
+        return tpl
 
     def neighbors(self, state: State, pipe: Pipe = None) -> Iterator[State]:
         """D45 ①②·D47: 꺾기 전 직관 ≥ turn_need. D48: 꺾을 때 엘보 호 ↔ 장애물 이격 ≥ r."""
