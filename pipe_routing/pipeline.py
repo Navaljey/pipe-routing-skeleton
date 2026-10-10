@@ -122,8 +122,17 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "graph_regen_sec_total": round(sum(a["graph_sec"] for t in plan.attempts.values() for a in t), 3),
         "routing_attempts": sum(len(t) for t in plan.attempts.values()),
         "planner_events": plan.events,
+        "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+
+
+def _peak_rss_mb():
+    try:
+        import resource
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)   # Linux: KB
+    except Exception:
+        return None
 
 
 def fail_causes(router_status: str, v) -> list:
