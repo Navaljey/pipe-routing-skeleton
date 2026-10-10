@@ -55,3 +55,25 @@ class VizTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipeTubeTest(unittest.TestCase):
+    def test_tube_radius_is_od_plus_insulation(self):
+        """§0 보고 규칙: 관 반경 = 외경/2 + 보온재. 유효 반경 관(D17)은 범례에서 켜는 한 개 항목."""
+        import numpy as np
+        import plotly.graph_objects as go
+        from pipe_routing.constants import PIPE_SPECS
+        from pipe_routing.scenario import load
+        from pipe_routing.viz import add_pipe_tubes
+        sc = load(Path(__file__).resolve().parent.parent / "scenarios" / "manual" / "manual_01.json")
+        p = sc.pipes[0]
+        wps = [list(p.start.pos), [p.start.pos[0], p.start.pos[1], p.start.pos[2] + 5000]]
+        fig = go.Figure()
+        add_pipe_tubes(fig, sc, {p.id: wps})
+        body, clear = fig.data
+        r_body = PIPE_SPECS[p.nominal_size].od / 2 + p.insulation_thickness
+        xy = np.c_[np.array(body.x) - p.start.pos[0], np.array(body.y) - p.start.pos[1]]
+        self.assertTrue(np.allclose(np.hypot(xy[:, 0], xy[:, 1]), r_body, atol=1.0))   # 1 mm 반올림
+        self.assertEqual(clear.visible, "legendonly")
+        xy = np.c_[np.array(clear.x) - p.start.pos[0], np.array(clear.y) - p.start.pos[1]]
+        self.assertTrue(np.allclose(np.hypot(xy[:, 0], xy[:, 1]), p.radius, atol=1.0))

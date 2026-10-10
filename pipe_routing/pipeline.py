@@ -264,7 +264,17 @@ def main(argv=None) -> int:
                          "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
     ap.add_argument("--no-support-cost", action="store_true",
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
+    ap.add_argument("--html-only", action="store_true",
+                    help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
+                         "(plotly.js 포함 — 보고 첨부용, §0)")
     args = ap.parse_args(argv)
+    if args.html_only:
+        for path in args.paths:
+            stem = Path(path).stem
+            out = json.loads((Path(args.out) / f"{stem}_output.json").read_text(encoding="utf-8"))
+            write_report_html(load(path), out, Path(args.out) / f"{stem}_report.html", offline=True)   # 첨부용 (§0)
+            print(f"{path}: → {args.out}/{stem}_report.html")
+        return 0
     if args.router == "astar":
         router = astar_router
     else:
@@ -287,13 +297,15 @@ def main(argv=None) -> int:
     return 0
 
 
-def write_report_html(sc: Scenario, out: dict, path) -> None:
+def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> None:
     from .router_astar import RouteResult
     from .verifier.core import PipeReport, Violation
-    from .viz import add_routes, add_verification, scenario_figure, write_html
+    from .viz import add_pipe_tubes, add_routes, add_verification, scenario_figure, write_html
     fig = scenario_figure(sc, connect=False)
+    add_pipe_tubes(fig, sc, {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]})   # §0 보고 규칙
     add_routes(fig, sc, [RouteResult(x["pipe_id"], "ok" if x["waypoints"] else x["router"]["status"],
-                                     J=(x["J"] or {}).get("total"), waypoints=x["waypoints"]) for x in out["routes"]])
+                                     J=(x["J"] or {}).get("total"), waypoints=x["waypoints"]) for x in out["routes"]],
+               line_width=2)   # 중심선은 가늘게 — 관(실제 굵기)이 보이도록
     reps = {x["pipe_id"]: PipeReport(x["pipe_id"], bool(x["waypoints"]),
                                      violations=[Violation(v["module"], x["pipe_id"], v["pos"], v["message"])
                                                  for v in x["violations"]],
@@ -302,7 +314,7 @@ def write_report_html(sc: Scenario, out: dict, path) -> None:
     g = out["global"]
     fig.update_layout(title=dict(text=fig.layout.title.text +
                                  f"<br>통과 {g['success_count']}/{g['total_pipes']} · J_total {g['J_total']:,.1f} kg"))
-    write_html(fig, path)
+    write_html(fig, path, offline=offline)
 
 
 if __name__ == "__main__":

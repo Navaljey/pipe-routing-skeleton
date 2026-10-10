@@ -4,6 +4,18 @@
 기본 세트 = procedural 20 + 수작업 1. 밀집 세트 = 같은 생성기 설정(D30)에서 배관 수만 30·50, 각 5개 (seed 20262008~, 20263008~, 요청한 배관 수 모두 생성됨).
 오류로 끝난 실행 0건 (기본 21 × A·B, 밀집 10 × A·B).
 
+## 첨부 3D 리포트 (CLAUDE.md §0 보고 규칙)
+
+배관 = 실제 굵기 관 (외경 + 보온재), 범례의 "유효 반경 관 (D17)" 을 켜면 이격 판정 반경이 보인다. 파일은 보고 메시지 첨부 (`out/` 은 커밋 안 함, D36).
+다시 만들기: `python -m pipe_routing.pipeline <scenario> -o <출력 폴더> --html-only` (기존 출력 JSON 으로 HTML 만, plotly.js 포함).
+
+| 파일 | 내용 |
+|---|---|
+| `manual_01_report.html` | 수작업 (A + D57), 통과 3/5 — T5 구배 위반 2 |
+| `proc_009_report.html` | procedural 실패 사례 — P004 간섭-차단, P005 간섭-탐색(unreachable, M20) |
+| `dense50_004_report.html` | 밀집 50배관 — 간섭-차단 5건 (P015 단자 점유 포함) |
+| `case_proc_009_P004(_close).html` · `case_dense50_004_P015(_close).html` · `case_dense50_003_P003(_close).html` | 간섭 사례 근접 화면 (막는 배관 검정, 실패 배관 단독 경로 빨강) |
+
 ## 1. 기본 세트 — A (M4 반영) vs 7.5단계 현재 방식
 
 | 지표 | 7.5단계 현재 방식 (D53) | 8단계 A + D57 |
