@@ -299,44 +299,48 @@ class LayeredGraph:
             t = np.clip(((X - A) * AB).sum(-1) / dd, 0, 1)
             return np.linalg.norm(X - (A + t[..., None] * AB), axis=-1)
 
+        # (엣지, 조각) 쌍을 모든 묶음에서 모은 뒤 이분 탐색을 한 번에 — 쌍마다 같은 식 (결과 같음)
+        E, AA, BB, SS, NN, SST = [], [], [], [], [], []
         for A, B, S, ro, lo, hi in self.pipe_groups:
             g = self.r + ro + S.max()
             near = np.nonzero(np.all((slo < hi + g) & (shi > lo - g), 1))[0]
             if not len(near):
                 continue
             need = self.r + ro
-            for k in range(len(A)):
-                Ak, Bk, Sk = A[k], B[k], S[k]
-                d, c1, _ = segment_segment_distance(Q0[near], Q1[near], Ak[None], Bk[None])
-                hit = d - Sk < need - EPS
-                if not np.any(hit):
-                    continue
-                e = near[hit]
-                s_star = np.linalg.norm(c1[hit] - Q0[e], axis=1)
-                f = lambda sv, ee=e: pdist(Q0[ee] + sv[:, None] * U[ee], Ak, Bk) - Sk - need
-                # 왼쪽 경계 b0 ∈ [0, s*]: f(0) < −EPS 면 0
-                lo_s, hi_s = np.zeros(len(e)), s_star.copy()
-                for _ in range(40):
-                    mid = (lo_s + hi_s) / 2
-                    blocked = f(mid) < -EPS
-                    hi_s = np.where(blocked, mid, hi_s)
-                    lo_s = np.where(blocked, lo_s, mid)
-                b0 = np.where(f(np.zeros(len(e))) < -EPS, 0.0, lo_s)
-                lo_s, hi_s = s_star.copy(), L[e].copy()
-                for _ in range(40):
-                    mid = (lo_s + hi_s) / 2
-                    blocked = f(mid) < -EPS
-                    lo_s = np.where(blocked, mid, lo_s)
-                    hi_s = np.where(blocked, hi_s, mid)
-                b1 = np.where(f(L[e]) < -EPS, L[e], hi_s)
-                ok = np.zeros(len(e), dtype=np.int64)
-                for i in range(4):
-                    ts = np.minimum(tr[i], L[e])
-                    for j in range(4):
-                        te = np.minimum(tr[j], L[e])
-                        good = (b1 <= ts + 1e-6) | (b0 >= L[e] - te - 1e-6)
-                        ok |= good.astype(np.int64) << (i * 4 + j)
-                m[e] &= ok
+            d, c1, _ = segment_segment_distance(Q0[near][:, None], Q1[near][:, None], A[None], B[None])
+            hit_e, hit_k = np.nonzero(d - S[None] < need - EPS)
+            if not len(hit_e):
+                continue
+            e = near[hit_e]
+            E.append(e); AA.append(A[hit_k]); BB.append(B[hit_k]); SS.append(S[hit_k])
+            NN.append(np.full(len(e), need))
+            SST.append(np.linalg.norm(c1[hit_e, hit_k] - Q0[e], axis=1))
+        if E:
+            e = np.concatenate(E); Ak = np.concatenate(AA); Bk = np.concatenate(BB)
+            Sk = np.concatenate(SS); need = np.concatenate(NN); s_star = np.concatenate(SST)
+            f = lambda sv: pdist(Q0[e] + sv[:, None] * U[e], Ak, Bk) - Sk - need
+            lo_s, hi_s = np.zeros(len(e)), s_star.copy()
+            for _ in range(40):
+                mid = (lo_s + hi_s) / 2
+                blocked = f(mid) < -EPS
+                hi_s = np.where(blocked, mid, hi_s)
+                lo_s = np.where(blocked, lo_s, mid)
+            b0 = np.where(f(np.zeros(len(e))) < -EPS, 0.0, lo_s)
+            lo_s, hi_s = s_star.copy(), L[e].copy()
+            for _ in range(40):
+                mid = (lo_s + hi_s) / 2
+                blocked = f(mid) < -EPS
+                lo_s = np.where(blocked, mid, lo_s)
+                hi_s = np.where(blocked, hi_s, mid)
+            b1 = np.where(f(L[e]) < -EPS, L[e], hi_s)
+            ok = np.zeros(len(e), dtype=np.int64)
+            for i in range(4):
+                ts = np.minimum(tr[i], L[e])
+                for j in range(4):
+                    te = np.minimum(tr[j], L[e])
+                    good = (b1 <= ts + 1e-6) | (b0 >= L[e] - te - 1e-6)
+                    ok |= good.astype(np.int64) << (i * 4 + j)
+            np.bitwise_and.at(m, e, ok)
         mask[bad] = m
         return mask
 
