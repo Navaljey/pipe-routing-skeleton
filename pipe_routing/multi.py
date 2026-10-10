@@ -14,6 +14,9 @@ from .scenario import Pipe, Scenario
 from .verifier.geom import EPS, build_centerline, segment_segment_distance
 
 MAX_RIPUPS = 3   # D50④ 시나리오당
+# D51 실패 3분류: 간섭-차단 (단독 경로가 놓인 배관과 충돌) / 간섭-탐색 (충돌 없는데 실패, 성능) / 개별 경로 (단독 실패)
+FAIL_CLASSES = ("interference_block", "interference_search", "individual")
+FAIL_CLASS_KO = {"interference_block": "간섭-차단", "interference_search": "간섭-탐색", "individual": "개별 경로"}
 
 
 @dataclass
@@ -23,7 +26,8 @@ class PlanResult:
     ripups: int = 0                               # 실행한 rip-up 횟수 (되돌린 것 포함)
     reverted: int = 0                             # 되돌린 횟수
     events: list = field(default_factory=list)    # 로그
-    fail_class: dict = field(default_factory=dict)   # 최종 실패 배관 → "interference" | "individual" (D50⑥)
+    fail_class: dict = field(default_factory=dict)   # 최종 실패 배관 → FAIL_CLASSES 중 하나 (D50⑥, D51)
+    fail_detail: dict = field(default_factory=dict)  # 최종 실패 배관 → {class, seq_status, solo_status, blockers}
     solo: dict = field(default_factory=dict)      # 단독 라우팅 결과 (rip-up·분류용)
     attempts: dict = field(default_factory=dict)  # pipe_id → [{"status", "graph_sec", "search_sec"}] (D50③)
     total_sec: float = 0.0
@@ -82,7 +86,8 @@ def _route(res: PlanResult, sc, pipe, router, time_limit, placed_items):
 
 def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
                              max_ripups: int = MAX_RIPUPS, order_fn: Callable = default_order) -> PlanResult:
-    """D50: 순서대로 깔고(놓인 배관 = 장애물), 실패 배관은 rip-up & reroute, 나빠지면 되돌린다."""
+    """D50: 순서대로 깔고(놓인 배관 = 장애물), 실패 배관은 rip-up & reroute.
+    D52: 성공 수(경로가 놓인 배관 수)가 엄격히 늘 때만 유지하고, 같거나 줄면 되돌린다."""
     t0 = time.perf_counter()
     pipes = {p.id: p for p in sc.pipes}
     order = [p.id for p in order_fn(sc)]
@@ -130,18 +135,25 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             del placed[pid]
         lay([f] + blockers, placed, routes)       # 실패 배관 먼저, 걷어낸 배관은 원래 순서대로 다시
         after = len(placed)
-        if after < before:
+        if after <= before:                      # D52
             placed, routes = snap
             res.reverted += 1
-            res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after} 감소, 되돌림")
+            res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after} 증가 없음, 되돌림")
         else:
             res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after}")
             tried.clear()                            # 상태가 바뀌었으니 다른 실패 배관을 다시 시도할 수 있다
 
-    # D50⑥: 최종 실패 배관 분류
+    # D50⑥ · D51: 최종 실패 배관 3분류
     for pid in order:
         if pid not in placed:
-            res.fail_class[pid] = "interference" if solo(pid).status == "ok" else "individual"
+            s = solo(pid)
+            blockers = [] if s.status != "ok" else [
+                q for q in order if q in placed
+                and routes_conflict(pipes[pid], s.waypoints, pipes[q], placed[q].waypoints)]
+            cls = "individual" if s.status != "ok" else ("interference_block" if blockers else "interference_search")
+            res.fail_class[pid] = cls
+            res.fail_detail[pid] = {"class": cls, "seq_status": routes[pid].status, "solo_status": s.status,
+                                    "blockers": blockers}
     res.routes = routes
     res.total_sec = time.perf_counter() - t0
     return res

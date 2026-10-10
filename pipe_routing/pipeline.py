@@ -11,13 +11,14 @@ import argparse
 import json
 import math
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
 import jsonschema
 
 from .constants import FITTINGS, PIPE_SPECS
-from .multi import astar_router, independent_planner, sequential_ripup_planner
+from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
 from .verifier import MODULE_ORDER, PipeRoute, verify
 
@@ -91,6 +92,7 @@ def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
             "real_weight": real_weight(p, r.waypoints, J) if J else None,
             "fail_causes": fail_causes(r.status, v),
             "fail_class": plan.fail_class.get(p.id),
+            "fail_detail": plan.fail_detail.get(p.id),
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -108,7 +110,11 @@ def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
         "order": plan.order,
         "reroute_count": plan.ripups,          # §6.3 reroute_count (rip-up 횟수, 되돌린 것 포함)
         "reverted_count": plan.reverted,
-        "fail_class": {c: sum(1 for v in plan.fail_class.values() if v == c) for c in ("interference", "individual")},
+        "fail_class": {c: sum(1 for v in plan.fail_class.values() if v == c) for c in FAIL_CLASSES},
+        # timeout·unreachable 구분 유지: 개별 경로는 단독 결과, 간섭은 순차 배치 결과의 상태
+        "fail_class_status": dict(sorted(Counter(
+            f"{d['class']}:{d['solo_status'] if d['class'] == 'individual' else d['seq_status']}"
+            for d in plan.fail_detail.values()).items())),
         "timeout_count": sum(1 for x in routes if x["router"]["status"] == "timeout"),
         "graph_regen_sec_total": round(sum(a["graph_sec"] for t in plan.attempts.values() for a in t), 3),
         "routing_attempts": sum(len(t) for t in plan.attempts.values()),
@@ -185,7 +191,9 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           f"| 실중량 (성공 배관 / 경로 있는 배관, 보조 지표) | {g['real_weight_total']:,.2f} / {g['real_weight_total_routed']:,.2f} kg |",
           f"| 다중 배관 | {g.get('planner', '-')} · rip-up {g.get('reroute_count', 0)} (되돌림 {g.get('reverted_count', 0)}) · "
           f"timeout {g.get('timeout_count', 0)} · 라우팅 시도 {g.get('routing_attempts', '-')} · 그래프 재생성 합 {g.get('graph_regen_sec_total', 0):.1f} s |",
-          f"| 실패 분류 (D50⑥) | 간섭 {g.get('fail_class', {}).get('interference', 0)} · 개별 경로 {g.get('fail_class', {}).get('individual', 0)} |",
+          "| 실패 분류 (D51) | " + " · ".join(f"{FAIL_CLASS_KO[c]} {g.get('fail_class', {}).get(c, 0)}" for c in FAIL_CLASSES)
+          + (" (" + ", ".join(f"{k} {v}" for k, v in g.get("fail_class_status", {}).items()) + ")"
+             if g.get("fail_class_status") else "") + " |",
           f"| 실패 원인 | {', '.join(f'{k} {v}' for k, v in g['fail_causes'].items()) or '없음'} |",
           f"| 배관 간 이격 위반 쌍 | {g['pairwise_violation']} |",
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
@@ -197,7 +205,7 @@ def report_md(out: dict, scenario_path: str = "") -> str:
         J, m = x["J"] or {}, x["metrics"]
         fmt = lambda k: f"{J[k]:,.2f}" if J else "-"
         rw = x.get("real_weight") or {}
-        cls = {"interference": "간섭", "individual": "개별 경로"}.get(x.get("fail_class"), "-")
+        cls = FAIL_CLASS_KO.get(x.get("fail_class"), "-")
         rw_s = f"{rw['total']:,.2f}" if rw else "-"
         L.append(f"| {x['pipe_id']} | {x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
                  f"{x['router']['search_sec']:.2f} | {x['router']['graph_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "

@@ -49,18 +49,20 @@ class OrderTest(unittest.TestCase):
                      modules=["collision", "bend"])
         self.assertEqual([v.message for x in rep["pipes"].values() for v in x.violations], [])
 
-    def test_failure_classified_as_interference(self):
-        """최종 실패 배관이 단독으로는 성공 → "간섭" (D50⑥)."""
+    def test_failure_classified_as_interference_block(self):
+        """최종 실패 배관이 단독으로는 성공하고 단독 경로가 놓인 배관과 충돌 → "간섭-차단" (D51)."""
         res = sequential_ripup_planner(self.sc, max_ripups=0)
-        self.assertEqual(res.fail_class, {"SMALL": "interference"})
+        self.assertEqual(res.fail_class, {"SMALL": "interference_block"})
+        self.assertEqual(res.fail_detail["SMALL"]["blockers"], ["BIG"])
+        self.assertEqual(res.fail_detail["SMALL"]["seq_status"], "unreachable")
 
-    def test_ripup_cap(self):
-        """구멍 하나를 두고 자리를 바꿔도 성공 수는 그대로 — rip-up 은 최대 3회에서 멈춘다 (D50④)."""
+    def test_ripup_swap_reverted(self):
+        """구멍 하나를 두고 자리만 바꾸면 성공 수가 늘지 않는다 → 되돌리고, 같은 배관은 다시 시도하지 않는다 (D52)."""
         res = sequential_ripup_planner(self.sc)
-        self.assertEqual(res.ripups, 3)
-        self.assertEqual(res.reverted, 0)
-        self.assertEqual(sum(r.status == "ok" for r in res.routes.values()), 1)
-        self.assertEqual(len(res.fail_class), 1)
+        self.assertEqual(res.ripups, 1)
+        self.assertEqual(res.reverted, 1)
+        self.assertEqual(res.routes["BIG"].status, "ok")       # 되돌린 상태 = 원래 순서 결과
+        self.assertEqual(res.fail_class, {"SMALL": "interference_block"})
 
 
 class MockRouter:
@@ -118,7 +120,7 @@ class RipupTest(unittest.TestCase):
         self.assertEqual(res.ripups, 1)
         self.assertEqual(res.reverted, 1)
         self.assertEqual({k for k, r in res.routes.items() if r.status == "ok"}, {"A", "C"})
-        self.assertEqual(res.fail_class, {"B": "interference"})
+        self.assertEqual(res.fail_class, {"B": "interference_block"})
 
     def test_individual_failure_not_ripped(self):
         """단독으로도 실패하는 배관은 rip-up 하지 않고 "개별 경로"로 분류."""
@@ -127,6 +129,21 @@ class RipupTest(unittest.TestCase):
         res = sequential_ripup_planner(sc, router=router)
         self.assertEqual(res.ripups, 0)
         self.assertEqual(res.fail_class, {"B": "individual"})
+
+    def test_interference_search(self):
+        """단독 경로가 놓인 배관과 충돌하지 않는데 순차 배치에서 timeout → "간섭-탐색", rip-up 없음 (D51)."""
+        sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 30000)])
+        table = {"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(30000)}
+
+        def router(sc_, pipe, limit, placed=()):
+            if pipe.id == "B" and placed:
+                return RouteResult("B", "timeout", search_sec=limit)
+            return MockRouter(table)(sc_, pipe, limit, placed)
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.ripups, 0)
+        self.assertEqual(res.fail_class, {"B": "interference_search"})
+        self.assertEqual(res.fail_detail["B"], {"class": "interference_search", "seq_status": "timeout",
+                                                "solo_status": "ok", "blockers": []})
 
     def test_independent_planner(self):
         sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 20100)])
