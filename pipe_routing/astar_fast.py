@@ -514,18 +514,21 @@ if HAVE_NUMBA:
         T = 그래프 표, C = 상수, G = 엘보 호 거르기 표.
         H = 우선순위 큐 (f, 삽입 순번, g, 상태 id) 배열 — (f, 순번) 최소 힙. 순번이 유일하므로 꺼내는 순서는
             파이썬 heapq 와 같다
-        S = 상태 배열 (노드 평탄 인덱스, 방향, 직진 길이, 편향각 인덱스, g_best, 부모, 같은 (노드, 방향) 다음 상태)
-        K = 확정 목록 (run, bend, g, 다음) — (노드, 방향)별 연결 리스트, 머리는 closed_head
+        S = 상태 배열 (노드, 방향, 직진 길이, 편향각 인덱스, g_best, 부모, 같은 (노드, 방향) 다음 상태, 끝 꺾임 허용 마스크)
+        K = 확정 목록 (run, bend, g, 다음, 마스크) — (노드, 방향)별 연결 리스트, 머리는 closed_head
+        D60: 마스크 = 들어온 엣지의 끝에서 허용되는 꺾임 등급(0/45/90/135 → 비트 0~3). 엣지 emask[n, d] 의 비트
+             (시작 등급 i × 4 + 끝 등급 j) = 시작·끝을 그 엘보 접선만큼 깎았을 때 놓인 배관과 이격 통과 (엘보 호가
+             꺾임점을 깎아 지나가는 실제 형상). 지배 = run ≥ · bend ≤ · 마스크 ⊇ · g ≤
         open_head[(노드, 방향)] = 그 (노드, 방향)의 첫 상태 id — 파이썬 g_best 딕셔너리의 키 (노드, 방향, run, bend) 조회와 같다
         ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
-        (step, elen, scost, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
+        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
         hf, ht, hg, hid = H
-        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next = S
-        c_run, c_bend, c_g, c_next = K
+        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next, s_mask = S
+        c_run, c_bend, c_g, c_next, c_mask = K
         while True:
             # 배열 여유: 한 번 펼칠 때 상태·큐는 최대 18개, 확정 목록은 1개 늘어난다
             if ctr[4] + 18 > hf.shape[0] or ctr[6] + 18 > s_node.shape[0] or ctr[7] + 1 > c_run.shape[0]:
@@ -560,23 +563,23 @@ if HAVE_NUMBA:
                     continue
                 cflat = s_node[cur]
                 cd = s_dir[cur]
-                crun, cb = s_run[cur], s_bend[cur]
+                crun, cb, cm = s_run[cur], s_bend[cur], s_mask[cur]
                 ckey = cflat * 18 + cd
                 dom = False
                 h = closed_head[ckey]
                 while h >= 0:
-                    if c_run[h] >= crun and c_bend[h] <= cb and c_g[h] <= g + 1e-9:
+                    if c_run[h] >= crun and c_bend[h] <= cb and (c_mask[h] & cm) == cm and c_g[h] <= g + 1e-9:
                         dom = True
                         break
                     h = c_next[h]
                 if dom:
                     continue
                 m = ctr[7]
-                c_run[m], c_bend[m], c_g[m], c_next[m] = crun, cb, g, closed_head[ckey]
+                c_run[m], c_bend[m], c_g[m], c_next[m], c_mask[m] = crun, cb, g, closed_head[ckey], cm
                 closed_head[ckey] = m
                 ctr[7] = m + 1
                 ctr[0] += 1
-                if cflat == end_flat and cd == end_dir and crun >= goal_need_m[cb]:
+                if cflat == end_flat and cd == end_dir and crun >= goal_need_m[cb] and (cm & 1):
                     ctr[5] = cur
                     return 1
                 if ctr[0] % check_every == 0:
@@ -586,15 +589,20 @@ if HAVE_NUMBA:
             ctr[3] = -1
             cflat = s_node[cur]
             cd = s_dir[cur]
-            crun, cb = s_run[cur], s_bend[cur]
+            crun, cb, cm = s_run[cur], s_bend[cur], s_mask[cur]
             for d in range(18):
                 di = defl_idx[cd, d]
                 if di < 0:
                     continue
                 if di > 0 and crun < need_m[cb, di]:
                     continue
+                if not ((cm >> di) & 1):     # D60: 들어온 엣지가 이 꺾임(끝 접선 깎기)을 허용하는가
+                    continue
                 nflat = step[cflat, d]
                 if nflat < 0:
+                    continue
+                nm = (emask[cflat, d] >> (di * 4)) & 15
+                if nm == 0:
                     continue
                 if di > 0:
                     if not (clearance[cflat] >= thr[di] and pipe_margin[cflat] >= thr[di]):
@@ -623,7 +631,7 @@ if HAVE_NUMBA:
                 nkey = nflat * 18 + d
                 sid = open_head[nkey]
                 while sid >= 0:
-                    if s_run[sid] == run and s_bend[sid] == nb:
+                    if s_run[sid] == run and s_bend[sid] == nb and s_mask[sid] == nm:
                         break
                     sid = s_next[sid]
                 if sid >= 0 and not (ng + 1e-9 < s_g[sid]):
@@ -631,7 +639,7 @@ if HAVE_NUMBA:
                 dom = False
                 h = closed_head[nkey]
                 while h >= 0:
-                    if c_run[h] >= run and c_bend[h] <= nb and c_g[h] <= ng + 1e-9:
+                    if c_run[h] >= run and c_bend[h] <= nb and (c_mask[h] & nm) == nm and c_g[h] <= ng + 1e-9:
                         dom = True
                         break
                     h = c_next[h]
@@ -640,7 +648,7 @@ if HAVE_NUMBA:
                 if sid < 0:
                     sid = ctr[6]
                     ctr[6] = sid + 1
-                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid] = nflat, d, run, nb
+                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid], s_mask[sid] = nflat, d, run, nb, nm
                     s_next[sid] = open_head[nkey]
                     open_head[nkey] = sid
                 s_g[sid] = ng
@@ -685,7 +693,7 @@ def astar_route_generic(space, pipe, time_limit, h_start):
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
     P = space.pos
-    T = (space.step, space.elen, space.scost, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
+    T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node))
     _, C = _consts(space, pipe, goal)
     G = _arc_tables(space)
@@ -694,14 +702,14 @@ def astar_route_generic(space, pipe, time_limit, h_start):
     cap = 1 << 16
     H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
     S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
-         np.zeros(cap, np.int64), np.zeros(cap, np.int64))
-    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
+         np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap, np.int64))
+    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap, np.int64))
     N = len(P)
     open_head = np.full(N * 18, -1, dtype=np.int32)
     closed_head = np.full(N * 18, -1, dtype=np.int32)
     arc = Dict.empty(types.int64, types.int8)
     f0 = int(s0.node)
-    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0] = f0, s0.dir, s0.run, 0, 0.0, -1, -1
+    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0], S[7][0] = f0, s0.dir, s0.run, 0, 0.0, -1, -1, 15
     open_head[f0 * 18 + s0.dir] = 0
     H[0][0], H[1][0], H[2][0], H[3][0] = h_start, 0, 0.0, 0
     ctr = np.array([0, 0, 1, -1, 1, -1, 1, 0], dtype=np.int64)
@@ -722,7 +730,7 @@ def astar_route_generic(space, pipe, time_limit, h_start):
         chain = []
         i = int(ctr[5])
         while i >= 0:
-            chain.append(State(int(S[0][i]), int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])]))
+            chain.append(State(int(S[0][i]), int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])], int(S[7][i])))
             i = int(S[5][i])
         chain.reverse()
         return "ok", chain, int(ctr[0]), int(ctr[1])

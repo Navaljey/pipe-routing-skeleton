@@ -109,8 +109,8 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
     expanded = generated = 0
 
     def dominated(s: State, g: float) -> bool:
-        for run, bend, gc in closed.get((s.node, s.dir), ()):
-            if run >= s.run and bend <= s.bend and gc <= g + 1e-9:
+        for run, bend, ends, gc in closed.get((s.node, s.dir), ()):
+            if run >= s.run and bend <= s.bend and (ends & s.ends) == s.ends and gc <= g + 1e-9:
                 return True
         return False
 
@@ -120,7 +120,7 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
             continue   # 낡은 큐 항목
         if dominated(s, g):
             continue
-        closed.setdefault((s.node, s.dir), []).append((s.run, s.bend, g))
+        closed.setdefault((s.node, s.dir), []).append((s.run, s.bend, s.ends, g))
         expanded += 1
         if space.is_goal(s, pipe):
             return _finish(space, pipe, s, parent, expanded, generated, time.perf_counter() - t0)
