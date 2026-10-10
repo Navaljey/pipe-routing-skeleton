@@ -232,12 +232,18 @@ def main(argv=None) -> int:
     ap.add_argument("--no-viz", action="store_true", help="HTML 리포트(경로·위반 3D) 생략")
     ap.add_argument("--planner", choices=("sequential", "independent"), default="sequential",
                     help="다중 배관 슬롯: sequential = 순서 + rip-up (D50), independent = 배관 단독 (6단계 비교용)")
+    ap.add_argument("--router", choices=("astar", "layered-a", "layered-b"), default="astar",
+                    help="라우터 슬롯: astar = S0 기본 (escape graph + A*), layered-a/b = M18 대안 표현 실험 (layered.py)")
     args = ap.parse_args(argv)
+    router = astar_router
+    if args.router != "astar":
+        from .layered import layered_router_a, layered_router_b
+        router = layered_router_a if args.router == "layered-a" else layered_router_b
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:
         sc = load(path)
-        out = run(sc, time_limit=args.time_limit,
+        out = run(sc, router=router, time_limit=args.time_limit,
                   planner=sequential_ripup_planner if args.planner == "sequential" else independent_planner)
         validate_output(out)
         stem = Path(path).stem

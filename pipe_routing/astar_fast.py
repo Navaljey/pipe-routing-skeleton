@@ -383,31 +383,7 @@ def _tables(space, pipe):
          np.asarray(space.axes[0], dtype=np.float64), np.asarray(space.axes[1], dtype=np.float64),
          np.asarray(space.axes[2], dtype=np.float64), hdist, clearance, pipe_margin,
          np.array(space.end_node, dtype=np.int64))
-    # 상수
-    defl_idx = np.full((18, 18), -1, dtype=np.int64)
-    for i in range(18):
-        for j in range(18):
-            if DEFLECTION[i][j] in ALLOWED_DEFLECTIONS:
-                defl_idx[i, j] = ANG.index(DEFLECTION[i][j])
-    need_m = np.zeros((4, 4))
-    for bi, b in enumerate(ANG):
-        for di, dfl in enumerate(ANG):
-            if dfl:
-                need_m[bi, di] = space.turn_need(State(space.start_node, 0, 0.0, b), dfl) - EPS
-    run_cap = np.array([space.run_cap[a] for a in ANG], dtype=np.float64)
-    goal_need_m = np.zeros(4)
-    for bi, b in enumerate(ANG):
-        need = space.tangent[b]
-        if b and space.end_boundary:
-            need += space.r
-        goal_need_m[bi] = need - EPS
-    thr = np.array([space.r + space.tangent[a] + EPS for a in ANG])
-    ekg = np.array([elbow_kg(pipe.nominal_size, a) for a in ANG])
-    kgpm = space.kg_per_m
-    kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
-    e45 = FITTINGS[pipe.nominal_size].elbow45
-    C = (defl_idx, np.array(DIRS, dtype=np.int64), need_m, run_cap, goal_need_m, thr, ekg, float(kgpm), float(kgmm),
-         float(e45), int(DIR_INDEX[tuple(pipe.end.dir)]), int(CHECK_EVERY), goal[0], goal[1], goal[2])
+    _, C = _consts(space, pipe, goal)
     return T, C
 
 
@@ -440,6 +416,35 @@ def _arc_tables(space):
         pg = (np.zeros((0, 3)), np.zeros((0, 3)), np.zeros(0), np.zeros(0))
     return (tpl_lo, tpl_hi, tpl_sag, np.ascontiguousarray(space.box_lo), np.ascontiguousarray(space.box_hi),
             float(space.r)) + pg
+
+
+def _consts(space, pipe, goal):
+    """탐색 상수 (편향각·직관 길이 문턱·비용 계수). 두 구현이 같이 쓴다."""
+    defl_idx = np.full((18, 18), -1, dtype=np.int64)
+    for i in range(18):
+        for j in range(18):
+            if DEFLECTION[i][j] in ALLOWED_DEFLECTIONS:
+                defl_idx[i, j] = ANG.index(DEFLECTION[i][j])
+    need_m = np.zeros((4, 4))
+    for bi, b in enumerate(ANG):
+        for di, dfl in enumerate(ANG):
+            if dfl:
+                need_m[bi, di] = space.turn_need(State(space.start_node, 0, 0.0, b), dfl) - EPS
+    run_cap = np.array([space.run_cap[a] for a in ANG], dtype=np.float64)
+    goal_need_m = np.zeros(4)
+    for bi, b in enumerate(ANG):
+        need = space.tangent[b]
+        if b and space.end_boundary:
+            need += space.r
+        goal_need_m[bi] = need - EPS
+    thr = np.array([space.r + space.tangent[a] + EPS for a in ANG])
+    ekg = np.array([elbow_kg(pipe.nominal_size, a) for a in ANG])
+    kgpm = space.kg_per_m
+    kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
+    e45 = FITTINGS[pipe.nominal_size].elbow45
+    C = (defl_idx, np.array(DIRS, dtype=np.int64), need_m, run_cap, goal_need_m, thr, ekg, float(kgpm), float(kgmm),
+         float(e45), int(DIR_INDEX[tuple(pipe.end.dir)]), int(CHECK_EVERY), goal[0], goal[1], goal[2])
+    return None, C
 
 
 def astar_route_fast(space, pipe, time_limit, h_start):
@@ -489,6 +494,193 @@ def astar_route_fast(space, pipe, time_limit, h_start):
         i = int(ctr[5])
         while i >= 0:
             chain.append(State(tuple(int(v) for v in sn[i]), int(sd[i]), float(srun[i]), ANG[sbend[i]]))
+            i = int(spar[i])
+        chain.reverse()
+        return "ok", chain, int(ctr[0]), int(ctr[1])
+
+
+# ---------------------------------------------------------------- 범용 그래프(이웃 표) 탐색 — M18 대안 표현 실험용
+#
+# 노드 = 정수 id, step[n, d] = 방향 d 로 가는 다음 노드 (−1 = 없음), elen[n, d] = 그 엣지 길이.
+# 상태·비용·휴리스틱·지배 가지치기·엘보 규칙은 위 구현과 같다. (대안 표현은 기본 경로와 비트 일치를 요구하지 않는다)
+
+if HAVE_NUMBA:
+    @njit(cache=True)
+    def _search_generic(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head, cl_run,
+                        cl_bend, cl_g, cl_next, arc):
+        (step, elen, px, py, pz, hdist, clearance, pipe_margin, end_id) = T
+        (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
+         goal_x, goal_y, goal_z) = C
+        while True:
+            if ctr[3] >= 0:
+                cur = ctr[3]
+                g = fctr[0]
+            else:
+                if len(heap) == 0:
+                    return 0
+                item = _heappop(heap)
+                g = item[2]
+                cur = item[3]
+                if g > sg[cur] + 1e-9:
+                    continue
+                cn, cd = sn[cur], sd[cur]
+                crun, cb = srun[cur], sbend[cur]
+                ckey = cn * 18 + cd
+                dom = False
+                h = closed_head[ckey] if ckey in closed_head else np.int64(-1)
+                while h >= 0:
+                    if cl_run[h] >= crun and cl_bend[h] <= cb and cl_g[h] <= g + 1e-9:
+                        dom = True
+                        break
+                    h = cl_next[h]
+                if dom:
+                    continue
+                cl_run.append(crun)
+                cl_bend.append(cb)
+                cl_g.append(g)
+                cl_next.append(closed_head[ckey] if ckey in closed_head else np.int64(-1))
+                closed_head[ckey] = len(cl_run) - 1
+                ctr[0] += 1
+                if cn == end_id and cd == end_dir and crun >= goal_need_m[cb]:
+                    ctr[5] = cur
+                    return 1
+                if ctr[0] % check_every == 0:
+                    ctr[3] = cur
+                    fctr[0] = g
+                    return 3
+            ctr[3] = -1
+            cn, cd = sn[cur], sd[cur]
+            crun, cb = srun[cur], sbend[cur]
+            for d in range(18):
+                di = defl_idx[cd, d]
+                if di < 0:
+                    continue
+                if di > 0 and crun < need_m[cb, di]:
+                    continue
+                nn = step[cn, d]
+                if nn < 0:
+                    continue
+                if di > 0:
+                    if not (clearance[cn] >= thr[di] and pipe_margin[cn] >= thr[di]):
+                        k = (cn * 18 + cd) * 18 + d
+                        if k in arc:
+                            ok_arc = arc[k]
+                        else:
+                            ok_arc = _arc_prefilter(G, cd, d, px[cn], py[cn], pz[cn])
+                            if ok_arc < 0:
+                                with numba.objmode(res="int64"):
+                                    res = _arc_callback_generic(k)
+                                ok_arc = res
+                            arc[k] = np.int8(ok_arc)
+                        if ok_arc == 0:
+                            continue
+                length = elen[cn, d]
+                if di > 0:
+                    run = length
+                    nb = di
+                else:
+                    run = crun + length
+                    nb = cb
+                cap = run_cap[nb]
+                run = _round6(run if run <= cap else cap)
+                ng = g + (length / 1000 * kgpm + ekg[di])
+                key2 = (np.int64(nn * 18 + d), np.int64(nb), run, np.int64(0))
+                sid = gbest[key2] if key2 in gbest else np.int64(-1)
+                if sid >= 0 and not (ng + 1e-9 < sg[sid]):
+                    continue
+                ckey2 = key2[0]
+                dom = False
+                h = closed_head[ckey2] if ckey2 in closed_head else np.int64(-1)
+                while h >= 0:
+                    if cl_run[h] >= run and cl_bend[h] <= nb and cl_g[h] <= ng + 1e-9:
+                        dom = True
+                        break
+                    h = cl_next[h]
+                if dom:
+                    continue
+                if sid < 0:
+                    sid = len(sn)
+                    sn.append(nn)
+                    sd.append(d)
+                    srun.append(run)
+                    sbend.append(nb)
+                    sg.append(ng)
+                    spar.append(cur)
+                    gbest[key2] = sid
+                else:
+                    sg[sid] = ng
+                    spar[sid] = cur
+                dist = hdist[nn]
+                if d != end_dir:
+                    bends = 1
+                elif dist == 0:
+                    bends = 0
+                else:
+                    v0, v1, v2 = goal_x - px[nn], goal_y - py[nn], goal_z - pz[nn]
+                    e0, e1, e2 = dir_vec[d, 0], dir_vec[d, 1], dir_vec[d, 2]
+                    tt = (0 + v0 * e0 + v1 * e1 + v2 * e2) / (e0 * e0 + e1 * e1 + e2 * e2)
+                    on_ray = tt > 0 and abs(v0 - tt * e0) < 1e-6 and abs(v1 - tt * e1) < 1e-6 \
+                        and abs(v2 - tt * e2) < 1e-6
+                    bends = 0 if on_ray else 2
+                f = ng + (dist * kgmm + bends * e45)
+                _heappush(heap, (f, ctr[2], ng, sid))
+                ctr[2] += 1
+                ctr[1] += 1
+
+
+def _arc_callback_generic(k):
+    space = _CURRENT["space"]
+    return 1 if space.elbow_clear(k // 324, (k // 18) % 18, k % 18) else 0
+
+
+def astar_route_generic(space, pipe, time_limit, h_start):
+    """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태."""
+    t0 = time.perf_counter()
+    goal = tuple(map(float, pipe.end.pos))
+    P = space.pos
+    T = (space.step, space.elen, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
+         np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node))
+    _, C = _consts(space, pipe, goal)
+    G = _arc_tables(space)
+    _CURRENT.update(space=space)
+    s0 = space.start_state(pipe)
+    heap = List.empty_list(types.Tuple((types.float64, types.int64, types.float64, types.int64)))
+    sn = List.empty_list(types.int64)
+    sd = List.empty_list(types.int64)
+    srun = List.empty_list(types.float64)
+    sbend = List.empty_list(types.int64)
+    sg = List.empty_list(types.float64)
+    spar = List.empty_list(types.int64)
+    gbest = Dict.empty(_key_t, types.int64)
+    closed_head = Dict.empty(types.int64, types.int64)
+    cl_run = List.empty_list(types.float64)
+    cl_bend = List.empty_list(types.int64)
+    cl_g = List.empty_list(types.float64)
+    cl_next = List.empty_list(types.int64)
+    arc = Dict.empty(types.int64, types.int8)
+    sn.append(int(s0.node))
+    sd.append(s0.dir)
+    srun.append(s0.run)
+    sbend.append(0)
+    sg.append(0.0)
+    spar.append(-1)
+    gbest[(int(s0.node) * 18 + s0.dir, 0, float(s0.run), 0)] = 0
+    heap.append((h_start, 0, 0.0, 0))
+    ctr = np.array([0, 0, 1, -1, 0, -1], dtype=np.int64)
+    fctr = np.zeros(1)
+    while True:
+        code = _search_generic(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head,
+                               cl_run, cl_bend, cl_g, cl_next, arc)
+        if code == _CHECK_TIME:
+            if time.perf_counter() - t0 > time_limit:
+                return "timeout", None, int(ctr[0]), int(ctr[1])
+            continue
+        if code == _EMPTY:
+            return "unreachable", None, int(ctr[0]), int(ctr[1])
+        chain = []
+        i = int(ctr[5])
+        while i >= 0:
+            chain.append(State(int(sn[i]), int(sd[i]), float(srun[i]), ANG[sbend[i]]))
             i = int(spar[i])
         chain.reverse()
         return "ok", chain, int(ctr[0]), int(ctr[1])

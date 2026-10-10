@@ -79,12 +79,15 @@ def planar_segment_box_distance(p0: np.ndarray, p1: np.ndarray, lo, hi, const_ax
 class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
-    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True):
+    def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True,
+                 extra_terminals=(), pipe_grid_lines: bool = True):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
         기하는 검증기와 같은 함수(build_centerline, segment_segment_distance)를 쓴다.
         fast_build=False 는 가속(M10) 전 구성 방식 — 그래프 동일성 시험용. 결과는 같다.
+        extra_terminals / pipe_grid_lines=False: M18 대안 표현 실험(layered.py) 전용 — 같은 구경 배관들의 단자를 한 그래프에
+        넣어 고정 레이어로 공유하고, 놓인 배관이 격자선을 만들지 않게 한다. 기본값은 기존 동작 그대로.
         """
         t0 = time.perf_counter()
         self.fast_build = fast_build
@@ -121,9 +124,9 @@ class EscapeGraph:
                 for v in (_snap_down(lo - self.r), _snap_up(hi + self.r)):
                     if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
                         coords[ax].add(v)
-            for t in (pipe.start, pipe.end):
+            for t in (pipe.start, pipe.end, *extra_terminals):
                 coords[ax].add(float(t.pos[ax]))
-            for lo, hi, ro in self.pipe_segments:   # 놓인 배관의 꺾임점 사이 구간 AABB 를 r + r_other 만큼 팽창한 면 (D38 과 같은 방식)
+            for lo, hi, ro in (self.pipe_segments if pipe_grid_lines else ()):   # 놓인 배관의 꺾임점 사이 구간 AABB 를 r + r_other 만큼 팽창한 면 (D38 과 같은 방식)
                 for v in (_snap_down(lo[ax] - self.r - ro), _snap_up(hi[ax] + self.r + ro)):
                     if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
                         coords[ax].add(v)
@@ -134,7 +137,7 @@ class EscapeGraph:
 
         self.start_node = self.node_of(pipe.start.pos)
         self.end_node = self.node_of(pipe.end.pos)
-        self.terminal_nodes = {self.start_node, self.end_node}
+        self.terminal_nodes = {self.start_node, self.end_node} | {self.node_of(t.pos) for t in extra_terminals}
 
         # 2) 노드
         X, Y, Z = np.meshgrid(*self.axes, indexing="ij")
