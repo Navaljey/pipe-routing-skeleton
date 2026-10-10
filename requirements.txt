@@ -1,3 +1,4 @@
 jsonschema>=4.18
 plotly>=5.24
 numpy>=1.26
+numba>=0.60   # M10 가속 (선택: 없으면 파이썬 A* 로 같은 결과)

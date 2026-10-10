@@ -37,7 +37,9 @@ class PipelineTest(unittest.TestCase):
         """직관 + 엘보 = A* 비용 J (D49: 같은 정의)."""
         from pipe_routing.escape_graph import EscapeGraph
         from pipe_routing.router_astar import astar_route
-        for p, x in zip(self.sc.pipes, self.out["routes"]):
+        from pipe_routing.multi import independent_planner
+        out = run(self.sc, planner=independent_planner)   # 배관 단독 경로 = 단독 A* 와 같은 경로
+        for p, x in zip(self.sc.pipes, out["routes"]):
             r = astar_route(EscapeGraph(self.sc, p), p)
             self.assertAlmostEqual(x["J"]["pipe"] + x["J"]["elbow"], r.J, places=2)
 
@@ -50,7 +52,7 @@ class PipelineTest(unittest.TestCase):
 
     def test_router_failure_reported(self):
         """라우터 실패도 출력에 원인과 함께 남는다 (D34, D40②)."""
-        def failing(sc, pipe, limit):
+        def failing(sc, pipe, limit, placed=()):
             return RouteResult(pipe.id, "timeout", expanded=10, search_sec=60.0)
         out = run(self.sc, router=failing)
         validate_output(out)

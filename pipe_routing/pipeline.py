@@ -2,35 +2,27 @@
 
     python -m pipe_routing.pipeline <scenario.json>... [-o out/run] [--time-limit 60]
 
-라우터 슬롯 (§4.1, D3): router(scenario, pipe, time_limit) → RouteResult 호환 객체
-(status, waypoints, J, expanded, search_sec, graph_sec). 기본값은 S0 A* (escape graph). V3 는 같은 형태의 함수를 넘기면 된다.
+라우터 슬롯 (§4.1, D3): router(scenario, pipe, time_limit, placed) → RouteResult 호환 객체
+(status, waypoints, J, expanded, search_sec, graph_sec). placed = 이미 놓인 배관 [(Pipe, waypoints)] (D50②).
+다중 배관 슬롯 (D50⑧): planner(scenario, router, time_limit) → multi.PlanResult. 기본값은 순서 + rip-up (D50),
+6단계 방식(배관 단독)은 multi.independent_planner. V3 는 같은 형태의 함수를 넘기면 된다.
 """
 import argparse
 import json
 import math
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
 import jsonschema
 
 from .constants import FITTINGS, PIPE_SPECS
+from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
 from .verifier import MODULE_ORDER, PipeRoute, verify
 
 OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_output.schema.json"
-
-
-# ---------------------------------------------------------------- 라우터 슬롯
-
-def astar_router(sc: Scenario, pipe: Pipe, time_limit: float):
-    """S0 기본 라우터: 배관마다 escape graph 를 만들고(D11) A* (D40·D41)."""
-    from .escape_graph import EscapeGraph
-    from .router_astar import astar_route
-    g = EscapeGraph(sc, pipe)
-    r = astar_route(g, pipe, time_limit)
-    r.graph_sec = g.build_sec
-    return r
 
 
 # ---------------------------------------------------------------- J (§5, D49)
@@ -58,20 +50,35 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list) -> dict:
     return {k: round(v, 4) for k, v in J.items()}
 
 
+def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
+    """D49 보완 — 보조 지표 실중량: 직관 = (꺾임점 사이 길이 − 엘보마다 접선 2t) × kg/m + 엘보·티·밸브·서포트.
+    J 계산과 최적화에는 쓰지 않는다."""
+    from .constants import ANGLE_TOL_DEG, elbow_radius
+    from .verifier.geom import build_centerline
+    cl = build_centerline(waypoints, elbow_radius(pipe.nominal_size), ANGLE_TOL_DEG)
+    straight = polyline_length_mm(waypoints) - sum(2 * b.tangent for b in cl.bends if math.isfinite(b.tangent))
+    out = {"pipe": straight / 1000 * PIPE_SPECS[pipe.nominal_size].kg_per_m,
+           "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"]}
+    out["total"] = sum(out.values())
+    return {k: round(v, 4) for k, v in out.items()}
+
+
 # ---------------------------------------------------------------- 실행
 
-def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0) -> dict:
+def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
+        planner: Callable = sequential_ripup_planner) -> dict:
     """시나리오 1개 실행 → §7.2 출력 dict."""
     t0 = time.perf_counter()
-    results = {}
-    for p in sc.pipes:
-        results[p.id] = router(sc, p, time_limit)
+    plan = planner(sc, router, time_limit)
+    results = plan.routes
     route_sec = time.perf_counter() - t0
     rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else []) for pid, r in results.items()])
 
     routes = []
     for p in sc.pipes:
         r, v = results[p.id], rep["pipes"][p.id]
+        J = j_breakdown(p, r.waypoints, v.fittings, v.supports) if v.routed else None
+        tries = plan.attempts.get(p.id, [])
         entry = {
             "pipe_id": p.id,
             "type_id": p.type_id,
@@ -81,18 +88,39 @@ def run(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0)
             "fittings": v.fittings,
             "supports": v.supports,
             "layer0": {m: v.layer0.get(m) for m in MODULE_ORDER} if v.routed else {},
-            "J": j_breakdown(p, r.waypoints, v.fittings, v.supports) if v.routed else None,
+            "J": J,
+            "real_weight": real_weight(p, r.waypoints, J) if J else None,
             "fail_causes": fail_causes(r.status, v),
+            "fail_class": plan.fail_class.get(p.id),
+            "fail_detail": plan.fail_detail.get(p.id),
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
             "router": {"status": r.status, "expanded": r.expanded, "search_sec": round(r.search_sec, 3),
-                       "graph_sec": round(getattr(r, "graph_sec", 0.0), 3)},
+                       "graph_sec": round(getattr(r, "graph_sec", 0.0), 3),
+                       "attempts": len(tries),
+                       "graph_sec_total": round(sum(a["graph_sec"] for a in tries), 3),
+                       "search_sec_total": round(sum(a["search_sec"] for a in tries), 3)},
         }
         routes.append(entry)
     total_sec = time.perf_counter() - t0
-    return {"scenario": sc.meta.get("name", ""), "routes": routes,
-            "global": global_summary(routes, total_sec, route_sec, rep["sec"])}
+    g = global_summary(routes, total_sec, route_sec, rep["sec"])
+    g.update({
+        "planner": plan.planner,
+        "order": plan.order,
+        "reroute_count": plan.ripups,          # §6.3 reroute_count (rip-up 횟수, 되돌린 것 포함)
+        "reverted_count": plan.reverted,
+        "fail_class": {c: sum(1 for v in plan.fail_class.values() if v == c) for c in FAIL_CLASSES},
+        # timeout·unreachable 구분 유지: 개별 경로는 단독 결과, 간섭은 순차 배치 결과의 상태
+        "fail_class_status": dict(sorted(Counter(
+            f"{d['class']}:{d['solo_status'] if d['class'] == 'individual' else d['seq_status']}"
+            for d in plan.fail_detail.values()).items())),
+        "timeout_count": sum(1 for x in routes if x["router"]["status"] == "timeout"),
+        "graph_regen_sec_total": round(sum(a["graph_sec"] for t in plan.attempts.values() for a in t), 3),
+        "routing_attempts": sum(len(t) for t in plan.attempts.values()),
+        "planner_events": plan.events,
+    })
+    return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
 
 
 def fail_causes(router_status: str, v) -> list:
@@ -133,6 +161,8 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
         "J_total": jsum(ok, "total"),                                                 # §6.3 성공 배관 합
         "J_breakdown_success": {k: jsum(ok, k) for k in ("pipe", "elbow", "tee", "valve", "support")},
         "J_total_routed": jsum(routed, "total"),
+        "real_weight_total": round(sum(x["real_weight"]["total"] for x in ok), 4),          # D49 보완, 성공 배관 합
+        "real_weight_total_routed": round(sum(x["real_weight"]["total"] for x in routed), 4),
         "fail_causes": dict(sorted(causes.items())),
         "pairwise_violation": pairwise // 2,                                          # 배관 쌍마다 양쪽에 기록됨
         "computation_time_sec": round(total_sec, 3),
@@ -158,20 +188,29 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           f"| J_total (성공 배관 합) | {g['J_total']:,.2f} kg |",
           "| J 분해 (성공 배관) | " + " · ".join(f"{k} {v:,.2f}" for k, v in g["J_breakdown_success"].items()) + " |",
           f"| J (경로 있는 배관 전체) | {g['J_total_routed']:,.2f} kg |",
+          f"| 실중량 (성공 배관 / 경로 있는 배관, 보조 지표) | {g['real_weight_total']:,.2f} / {g['real_weight_total_routed']:,.2f} kg |",
+          f"| 다중 배관 | {g.get('planner', '-')} · rip-up {g.get('reroute_count', 0)} (되돌림 {g.get('reverted_count', 0)}) · "
+          f"timeout {g.get('timeout_count', 0)} · 라우팅 시도 {g.get('routing_attempts', '-')} · 그래프 재생성 합 {g.get('graph_regen_sec_total', 0):.1f} s |",
+          "| 실패 분류 (D51) | " + " · ".join(f"{FAIL_CLASS_KO[c]} {g.get('fail_class', {}).get(c, 0)}" for c in FAIL_CLASSES)
+          + (" (" + ", ".join(f"{k} {v}" for k, v in g.get("fail_class_status", {}).items()) + ")"
+             if g.get("fail_class_status") else "") + " |",
           f"| 실패 원인 | {', '.join(f'{k} {v}' for k, v in g['fail_causes'].items()) or '없음'} |",
           f"| 배관 간 이격 위반 쌍 | {g['pairwise_violation']} |",
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
     L += ["## 배관별", "",
-          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 판정 | 실패 원인 | J total | 직관 | 엘보 | 서포트 | 길이 m | 엘보 90/45 | 서포트 수 |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | 실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for x in out["routes"]:
         J, m = x["J"] or {}, x["metrics"]
         fmt = lambda k: f"{J[k]:,.2f}" if J else "-"
+        rw = x.get("real_weight") or {}
+        cls = FAIL_CLASS_KO.get(x.get("fail_class"), "-")
+        rw_s = f"{rw['total']:,.2f}" if rw else "-"
         L.append(f"| {x['pipe_id']} | {x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
-                 f"{x['router']['search_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "
-                 f"{', '.join(x['fail_causes']) or '-'} | {fmt('total')} | {fmt('pipe')} | {fmt('elbow')} | "
-                 f"{fmt('support')} | {m.get('length_m', '-')} | "
+                 f"{x['router']['search_sec']:.2f} | {x['router']['graph_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "
+                 f"{', '.join(x['fail_causes']) or '-'} | {cls} | {fmt('total')} | {fmt('pipe')} | {fmt('elbow')} | "
+                 f"{fmt('support')} | {rw_s} | {m.get('length_m', '-')} | "
                  f"{m.get('n_elbow_90', '-')}/{m.get('n_elbow_45', '-')} | {m.get('n_supports', '-')} |")
     L += ["", "## 위반 상세", ""]
     any_v = False
@@ -191,12 +230,21 @@ def main(argv=None) -> int:
     ap.add_argument("-o", "--out", default="out/run")
     ap.add_argument("--time-limit", type=float, default=60.0)
     ap.add_argument("--no-viz", action="store_true", help="HTML 리포트(경로·위반 3D) 생략")
+    ap.add_argument("--planner", choices=("sequential", "independent"), default="sequential",
+                    help="다중 배관 슬롯: sequential = 순서 + rip-up (D50), independent = 배관 단독 (6단계 비교용)")
+    ap.add_argument("--router", choices=("astar", "layered-a", "layered-b"), default="astar",
+                    help="라우터 슬롯: astar = S0 기본 (escape graph + A*), layered-a/b = M18 대안 표현 실험 (layered.py)")
     args = ap.parse_args(argv)
+    router = astar_router
+    if args.router != "astar":
+        from .layered import layered_router_a, layered_router_b
+        router = layered_router_a if args.router == "layered-a" else layered_router_b
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:
         sc = load(path)
-        out = run(sc, time_limit=args.time_limit)
+        out = run(sc, router=router, time_limit=args.time_limit,
+                  planner=sequential_ripup_planner if args.planner == "sequential" else independent_planner)
         validate_output(out)
         stem = Path(path).stem
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

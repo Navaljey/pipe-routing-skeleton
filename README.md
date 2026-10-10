@@ -86,3 +86,16 @@ python -m pipe_routing.pipeline scenarios/manual/manual_01.json -o out/run
 ```
 
 라우터 슬롯: `pipeline.run(scenario, router=...)` — `router(scenario, pipe, time_limit)` 가 `RouteResult` 호환 객체를 돌려주면 된다 (D49).
+
+## 7단계 — 다중 배관 (D50~D54)
+
+```
+python -m pipe_routing.pipeline scenarios/procedural/proc_000.json -o out/run              # 순차 + rip-up (기본)
+python -m pipe_routing.pipeline scenarios/procedural/proc_000.json -o out/run --planner independent
+python -m pipe_routing.pipeline scenarios/procedural/proc_000.json -o out/run --router layered-a   # M18 대안 표현 실험
+python -m pipe_routing.scaling scenarios/procedural/proc_000.json --runs out/run --json out/scaling.jsonl
+```
+
+다중 배관 슬롯: `planner(scenario, router, time_limit)` → `PlanResult`, 라우터 슬롯은 `router(scenario, pipe, time_limit, placed)`.
+실패 3분류 (D51): 간섭-차단 / 간섭-탐색 / 개별 경로. rip-up 은 성공 수가 늘 때만 유지 (D52).
+A* 는 numba 가 있으면 컴파일 구현을 쓴다 (D53, 파이썬 구현과 경로·J·확장 수가 같다). 없으면 파이썬 구현.
