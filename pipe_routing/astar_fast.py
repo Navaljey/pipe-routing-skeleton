@@ -21,7 +21,7 @@ import numpy as np
 try:
     import numba
     from numba import njit, types
-    from numba.typed import Dict, List
+    from numba.typed import Dict
     HAVE_NUMBA = True
 except ImportError:   # numba 가 없으면 파이썬 구현을 쓴다 (결과는 같다)
     HAVE_NUMBA = False
@@ -37,8 +37,6 @@ ANG = (0, 45, 90, 135)       # 편향각 인덱스
 _FOUND, _EMPTY, _CHECK_TIME = 1, 0, 3
 
 if HAVE_NUMBA:
-    _key_t = types.Tuple((types.int64, types.int64, types.float64, types.int64))
-
     @njit(cache=True)
     def _round6(x):
         """파이썬 round(x, 6) 과 같은 값 (x ≥ 0, 유한, x·1e6 < 2^52).
@@ -332,45 +330,6 @@ if HAVE_NUMBA:
             o2 = tb
         return True, o0, o1, o2
 
-    @njit(cache=True, inline="always")
-    def _less(a, b):
-        return a[0] < b[0] or (a[0] == b[0] and a[1] < b[1])
-
-    @njit(cache=True)
-    def _heappush(heap, item):
-        heap.append(item)
-        pos = len(heap) - 1
-        while pos > 0:
-            parent = (pos - 1) >> 1
-            if _less(item, heap[parent]):
-                heap[pos] = heap[parent]
-                pos = parent
-            else:
-                break
-        heap[pos] = item
-
-    @njit(cache=True)
-    def _heappop(heap):
-        last = heap.pop()
-        if len(heap) == 0:
-            return last
-        top = heap[0]
-        n = len(heap)
-        pos = 0
-        while True:
-            c = 2 * pos + 1
-            if c >= n:
-                break
-            if c + 1 < n and _less(heap[c + 1], heap[c]):
-                c += 1
-            if _less(heap[c], last):
-                heap[pos] = heap[c]
-                pos = c
-            else:
-                break
-        heap[pos] = last
-        return top
-
 
 # ---------------------------------------------------------------- 파이썬 쪽: 표 만들기 · 재개 루프
 
@@ -404,7 +363,7 @@ def _tables(space, pipe):
         a, b, c = diag_axes[d]
         to_a, to_b = space.diag_to.get(d, (np.zeros((0, 0), int), None))
         ia, ib = np.nonzero(to_a >= 0)
-        A, B = space.axes[a], space.axes[b]
+        A = space.axes[a]
         for t in np.unique(np.abs(A[to_a[ia, ib]] - A[ia])) if len(ia) else ():
             t = float(t)
             p = [0.0, 0.0, 0.0]
@@ -549,42 +508,75 @@ def astar_route_fast(space, pipe, time_limit, h_start):
 
 if HAVE_NUMBA:
     @njit(cache=True)
-    def _search_generic(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head, cl_run,
-                        cl_bend, cl_g, cl_next, arc):
-        (step, elen, px, py, pz, hdist, clearance, pipe_margin, end_id) = T
+    def _search_generic(T, C, G, ctr, fctr, H, S, K, open_head, closed_head, arc):
+        """이웃 표 그래프용 A* 본체 (_search 와 같은 구조, 노드 = 정수 id). 탐색 상태는 호출 사이에 유지된다 (배열 + ctr/fctr). 반환: 코드.
+
+        T = 그래프 표, C = 상수, G = 엘보 호 거르기 표.
+        H = 우선순위 큐 (f, 삽입 순번, g, 상태 id) 배열 — (f, 순번) 최소 힙. 순번이 유일하므로 꺼내는 순서는
+            파이썬 heapq 와 같다
+        S = 상태 배열 (노드 평탄 인덱스, 방향, 직진 길이, 편향각 인덱스, g_best, 부모, 같은 (노드, 방향) 다음 상태)
+        K = 확정 목록 (run, bend, g, 다음) — (노드, 방향)별 연결 리스트, 머리는 closed_head
+        open_head[(노드, 방향)] = 그 (노드, 방향)의 첫 상태 id — 파이썬 g_best 딕셔너리의 키 (노드, 방향, run, bend) 조회와 같다
+        ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
+        fctr: [pending_g]
+        """
+        (step, elen, px, py, pz, hdist, clearance, pipe_margin, end_flat) = T
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
+        hf, ht, hg, hid = H
+        s_node, s_dir, s_run, s_bend, s_g, s_par, s_next = S
+        c_run, c_bend, c_g, c_next = K
         while True:
+            # 배열 여유: 한 번 펼칠 때 상태·큐는 최대 18개, 확정 목록은 1개 늘어난다
+            if ctr[4] + 18 > hf.shape[0] or ctr[6] + 18 > s_node.shape[0] or ctr[7] + 1 > c_run.shape[0]:
+                return 4
             if ctr[3] >= 0:
                 cur = ctr[3]
                 g = fctr[0]
             else:
-                if len(heap) == 0:
+                if ctr[4] == 0:
                     return 0
-                item = _heappop(heap)
-                g = item[2]
-                cur = item[3]
-                if g > sg[cur] + 1e-9:
+                # pop (f, 순번) 최소
+                g = hg[0]
+                cur = hid[0]
+                n = ctr[4] - 1
+                ctr[4] = n
+                if n > 0:
+                    lf, lt, lg, li = hf[n], ht[n], hg[n], hid[n]
+                    pos = 0
+                    while True:
+                        c = 2 * pos + 1
+                        if c >= n:
+                            break
+                        if c + 1 < n and (hf[c + 1] < hf[c] or (hf[c + 1] == hf[c] and ht[c + 1] < ht[c])):
+                            c += 1
+                        if hf[c] < lf or (hf[c] == lf and ht[c] < lt):
+                            hf[pos], ht[pos], hg[pos], hid[pos] = hf[c], ht[c], hg[c], hid[c]
+                            pos = c
+                        else:
+                            break
+                    hf[pos], ht[pos], hg[pos], hid[pos] = lf, lt, lg, li
+                if g > s_g[cur] + 1e-9:
                     continue
-                cn, cd = sn[cur], sd[cur]
-                crun, cb = srun[cur], sbend[cur]
-                ckey = cn * 18 + cd
+                cflat = s_node[cur]
+                cd = s_dir[cur]
+                crun, cb = s_run[cur], s_bend[cur]
+                ckey = cflat * 18 + cd
                 dom = False
-                h = closed_head[ckey] if ckey in closed_head else np.int64(-1)
+                h = closed_head[ckey]
                 while h >= 0:
-                    if cl_run[h] >= crun and cl_bend[h] <= cb and cl_g[h] <= g + 1e-9:
+                    if c_run[h] >= crun and c_bend[h] <= cb and c_g[h] <= g + 1e-9:
                         dom = True
                         break
-                    h = cl_next[h]
+                    h = c_next[h]
                 if dom:
                     continue
-                cl_run.append(crun)
-                cl_bend.append(cb)
-                cl_g.append(g)
-                cl_next.append(closed_head[ckey] if ckey in closed_head else np.int64(-1))
-                closed_head[ckey] = len(cl_run) - 1
+                m = ctr[7]
+                c_run[m], c_bend[m], c_g[m], c_next[m] = crun, cb, g, closed_head[ckey]
+                closed_head[ckey] = m
+                ctr[7] = m + 1
                 ctr[0] += 1
-                if cn == end_id and cd == end_dir and crun >= goal_need_m[cb]:
+                if cflat == end_flat and cd == end_dir and crun >= goal_need_m[cb]:
                     ctr[5] = cur
                     return 1
                 if ctr[0] % check_every == 0:
@@ -592,32 +584,33 @@ if HAVE_NUMBA:
                     fctr[0] = g
                     return 3
             ctr[3] = -1
-            cn, cd = sn[cur], sd[cur]
-            crun, cb = srun[cur], sbend[cur]
+            cflat = s_node[cur]
+            cd = s_dir[cur]
+            crun, cb = s_run[cur], s_bend[cur]
             for d in range(18):
                 di = defl_idx[cd, d]
                 if di < 0:
                     continue
                 if di > 0 and crun < need_m[cb, di]:
                     continue
-                nn = step[cn, d]
-                if nn < 0:
+                nflat = step[cflat, d]
+                if nflat < 0:
                     continue
                 if di > 0:
-                    if not (clearance[cn] >= thr[di] and pipe_margin[cn] >= thr[di]):
-                        k = (cn * 18 + cd) * 18 + d
+                    if not (clearance[cflat] >= thr[di] and pipe_margin[cflat] >= thr[di]):
+                        k = (cflat * 18 + cd) * 18 + d
                         if k in arc:
                             ok_arc = arc[k]
                         else:
-                            ok_arc = _arc_prefilter(G, cd, d, px[cn], py[cn], pz[cn])
-                            if ok_arc < 0:
+                            ok_arc = _arc_prefilter(G, cd, d, px[cflat], py[cflat], pz[cflat])
+                            if ok_arc < 0:   # 정밀 판정 필요 → 그래프의 elbow_clear (파이썬) 를 그대로 부른다
                                 with numba.objmode(res="int64"):
                                     res = _arc_callback_generic(k)
                                 ok_arc = res
                             arc[k] = np.int8(ok_arc)
                         if ok_arc == 0:
                             continue
-                length = elen[cn, d]
+                length = elen[cflat, d]
                 if di > 0:
                     run = length
                     nb = di
@@ -627,46 +620,57 @@ if HAVE_NUMBA:
                 cap = run_cap[nb]
                 run = _round6(run if run <= cap else cap)
                 ng = g + (length / 1000 * kgpm + ekg[di])
-                key2 = (np.int64(nn * 18 + d), np.int64(nb), run, np.int64(0))
-                sid = gbest[key2] if key2 in gbest else np.int64(-1)
-                if sid >= 0 and not (ng + 1e-9 < sg[sid]):
+                nkey = nflat * 18 + d
+                sid = open_head[nkey]
+                while sid >= 0:
+                    if s_run[sid] == run and s_bend[sid] == nb:
+                        break
+                    sid = s_next[sid]
+                if sid >= 0 and not (ng + 1e-9 < s_g[sid]):
                     continue
-                ckey2 = key2[0]
                 dom = False
-                h = closed_head[ckey2] if ckey2 in closed_head else np.int64(-1)
+                h = closed_head[nkey]
                 while h >= 0:
-                    if cl_run[h] >= run and cl_bend[h] <= nb and cl_g[h] <= ng + 1e-9:
+                    if c_run[h] >= run and c_bend[h] <= nb and c_g[h] <= ng + 1e-9:
                         dom = True
                         break
-                    h = cl_next[h]
+                    h = c_next[h]
                 if dom:
                     continue
                 if sid < 0:
-                    sid = len(sn)
-                    sn.append(nn)
-                    sd.append(d)
-                    srun.append(run)
-                    sbend.append(nb)
-                    sg.append(ng)
-                    spar.append(cur)
-                    gbest[key2] = sid
-                else:
-                    sg[sid] = ng
-                    spar[sid] = cur
-                dist = hdist[nn]
+                    sid = ctr[6]
+                    ctr[6] = sid + 1
+                    s_node[sid], s_dir[sid], s_run[sid], s_bend[sid] = nflat, d, run, nb
+                    s_next[sid] = open_head[nkey]
+                    open_head[nkey] = sid
+                s_g[sid] = ng
+                s_par[sid] = cur
+                # 휴리스틱 (router_astar.heuristic_factory 와 같은 식)
+                dist = hdist[nflat]
                 if d != end_dir:
                     bends = 1
                 elif dist == 0:
                     bends = 0
                 else:
-                    v0, v1, v2 = goal_x - px[nn], goal_y - py[nn], goal_z - pz[nn]
+                    v0, v1, v2 = goal_x - px[nflat], goal_y - py[nflat], goal_z - pz[nflat]
                     e0, e1, e2 = dir_vec[d, 0], dir_vec[d, 1], dir_vec[d, 2]
                     tt = (0 + v0 * e0 + v1 * e1 + v2 * e2) / (e0 * e0 + e1 * e1 + e2 * e2)
                     on_ray = tt > 0 and abs(v0 - tt * e0) < 1e-6 and abs(v1 - tt * e1) < 1e-6 \
                         and abs(v2 - tt * e2) < 1e-6
                     bends = 0 if on_ray else 2
                 f = ng + (dist * kgmm + bends * e45)
-                _heappush(heap, (f, ctr[2], ng, sid))
+                # push
+                pos = ctr[4]
+                ctr[4] = pos + 1
+                tie = ctr[2]
+                while pos > 0:
+                    par = (pos - 1) >> 1
+                    if f < hf[par] or (f == hf[par] and tie < ht[par]):
+                        hf[pos], ht[pos], hg[pos], hid[pos] = hf[par], ht[par], hg[par], hid[par]
+                        pos = par
+                    else:
+                        break
+                hf[pos], ht[pos], hg[pos], hid[pos] = f, tie, ng, sid
                 ctr[2] += 1
                 ctr[1] += 1
 
@@ -687,33 +691,28 @@ def astar_route_generic(space, pipe, time_limit, h_start):
     G = _arc_tables(space)
     _CURRENT.update(space=space)
     s0 = space.start_state(pipe)
-    heap = List.empty_list(types.Tuple((types.float64, types.int64, types.float64, types.int64)))
-    sn = List.empty_list(types.int64)
-    sd = List.empty_list(types.int64)
-    srun = List.empty_list(types.float64)
-    sbend = List.empty_list(types.int64)
-    sg = List.empty_list(types.float64)
-    spar = List.empty_list(types.int64)
-    gbest = Dict.empty(_key_t, types.int64)
-    closed_head = Dict.empty(types.int64, types.int64)
-    cl_run = List.empty_list(types.float64)
-    cl_bend = List.empty_list(types.int64)
-    cl_g = List.empty_list(types.float64)
-    cl_next = List.empty_list(types.int64)
+    cap = 1 << 16
+    H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
+    S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
+         np.zeros(cap, np.int64), np.zeros(cap, np.int64))
+    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
+    N = len(P)
+    open_head = np.full(N * 18, -1, dtype=np.int32)
+    closed_head = np.full(N * 18, -1, dtype=np.int32)
     arc = Dict.empty(types.int64, types.int8)
-    sn.append(int(s0.node))
-    sd.append(s0.dir)
-    srun.append(s0.run)
-    sbend.append(0)
-    sg.append(0.0)
-    spar.append(-1)
-    gbest[(int(s0.node) * 18 + s0.dir, 0, float(s0.run), 0)] = 0
-    heap.append((h_start, 0, 0.0, 0))
-    ctr = np.array([0, 0, 1, -1, 0, -1], dtype=np.int64)
+    f0 = int(s0.node)
+    S[0][0], S[1][0], S[2][0], S[3][0], S[4][0], S[5][0], S[6][0] = f0, s0.dir, s0.run, 0, 0.0, -1, -1
+    open_head[f0 * 18 + s0.dir] = 0
+    H[0][0], H[1][0], H[2][0], H[3][0] = h_start, 0, 0.0, 0
+    ctr = np.array([0, 0, 1, -1, 1, -1, 1, 0], dtype=np.int64)
     fctr = np.zeros(1)
     while True:
-        code = _search_generic(T, C, G, ctr, fctr, heap, sn, sd, srun, sbend, sg, spar, gbest, closed_head,
-                               cl_run, cl_bend, cl_g, cl_next, arc)
+        code = _search_generic(T, C, G, ctr, fctr, H, S, K, open_head, closed_head, arc)
+        if code == 4:
+            H = _grow(H, ctr[4] + 18)
+            S = _grow(S, ctr[6] + 18)
+            K = _grow(K, ctr[7] + 1)
+            continue
         if code == _CHECK_TIME:
             if time.perf_counter() - t0 > time_limit:
                 return "timeout", None, int(ctr[0]), int(ctr[1])
@@ -723,7 +722,7 @@ def astar_route_generic(space, pipe, time_limit, h_start):
         chain = []
         i = int(ctr[5])
         while i >= 0:
-            chain.append(State(int(sn[i]), int(sd[i]), float(srun[i]), ANG[sbend[i]]))
-            i = int(spar[i])
+            chain.append(State(int(S[0][i]), int(S[1][i]), float(S[2][i]), ANG[int(S[3][i])]))
+            i = int(S[5][i])
         chain.reverse()
         return "ok", chain, int(ctr[0]), int(ctr[1])

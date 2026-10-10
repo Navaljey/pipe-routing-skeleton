@@ -23,7 +23,7 @@ import numpy as np
 from .constants import PIPE_SPECS, elbow_kg, elbow_tangent
 from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
-from .space import AXIS_DIRS, DIR_INDEX, DIRS
+from .space import DIRS
 
 _FIXED: dict = {}   # (id(scenario), 구경) → (scenario, 고정 레이어 EscapeGraph)
 
