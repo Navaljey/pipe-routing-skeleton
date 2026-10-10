@@ -147,23 +147,24 @@ def bend(ctx: Context, pr: PipeRoute):
 
 @register("gravity_slope")
 def gravity_slope(ctx: Context, pr: PipeRoute):
-    """중력관만: start→end(D20) 모든 구간 하향, 수평 성분이 있으면 낙차/수평거리 ≥ min_slope (§3.5)."""
+    """중력관만: 계단식 하향 규칙 (D61, §3.5) — 상향 이동 금지, 마지막 하향 이후 수평 누적 ≤ L_max (D62).
+
+    라우터와 같은 판정 함수 (`pipe_routing.gravity.check_waypoints`, D63). 구간 = 꺾임점 사이.
+    """
+    from ..gravity import check_waypoints, gravity_lmax
     pipe = ctx.pipes[pr.pipe_id]
     if not pipe.gravity_pipe:
         return None
     P = ctx.centerlines[pipe.id][0].points
+    lmax = gravity_lmax(pipe.nominal_size)
     out = []
-    for i in range(len(P) - 1):
-        d = P[i + 1] - P[i]
-        h = math.hypot(d[0], d[1])
-        drop = -d[2]
+    for i, kind, val in check_waypoints([list(map(float, q)) for q in P], lmax):
         mid = _pt((P[i] + P[i + 1]) / 2)
-        if h > EPS:
-            if drop < pipe.min_slope * h - 1e-9:
-                out.append(Violation("gravity_slope", pipe.id, mid,
-                                     f"구배 {drop / h:+.4f} < 최소 {pipe.min_slope:g} (구간 {i})", drop / h))
-        elif drop <= 0:
-            out.append(Violation("gravity_slope", pipe.id, mid, f"수직 상향 구간 (구간 {i})", drop))
+        if kind == "up":
+            out.append(Violation("gravity_slope", pipe.id, mid, f"상향 구간 (구간 {i}, dz {val:+.0f} mm)", val))
+        else:
+            out.append(Violation("gravity_slope", pipe.id, mid,
+                                 f"하향 없이 수평 누적 {val / 1000:.2f} m > L_max {lmax / 1000:.2f} m (구간 {i})", val))
     return out
 
 

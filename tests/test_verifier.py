@@ -164,15 +164,52 @@ class VerifierFixtureTest(unittest.TestCase):
         self.assertTrue(any("엘보 ↔ 장애물" in v.message for v in rep.violations))
 
     # -------- gravity_slope
-    def test_gravity_pass_and_fail(self):
+    def test_gravity_steps_pass(self):
+        """D61 계단식 하향: 수평 구간 구배 0, 단마다 수직 하향 (100A L_max 10 m)."""
+        p = pipe(type_id="T5", start=[0, 5000, 3000], end=[40000, 5000, 1400])
+        route = [[0, 5000, 3000], [9000, 5000, 3000], [9000, 5000, 2600], [18000, 5000, 2600], [18000, 5000, 2200],
+                 [27000, 5000, 2200], [27000, 5000, 1800], [36000, 5000, 1800], [36000, 5000, 1400], [40000, 5000, 1400]]
+        self.assertLayer0(run([p], [("P", route)]), gravity_slope=True, boundary=True, bend=True)
+
+    def test_gravity_lmax_boundary(self):
+        """L_max 직전(= 10.00 m)은 통과, 직후(10.01 m)는 위반."""
+        p = pipe(type_id="T5", start=[0, 5000, 2000], end=[40000, 5000, 800])
+        tail = [[20000, 5000, 1600], [20000, 5000, 1200], [30000, 5000, 1200], [30000, 5000, 800], [40000, 5000, 800]]
+        ok = [[0, 5000, 2000], [10000, 5000, 2000], [10000, 5000, 1600]] + tail
+        self.assertLayer0(run([p], [("P", ok)]), gravity_slope=True)
+        over = [[0, 5000, 2000], [10010, 5000, 2000], [10010, 5000, 1600]] + tail
+        rep = run([p], [("P", over)])
+        self.assertLayer0(rep, gravity_slope=False)
+        self.assertTrue(any("L_max" in v.message for v in rep.violations if v.module == "gravity_slope"))
+
+    def test_gravity_accumulates_through_horizontal_bends(self):
+        """수평면 안의 꺾임을 지나도 누적: 6 m + 5 m = 11 m > 10 m (구간 각각은 10 m 미만)."""
+        p = pipe(type_id="T5", start=[0, 5000, 2000], end=[40000, 10000, 1600], edir=(1, 0, 0))
+        route = [[0, 5000, 2000], [6000, 5000, 2000], [6000, 10000, 2000], [6000, 10000, 1600], [40000, 10000, 1600]]
+        rep = run([p], [("P", route)])
+        msgs = [v.message for v in rep.violations if v.module == "gravity_slope"]
+        self.assertTrue(any("수평 누적 11.00 m" in m for m in msgs), msgs)
+
+    def test_gravity_45_and_90_steps(self):
+        """45° 하향 단과 90° 하향 단 모두 하향 이동 — 누적을 0 으로."""
+        p = pipe(type_id="T5", start=[0, 5000, 3000], end=[40000, 5000, 1000])
+        route = [[0, 5000, 3000], [9000, 5000, 3000], [9800, 5000, 2200], [18000, 5000, 2200], [18000, 5000, 1700],
+                 [27000, 5000, 1700], [27000, 5000, 1300], [36000, 5000, 1300], [36000, 5000, 1000], [40000, 5000, 1000]]
+        self.assertLayer0(run([p], [("P", route)]), gravity_slope=True)
+
+    def test_gravity_up_rejected(self):
         p = pipe(type_id="T5", start=[0, 5000, 2000], end=[40000, 5000, 1600])
-        ok = run([p], [("P", [[0, 5000, 2000], [40000, 5000, 1600]])])
-        self.assertLayer0(ok, gravity_slope=True, boundary=True)
-        flat = run([p], [("P", [[0, 5000, 2000], [20000, 5000, 2000], [20000, 5000, 1600], [40000, 5000, 1600]])])
-        self.assertLayer0(flat, gravity_slope=False)
-        up = run([p], [("P", [[0, 5000, 2000], [10000, 5000, 1900], [10000, 5000, 2500], [20000, 5000, 2400],
-                              [20000, 5000, 1700], [40000, 5000, 1500], [40000, 5000, 1600]])])
-        self.assertLayer0(up, gravity_slope=False)
+        up = [[0, 5000, 2000], [10000, 5000, 2000], [10000, 5000, 2500], [20000, 5000, 2500], [20000, 5000, 1600],
+              [40000, 5000, 1600]]
+        rep = run([p], [("P", up)])
+        self.assertLayer0(rep, gravity_slope=False)
+        self.assertTrue(any("상향" in v.message for v in rep.violations if v.module == "gravity_slope"))
+
+    def test_gravity_gentle_slope_counts_as_horizontal(self):
+        """완만한 하향(45° 미만)은 하향 이동이 아니다 — 40 m 를 1/100 구배로 내려가도 L_max 위반 (규칙 변경, D61)."""
+        p = pipe(type_id="T5", start=[0, 5000, 2000], end=[40000, 5000, 1600])
+        rep = run([p], [("P", [[0, 5000, 2000], [40000, 5000, 1600]])])
+        self.assertLayer0(rep, gravity_slope=False)
 
     def test_gravity_not_applicable_to_pressure(self):
         self.assertLayer0(run([pipe()], [("P", STRAIGHT)]), gravity_slope=None)

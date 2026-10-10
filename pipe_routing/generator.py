@@ -37,6 +37,7 @@ class GeneratorConfig:
     deck_ratio: float = 0.5                      # 경계 단자 중 데크 관통 비율 (D35, 나머지 측면 격벽)
     min_terminal_dist_mm: int = 5000             # start–end 맨해튼 거리 하한 (v3 min_path_cells 대응)
     max_tries: int = 500                         # 배관 1개 단자 샘플링 시도 횟수
+    stair_rule: bool = False                     # D64: 중력관 낙차 ≥ 계단식 하향 규칙(D61) 하한 — 새 세트에만
 
 
 def _snap(v: float) -> int:
@@ -144,6 +145,10 @@ def gen_pipe(rng: random.Random, cfg: GeneratorConfig, idx: int, block: Block,
             continue
         if gravity and s.pos[2] - e.pos[2] < slope * sum(abs(a - b) for a, b in zip(s.pos[:2], e.pos[:2])):
             continue  # 수평 맨해튼 거리 기준으로 여유 있게 (D31)
+        if gravity and cfg.stair_rule:
+            from .gravity import feasibility
+            if not feasibility(pipe)["feasible"]:
+                continue   # D64: 새 규칙의 낙차 하한 (상향 단자 포함 배제)
         if _clashes(pipe, placed):
             continue
         return pipe
@@ -190,11 +195,14 @@ def main(argv=None) -> int:
     ap.add_argument("--n-pipes", type=int, default=GeneratorConfig.n_pipes)
     ap.add_argument("--fill", type=float, default=GeneratorConfig.obstacle_fill)
     ap.add_argument("--prefix", default="proc", help="시나리오 이름 앞부분 (밀집 세트 등, D58)")
+    ap.add_argument("--stair-rule", action="store_true",
+                    help="중력관 낙차를 계단식 하향 규칙(D61) 하한 이상으로 보장 (D64, 새 세트용)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
-        cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill)
+        cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
+                              stair_rule=args.stair_rule)
         name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")

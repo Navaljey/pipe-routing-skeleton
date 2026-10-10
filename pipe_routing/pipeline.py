@@ -18,6 +18,7 @@ from typing import Callable
 import jsonschema
 
 from .constants import FITTINGS, PIPE_SPECS
+from .gravity import feasibility
 from .layered import layered_router_a, make_layered_router
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
@@ -94,6 +95,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_causes": fail_causes(r.status, v),
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
+            "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -123,8 +125,24 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "routing_attempts": sum(len(t) for t in plan.attempts.values()),
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
+        "gravity": _gravity_summary(routes),   # D64
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+
+
+def _gravity_summary(routes: list) -> dict:
+    """D64: 중력관 통과율을 전체 / 규칙상 가능한 배관 기준으로, 규칙상 불가능 건수는 구경별로."""
+    g = [x for x in routes if x.get("gravity_feasibility")]
+    feas = [x for x in g if x["gravity_feasibility"]["feasible"]]
+    infeas = {}
+    for x in g:
+        if not x["gravity_feasibility"]["feasible"]:
+            infeas[x["nominal_size"]] = infeas.get(x["nominal_size"], 0) + 1
+    return {"total": len(g), "feasible": len(feas), "infeasible_by_size": dict(sorted(infeas.items())),
+            "pass": sum(1 for x in g if x["success"]), "pass_feasible": sum(1 for x in feas if x["success"]),
+            "routed_feasible": sum(1 for x in feas if x["waypoints"]),
+            "gravity_violation_routed_feasible": sum(1 for x in feas if x["waypoints"]
+                                                     and x["layer0"].get("gravity_slope") is False)}
 
 
 def _peak_rss_mb():
@@ -218,6 +236,10 @@ def report_md(out: dict, scenario_path: str = "") -> str:
              if g.get("fail_class_status") else "") + " |",
           f"| 실패 원인 | {', '.join(f'{k} {v}' for k, v in g['fail_causes'].items()) or '없음'} |",
           f"| 배관 간 이격 위반 쌍 | {g['pairwise_violation']} |",
+          (f"| 중력관 (D61·D64) | {g['gravity']['total']}개 중 규칙상 가능 {g['gravity']['feasible']} · 통과 {g['gravity']['pass']} "
+           f"(가능한 것 중 {g['gravity']['pass_feasible']}, 경로 {g['gravity']['routed_feasible']}, 구배 위반 "
+           f"{g['gravity']['gravity_violation_routed_feasible']}) · 규칙상 불가능 {g['gravity']['infeasible_by_size'] or '없음'} |"
+           if g.get("gravity") else "| 중력관 | - |"),
           "| 라우터 추정 서포트 / 검증기 서포트 (D57) | "
           + (f"{g['support_estimate']['est_total']:,.2f} / {g['support_estimate']['verifier_total']:,.2f} kg, "
              f"배관별 상대 오차 중앙 {g['support_estimate']['rel_median']} · 최대 |{g['support_estimate']['rel_max_abs']}| · "

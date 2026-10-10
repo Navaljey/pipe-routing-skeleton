@@ -23,15 +23,22 @@ class PipelineTest(unittest.TestCase):
         self.assertEqual(len(self.out["routes"]), len(self.sc.pipes))
 
     def test_every_pipe_has_layer0_and_J(self):
-        """§9-2: 모든 배관에 Layer 0 판정과 J 분해, 실패 배관은 원인과 함께."""
+        """§9-2: 경로 있는 배관은 Layer 0 7모듈 판정과 J 분해, 실패 배관은 원인과 함께."""
         for x in self.out["routes"]:
+            self.assertEqual(x["success"], not x["fail_causes"])
+            if not x["waypoints"]:
+                self.assertTrue(x["fail_causes"][0].startswith("router:"))
+                self.assertIsNone(x["J"])
+                continue
             self.assertEqual(set(x["layer0"]), {"collision", "boundary", "bend", "gravity_slope", "valve",
                                                 "branch", "support"})
             self.assertAlmostEqual(x["J"]["total"], sum(x["J"][k] for k in ("pipe", "elbow", "tee", "valve", "support")),
                                    places=3)
-            self.assertEqual(x["success"], not x["fail_causes"])
-        gravity = [x for x in self.out["routes"] if x["type_id"] == "T5"]
-        self.assertTrue(all("gravity_slope" in x["fail_causes"] for x in gravity))   # D27 기준선
+        # D61·D63: 라우터가 계단식 하향 규칙을 지키므로 경로가 있는 중력관은 구배 위반이 없다
+        gravity = [x for x in self.out["routes"] if x["type_id"] == "T5" and x["waypoints"]]
+        self.assertTrue(gravity)
+        self.assertTrue(all(x["layer0"]["gravity_slope"] is True for x in gravity))
+        self.assertTrue(all(x["gravity_feasibility"]["feasible"] for x in gravity))
 
     def test_J_matches_router_cost(self):
         """직관 + 엘보 = 라우터 비용의 직관 + 엘보 (D49: 같은 정의). 라우터 비용의 나머지는 추정 서포트 (D57)."""
@@ -40,6 +47,8 @@ class PipelineTest(unittest.TestCase):
         out = run(self.sc, planner=independent_planner)   # 배관 단독 경로 = 단독 라우팅과 같은 경로
         clear_cache()
         for p, x in zip(self.sc.pipes, out["routes"]):
+            if not x["waypoints"]:
+                continue
             r = _route(LayeredGraph(self.sc, p), p, 60)
             self.assertAlmostEqual(x["J"]["pipe"] + x["J"]["elbow"], r.J_pipe + r.J_elbow, places=2)
             self.assertAlmostEqual(r.J, r.J_pipe + r.J_elbow + r.J_support_est, places=6)
