@@ -16,6 +16,7 @@ import numpy as np
 from .constants import ANGLE_TOL_DEG, PIPE_SPECS, SNAP_MM, elbow_kg, elbow_radius, elbow_tangent
 from .geometry import Vec3
 from .scenario import Pipe, Scenario, boundary_face, load
+from .trim_kernel import blocked_intervals
 from .verifier.geom import build_centerline, elbow_arc_chords, segment_box_distance, segment_segment_distance
 from .space import ALLOWED_DEFLECTIONS, AXIS_DIRS, DEFLECTION, DIR_INDEX, DIRS, State
 
@@ -76,11 +77,20 @@ def planar_segment_box_distance(p0: np.ndarray, p1: np.ndarray, lo, hi, const_ax
     return np.hypot(d2, d3)
 
 
+def swap_mask(m: np.ndarray) -> np.ndarray:
+    """반대 방향 엣지 마스크 (시작·끝 꺾임 등급 맞바꿈, D60·D65)."""
+    out = np.zeros_like(m)
+    for i in range(4):
+        for j in range(4):
+            out |= ((m >> (i * 4 + j)) & 1) << (j * 4 + i)
+    return out
+
+
 class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
     def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True,
-                 extra_terminals=(), pipe_grid_lines: bool = True):
+                 extra_terminals=(), pipe_grid_lines: bool = True, corner_arc: bool = False, extra_coords=None):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
@@ -88,9 +98,14 @@ class EscapeGraph:
         fast_build=False 는 가속(M10) 전 구성 방식 — 그래프 동일성 시험용. 결과는 같다.
         extra_terminals / pipe_grid_lines=False: M18 대안 표현 실험(layered.py) 전용 — 같은 구경 배관들의 단자를 한 그래프에
         넣어 고정 레이어로 공유하고, 놓인 배관이 격자선을 만들지 않게 한다. 기본값은 기존 동작 그대로.
+        corner_arc (D65, 고정 레이어 전용): 꺾임점 노드는 장애물과 r 미만이어도 된다 — 엣지마다 16비트 마스크
+        (axis_mask·diag_mask, 시작 등급 i × 4 + 끝 등급 j: 양 끝을 그 엘보 접선만큼 깎은 직관이 장애물과 r 이상)로
+        판정하고 엘보 호는 D48 로 본다. 마스크를 읽는 LayeredGraph 만 탐색할 수 있다 (이 그래프의 neighbors 는 쓰지 않는다).
+        extra_coords: 축별 보조 격자 좌표 [x 목록, y 목록, z 목록] (D66 G1·G2). 영역 안 값만 쓴다.
         """
         t0 = time.perf_counter()
         self.fast_build = fast_build
+        self.corner_arc = corner_arc
         self.pipe = pipe
         self.r = pipe.radius
         self.L = pipe.min_straight
@@ -126,6 +141,9 @@ class EscapeGraph:
                         coords[ax].add(v)
             for t in (pipe.start, pipe.end, *extra_terminals):
                 coords[ax].add(float(t.pos[ax]))
+            for v in (extra_coords[ax] if extra_coords else ()):   # D66 보조 격자선
+                if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
+                    coords[ax].add(float(v))
             for lo, hi, ro in (self.pipe_segments if pipe_grid_lines else ()):   # 놓인 배관의 꺾임점 사이 구간 AABB 를 r + r_other 만큼 팽창한 면 (D38 과 같은 방식)
                 for v in (_snap_down(lo[ax] - self.r - ro), _snap_up(hi[ax] + self.r + ro)):
                     if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
@@ -145,7 +163,9 @@ class EscapeGraph:
         self.in_domain = np.all((pts >= self.dom_lo - EPS) & (pts <= self.dom_hi + EPS), 1).reshape(self.shape)
         self.clearance = self._grid_clearance(pts).reshape(self.shape)   # 격자점 ↔ 장애물 최소거리 (D48 거르기용)
         clear = self.clearance >= self.r - EPS
-        self.node_ok = self.in_domain & clear
+        # D65: 꺾임점은 r 미만이어도 된다. 다만 장애물과 r − t₁₃₅ 미만인 점은 엘보 호·깎은 직관(꺾임점에서 t 이내)이
+        # 모두 r 안이라 어떤 경우에도 못 쓴다 (필요조건으로 거름 — 결과 같음)
+        self.node_ok = self.in_domain & ((self.clearance >= self.r - self.tangent[135] - EPS) if corner_arc else clear)
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
             self.node_ok[n] = clear[n]
         # 놓인 배관까지 여유 (거리 − slack − r_other). 엘보 빠른 통과 판정용으로 r + t_135 범위까지 계산
@@ -155,12 +175,14 @@ class EscapeGraph:
             self.node_ok &= self.pipe_margin >= self.r - EPS
 
         # 3) 축 방향 엣지: axis_ok[ax][idx] = idx → idx+e_ax 엣지 사용 가능
+        self.axis_mask = [None, None, None]   # D65 (corner_arc): 엣지 꺾임 등급 마스크, 그 밖은 None = 모두 허용
         self.axis_ok = [self._axis_edges(ax) for ax in range(3)]
         if self.pipe_groups:
             for ax in range(3):
                 self._pipe_block_axis(ax)
         # 4) 45° 엣지 (D38): diag_ok[d][idx], diag_to[d] = (평면 첫 축 목표 인덱스, 둘째 축 목표 인덱스) 표
         self.diag_ok: dict[int, np.ndarray] = {}
+        self.diag_mask: dict[int, np.ndarray] = {}   # D65 (corner_arc)
         self.diag_to: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         for d in range(6, len(DIRS)):
             if not allow_45:
@@ -393,6 +415,19 @@ class EscapeGraph:
             best = np.minimum(best, np.sqrt((g * g).sum(-1)))
         edge = np.moveaxis(best >= self.r - EPS, ax, 0) & both
         np.moveaxis(ok, ax, 0)[:-1] = edge
+        if self.corner_arc:   # D65: 전부 r 이상은 아니지만 양 끝을 깎으면 통과할 수 있는 엣지
+            mask = np.where(ok, 0xFFFF, 0).astype(np.uint16)   # 16비트 — 고정 레이어 메모리 절약
+            part = np.zeros(self.shape, dtype=bool)
+            np.moveaxis(part, ax, 0)[:-1] = np.moveaxis(best < self.r - EPS, ax, 0) & both
+            idx = np.nonzero(part)
+            if len(idx[0]):
+                P0 = np.stack([self.axes[k][idx[k]] for k in range(3)], -1)
+                nxt = list(idx)
+                nxt[ax] = idx[ax] + 1
+                P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
+                mask[idx] = self.obstacle_trim_mask(P0, P1)
+            self.axis_mask[ax] = mask
+            ok = mask != 0
         return ok
 
     def _diag_edges(self, d: int) -> None:
@@ -443,10 +478,69 @@ class EscapeGraph:
             p0 = np.stack([self.axes[k][src[k]] for k in range(3)], -1)[valid]
             p1 = np.stack([self.axes[k][dst[k]] for k in range(3)], -1)[valid]
             free = self._segments_clear(p0, p1, c)
+            if self.corner_arc:   # D65
+                m = np.where(free, 0xFFFF, 0).astype(np.int64)
+                part = np.nonzero(~free)[0]
+                if len(part):
+                    m[part] = self.obstacle_trim_mask(p0[part], p1[part])
+                mk = np.zeros(self.shape, dtype=np.uint16)
+                rmk = np.zeros(self.shape, dtype=np.uint16)
+                mk[tuple(s[valid] for s in src)] = m
+                rmk[tuple(s[valid] for s in dst)] = swap_mask(m)
+                self.diag_mask[d], self.diag_mask[rev] = mk, rmk
+                free = m != 0
             ok[tuple(s[valid] for s in src)] = free
             rev_ok[tuple(s[valid] for s in dst)] = free
+        elif self.corner_arc:
+            self.diag_mask[d] = np.zeros(self.shape, dtype=np.uint16)
+            self.diag_mask[rev] = np.zeros(self.shape, dtype=np.uint16)
         self.diag_ok[d] = ok
         self.diag_ok[rev] = rev_ok
+
+    def obstacle_trim_mask(self, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+        """D65: 엣지마다 16비트 마스크 — 비트 (i × 4 + j) = 시작을 꺾임 등급 i, 끝을 등급 j 의 엘보 접선만큼 깎은
+        직관이 모든 장애물과 r 이상 (D60 _pipes_mask 와 같은 규칙, 장애물 버전). 등급 0/45/90/135.
+
+        엣지 위 점 p(s) 와 박스 사이 거리는 s 에 대해 볼록 → 박스마다 막힌 구간은 하나 [b0, b1].
+        최소점은 황금분할, 구간 끝은 이분 탐색 (점–박스 거리는 정확 식, trim_kernel). 깎기가 엣지보다 길면 엣지 길이까지만
+        (보수적).
+        """
+        n = len(P0)
+        mask = np.full(n, 0xFFFF, dtype=np.int64)
+        if not n or not len(self.box_lo):
+            return mask
+        D = P1 - P0
+        L = np.linalg.norm(D, axis=1)
+        U = D / np.where(L > 0, L, 1)[:, None]
+        slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
+        E, LO, HI = [], [], []
+        for lo, hi in zip(self.box_lo, self.box_hi):
+            near = np.nonzero(np.all((slo < hi + self.r) & (shi > lo - self.r), 1))[0]
+            if len(near):
+                E.append(near)
+                LO.append(np.broadcast_to(lo, (len(near), 3)))
+                HI.append(np.broadcast_to(hi, (len(near), 3)))
+        if not E:
+            return mask
+        e = np.concatenate(E)
+        blo, bhi = np.concatenate(LO), np.concatenate(HI)
+        hit, b0, b1 = blocked_intervals(np.ascontiguousarray(P0[e]), np.ascontiguousarray(U[e]),
+                                        np.ascontiguousarray(L[e]), np.ascontiguousarray(blo),
+                                        np.ascontiguousarray(bhi), float(self.r), EPS)
+        if not np.any(hit):
+            return mask
+        e, b0, b1 = e[hit], b0[hit], b1[hit]
+        Le = L[e]
+        tr = np.array([0.0, self.tangent[45], self.tangent[90], self.tangent[135]])
+        ok = np.zeros(len(e), dtype=np.int64)
+        for i in range(4):
+            ts = np.minimum(tr[i], Le)
+            for j in range(4):
+                te = np.minimum(tr[j], Le)
+                good = (b1 <= ts + 1e-6) | (b0 >= Le - te - 1e-6)
+                ok |= good.astype(np.int64) << (i * 4 + j)
+        np.bitwise_and.at(mask, e, ok)
+        return mask
 
     def _segments_clear(self, p0: np.ndarray, p1: np.ndarray, const_axis: int) -> np.ndarray:
         """선분들이 모든 장애물과 유효 반경 이상 떨어져 있는가. 바운딩박스로 후보를 거른 뒤 정확 판정."""
@@ -568,6 +662,8 @@ class EscapeGraph:
 
     def neighbors(self, state: State, pipe: Pipe = None) -> Iterator[State]:
         """D45 ①②·D47: 꺾기 전 직관 ≥ turn_need. D48: 꺾을 때 엘보 호 ↔ 장애물 이격 ≥ r."""
+        if self.corner_arc:
+            raise NotImplementedError("corner_arc 그래프는 고정 레이어 전용 — LayeredGraph 로 탐색한다 (D65)")
         row = DEFLECTION[state.dir]
         for d in range(len(DIRS)):
             defl = row[d]

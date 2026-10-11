@@ -17,11 +17,12 @@
 """
 import math
 import time
+from dataclasses import dataclass
 
 import numpy as np
 
 from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent, support_kg
-from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up
+from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up, swap_mask
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
 from .gravity import gravity_lmax, move_kind
 from .gravity import step as gstep
@@ -30,17 +31,92 @@ from .space import DEFLECTION, DIRS
 ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
 from .verifier.geom import support_faces
 
-_FIXED: dict = {}   # (id(scenario), 구경) → (scenario, 고정 레이어 EscapeGraph)
+_FIXED: dict = {}   # (id(scenario), 구경, 중력관 층 여부, 격자 변형) → (scenario, 고정 레이어 EscapeGraph)
+
+G1_MAX_LEVELS = 20   # D66 G1 `추정:` 중력관 한 개당 높이 보조선 최대 개수
 
 
-def fixed_layer(sc, pipe):
-    """구경별 고정 레이어 (캐시). 반환: (그래프, 이번 호출에서 쓴 구성 시간)."""
-    key = (id(sc), pipe.nominal_size)
+@dataclass(frozen=True)
+class GridSpec:
+    """D66 고정층 격자 보강 변형. g1 = 중력관 전용 높이·수평 보조선, g2 = 전 배관 일정 간격 보조선 (mm, 0 = 없음)."""
+    g1: bool = False
+    g2: float = 0.0
+
+    @property
+    def name(self) -> str:
+        parts = (["g1"] if self.g1 else []) + ([f"g2:{int(self.g2)}"] if self.g2 else [])
+        return "+".join(parts) or "g0"
+
+
+G0 = GridSpec()
+
+
+def parse_grid(text: str) -> GridSpec:
+    """'g0' | 'g1' | 'g2:2000' | 'g1+g2:2000'."""
+    g1, g2 = False, 0.0
+    for part in text.lower().split("+"):
+        if part == "g0":
+            continue
+        if part == "g1":
+            g1 = True
+        elif part.startswith("g2:"):
+            g2 = float(part[3:])
+            if g2 <= 0:
+                raise ValueError(text)
+        else:
+            raise ValueError(f"격자 변형 '{text}' — g0 | g1 | g2:<mm> | g1+g2:<mm>")
+    return GridSpec(g1, g2)
+
+
+def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec):
+    """D66 보조 격자 좌표 [x, y, z] (영역 밖 값은 EscapeGraph 가 버린다).
+
+    G2: 블록 좌표 0 에서 간격 s 의 배수 (x, y, z 모두).
+    G1 (중력관 층만): `추정:` 규칙 —
+      높이 보조선 = 그 구경 중력관마다 start 높이에서 아래로 간격 s_z 의 배수 (end 높이 위까지).
+                    s_z = max(수직 한 단 최소 낙차 max(§3.3, 2·t₉₀) — 90°-90° 단은 x·y 좌표 우연 일치 없이 어느 노드에서나 가능,
+                              낙차 / G1_MAX_LEVELS), 10 mm 올림.
+      수평 보조선 = x·y 모두 블록 좌표 0 에서 간격 s_h = L_max / 2 (10 mm 내림)의 배수 — 직진 L_max 안에 하향 기회가
+                    두 번 이상 오도록 (꺾임 직관 규칙이 길이를 쓰므로 여유를 둔다).
+    """
+    xs, ys, zs = [], [], []
+    ext = sc.block.extent
+    if spec.g2:
+        for ax, out in enumerate((xs, ys, zs)):
+            out.extend(k * spec.g2 for k in range(1, int(ext[ax] // spec.g2) + 1))
+    if spec.g1 and gravity_layer:
+        from .gravity import gravity_lmax
+        sv = _snap_up(max(PIPE_SPECS[size].min_straight, 2 * elbow_tangent(size, 90)))
+        sh = _snap_down(gravity_lmax(size) / 2)
+        for ax, out in enumerate((xs, ys)):
+            out.extend(k * sh for k in range(1, int(ext[ax] // sh) + 1))
+        for p in sc.pipes:
+            if p.nominal_size != size or not p.gravity_pipe:
+                continue
+            z0, z1 = float(p.start.pos[2]), float(p.end.pos[2])
+            if z0 <= z1:
+                continue
+            sz = max(sv, _snap_up((z0 - z1) / G1_MAX_LEVELS))
+            k = 1
+            while z0 - k * sz > z1:
+                zs.append(z0 - k * sz)
+                k += 1
+    if not (xs or ys or zs):
+        return None
+    return [xs, ys, zs]
+
+
+def fixed_layer(sc, pipe, grid: GridSpec = G0):
+    """구경별 고정 레이어 (캐시). 반환: (그래프, 이번 호출에서 쓴 구성 시간).
+    D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다."""
+    gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
+    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2)
     hit = _FIXED.get(key)
     if hit is not None and hit[0] is sc:
         return hit[1], 0.0
     same = [p for p in sc.pipes if p.nominal_size == pipe.nominal_size]
-    g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)])
+    g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
+                    extra_coords=grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid))
     _FIXED[key] = (sc, g)
     return g, g.build_sec
 
@@ -49,11 +125,23 @@ def clear_cache():
     _FIXED.clear()
 
 
+def fixed_layer_stats(sc) -> list:
+    """이 시나리오에서 만든 고정 레이어 목록 (D66 보고용): 구경·중력관 층·G2 간격·격자·노드·엣지·생성 시간."""
+    out = []
+    for (sid, size, grav, g2), (s, F) in _FIXED.items():
+        if s is not sc:
+            continue
+        edges = int(sum(int(m.sum()) for m in F.axis_ok) + sum(int(m.sum()) for m in F.diag_ok.values()) // 2)
+        out.append({"size": size, "gravity_layer": grav, "g2": g2, "grid": list(F.shape),
+                    "nodes": int(F.node_ok.sum()), "edges": edges, "build_sec": round(F.build_sec, 3)})
+    return sorted(out, key=lambda x: (int(x["size"][:-1]), x["gravity_layer"]))
+
+
 def terminal_reservations(sc, exclude=()) -> list:
     """D59 단자 예약 구역: [(배관, [단자 위치, 직진 구간 끝])]. exclude = 예약하지 않을 배관 id (놓인 배관·자기 자신).
 
     구간 길이: 노즐 = max(§3.3, t₉₀), 경계 = r + t₉₀ (D47). 방향: start 는 dir 쪽, end 는 dir 반대쪽(배관이 들어오는 쪽).
-    t₉₀ = 그 배관 90° 엘보 접선 길이 (D45). `추정:` 엘보 각도는 90° 기준 (가장 흔한 꺾임, 135° 보다 짧다).
+    t₉₀ = 그 배관 90° 엘보 접선 길이 (D45). 엘보 각도 90° 기준 — 확정 (D59 보완, 가장 큰 접선 기준).
     """
     out = []
     for p in sc.pipes:
@@ -139,11 +227,13 @@ class LayeredGraph:
     _point_clearance = EscapeGraph._point_clearance
     _segments_clear = EscapeGraph._segments_clear
 
-    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=()):
+    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0):
         """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
-        reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음)."""
+        reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음).
+        grid: D66 고정층 격자 보강 변형 (기본 G0)."""
         t0 = time.perf_counter()
-        F, fixed_sec = fixed_layer(sc, pipe)
+        F, fixed_sec = fixed_layer(sc, pipe, grid)
+        self.grid = grid
         self.fixed = F
         self.pipe = pipe
         self.r = pipe.radius
@@ -347,15 +437,6 @@ class LayeredGraph:
         mask[bad] = m
         return mask
 
-    @staticmethod
-    def _swap_mask(m: np.ndarray) -> np.ndarray:
-        """반대 방향 엣지 마스크 (시작·끝 등급 맞바꿈)."""
-        out = np.zeros_like(m)
-        for i in range(4):
-            for j in range(4):
-                out |= ((m >> (i * 4 + j)) & 1) << (j * 4 + i)
-        return out
-
     def _axis_edges(self, F, is_base, bi, first) -> int:
         n = 0
         Fidx = np.full((len(self.flat), 3), -1)
@@ -374,11 +455,14 @@ class LayeredGraph:
             free = np.zeros(len(a), dtype=bool)
             ia = Fidx[a[adj]]
             free[adj] = F.axis_ok[ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+            obs = np.full(len(a), 0xFFFF, dtype=np.int64)   # D65: 고정 장애물 꺾임 등급 마스크 (패치 엣지는 전부 r 이상만)
+            if F.axis_mask[ax] is not None:
+                obs[adj] = F.axis_mask[ax][ia[:, 0], ia[:, 1], ia[:, 2]]
             rest = np.nonzero(~adj)[0]
             if len(rest):
                 free[rest] = self._segments_clear(P0[rest], P1[rest], o1)
             sel = np.nonzero(free)[0]
-            em = self._pipes_mask(P0[sel], P1[sel])
+            em = self._pipes_mask(P0[sel], P1[sel]) & obs[sel]
             sel, em = sel[em != 0], em[em != 0]
             a, b = a[sel], b[sel]
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
@@ -386,7 +470,7 @@ class LayeredGraph:
             self.step[a, dp], self.elen[a, dp] = b, L
             self.step[b, dm], self.elen[b, dm] = a, L
             self.emask[a, dp] = em
-            self.emask[b, dm] = self._swap_mask(em)
+            self.emask[b, dm] = swap_mask(em)
             if self._sup is not None:      # D57: 고정 레이어 인접 엣지는 캐시, 그 밖(패치)은 같은 함수로 계산
                 adj = adj[sel]
                 sc_ = np.empty(len(a))
@@ -418,6 +502,8 @@ class LayeredGraph:
             s_id, d_id = s_id[keep], d_id[keep]
             src = tuple(i[keep] for i in src)
             em = self._pipes_mask(self.pos[s_id], self.pos[d_id])
+            if d in F.diag_mask:   # D65
+                em &= F.diag_mask[d][src].astype(np.int64)
             free = em != 0
             s_id, d_id, em = s_id[free], d_id[free], em[free]
             src = tuple(i[free] for i in src)
@@ -549,7 +635,9 @@ class LayeredGraph:
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),
                 "nodes": int(self.node_valid.sum()), "patch_nodes": self.n_patch_nodes, "edges": int(self.n_edges),
-                "build_sec": round(self.build_sec, 3), "fixed_sec": round(self.fixed_sec, 3)}
+                "build_sec": round(self.build_sec, 3), "fixed_sec": round(self.fixed_sec, 3),
+                "grid_variant": self.grid.name, "fixed_nodes": int(self.fixed.node_ok.sum()),
+                "fixed_grid": list(self.fixed.shape)}
 
 
 def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
@@ -563,20 +651,23 @@ def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
     return _finish_chain(g, pipe, chain, expanded, generated, time.perf_counter() - t0)
 
 
-def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True):
+def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
+                        grid: GridSpec = G0):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
-    reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다)."""
+    reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형."""
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
-        g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved)
+        g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
+                         grid=grid)
         r = _route(g, pipe, time_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
     router.__name__ = (f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
-                       f"{'' if reserve else '_noreserve'}")
+                       f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}")
+    router.grid = grid
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
-        router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False)
+        router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid)
     return router
 
 
