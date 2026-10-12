@@ -19,7 +19,7 @@ import jsonschema
 
 from .constants import FITTINGS, PIPE_SPECS
 from .gravity import feasibility
-from .layered import layered_router_a, make_layered_router
+from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
 from .verifier import MODULE_ORDER, PipeRoute, verify
@@ -126,6 +126,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
+        "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
+        "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
 
@@ -286,6 +288,9 @@ def main(argv=None) -> int:
                          "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
     ap.add_argument("--no-support-cost", action="store_true",
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
+    ap.add_argument("--grid", default="g0",
+                    help="D66 고정층 격자 보강 변형 (layered 라우터): g0 = 기본, g1 = 중력관 높이·수평 보조선, "
+                         "g2:<mm> = 전 배관 일정 간격 보조선, g1+g2:<mm> = 조합")
     ap.add_argument("--html-only", action="store_true",
                     help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
                          "(plotly.js 포함 — 보고 첨부용, §0)")
@@ -300,7 +305,8 @@ def main(argv=None) -> int:
     if args.router == "astar":
         router = astar_router
     else:
-        router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost)
+        router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
+                                     grid=parse_grid(args.grid))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:
