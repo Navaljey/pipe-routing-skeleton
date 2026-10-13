@@ -33,7 +33,7 @@ from .verifier.geom import support_faces
 
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
-EXPAND_BUDGET = 2_048_000
+EXPAND_BUDGET = 1_660_928   # = 811 × 2048 ≈ 27,675 확장/초 × 60초 (D72 측정)
 
 _FIXED: dict = {}   # (id(scenario), 구경, 중력관 층 여부, 격자 변형) → (scenario, 고정 레이어 EscapeGraph)
 
