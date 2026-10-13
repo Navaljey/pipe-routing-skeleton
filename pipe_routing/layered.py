@@ -216,6 +216,10 @@ def _fixed_support(F, sc, size):
     return F._support_cache
 
 
+class _Scratch:
+    """EscapeGraph._pipe_groups 를 항목 하나에 부를 때 쓰는 빈 객체 (그 함수가 속성을 기록한다)."""
+
+
 class LayeredGraph:
     """SpaceRepresentation (§4.1) — 노드 = 정수 id. 엘보·도착·직관 규칙은 EscapeGraph 와 같은 함수를 빌려 쓴다."""
 
@@ -227,10 +231,14 @@ class LayeredGraph:
     _point_clearance = EscapeGraph._point_clearance
     _segments_clear = EscapeGraph._segments_clear
 
-    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0):
+    def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0,
+                 incremental: bool = True):
         """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
         reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음).
-        grid: D66 고정층 격자 보강 변형 (기본 G0)."""
+        grid: D66 고정층 격자 보강 변형 (기본 G0).
+        incremental: D67 증분 배치층 표시 (변형 A 만) — 놓인 배관·예약 항목별 표시(엣지 마스크·노드 여유)를 고정 레이어에
+        항목 단위로 캐시하고, 지금 항목 집합으로 합성한다 (AND·min — 전체 재계산과 비트 동일). False = 매번 전체 재계산
+        (시험 대조용)."""
         t0 = time.perf_counter()
         F, fixed_sec = fixed_layer(sc, pipe, grid)
         self.grid = grid
@@ -295,7 +303,14 @@ class LayeredGraph:
         self.clearance = clear
         # D60: 놓인 배관(·예약)과의 이격은 노드가 아니라 엣지(꺾임 접선만큼 깎은 직관)와 엘보 호로 판정한다.
         # pipe_margin 은 엘보 빠른 통과 판정(이격 ≥ r + t)에만 쓴다
-        self.pipe_margin = self._node_margin(self.pos)
+        self.use_support_cost = support_cost
+        self._ext = np.array(sc.block.extent, dtype=float)
+        self._sup = _fixed_support(F, sc, pipe.nominal_size) if support_cost else None
+        self.incremental = bool(incremental and not patches)
+        self._items = [(("P", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
+                       for op, w in others if w] + \
+                      [(("R", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w) for op, w in reserved]
+        self.pipe_margin = self._item_node_margin(F) if self.incremental else self._node_margin(self.pos)
         self.node_valid = ok
         self.n_patch_nodes = int(np.sum(~is_base & ok))
         self.start_node = self._id_of(pipe.start.pos)
@@ -306,16 +321,159 @@ class LayeredGraph:
         self.elen = np.zeros((N, 18))
         self.scost = np.zeros((N, 18))
         self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
-        self.use_support_cost = support_cost
-        self._ext = np.array(sc.block.extent, dtype=float)
-        self._sup = _fixed_support(F, sc, pipe.nominal_size) if support_cost else None
-        n_axis = self._axis_edges(F, is_base, bi, first)
-        n_diag = self._diag_edges(F)
-        self.n_edges = n_axis + n_diag
+        if self.incremental:
+            self.n_edges = self._incremental_edges(F, is_base, bi, first)
+        else:
+            n_axis = self._axis_edges(F, is_base, bi, first)
+            n_diag = self._diag_edges(F)
+            self.n_edges = n_axis + n_diag
         goal = np.array(pipe.end.pos, dtype=float)
         self.hdist = np.sqrt(((self.pos - goal) ** 2).sum(1))
         self.build_sec = time.perf_counter() - t0 + fixed_sec
         self.fixed_sec = fixed_sec
+
+    # ---------------------------------------------------------------- D67 증분 배치층 표시
+
+    def _item_contrib(self, F, key, op, w):
+        """항목(놓인 배관 또는 예약 구역) 하나의 표시 — 고정 레이어에 캐시 (키 = 유효 반경 + 항목 종류·배관·좌표).
+        반환 {"margin": (노드, 값), "axis": [(엣지 번호, 마스크)] × 3, "diag": {d: (엣지 번호, 마스크)}}.
+        엣지 번호는 _edge_template 의 순서. 항목에 닿지 않는 엣지(마스크 0xFFFF)·노드(inf)는 저장하지 않는다 (희소)."""
+        cache = F.__dict__.setdefault("_item_cache", {})
+        ck = (self.r,) + key
+        hit = cache.get(ck)
+        if hit is not None:
+            return hit
+        groups = EscapeGraph._pipe_groups(_Scratch(), [(op, w)])
+        if not groups:
+            hit = {"margin": (np.zeros(0, np.int64), np.zeros(0)), "axis": [None] * 3, "diag": {}}
+            cache[ck] = hit
+            return hit
+        lo = np.min([g[4] for g in groups], 0)
+        hi = np.max([g[5] for g in groups], 0)
+        gpad = self.r + max(g[3] + g[2].max() for g in groups)
+        m = self._node_margin(self.pos, groups)
+        sel = np.nonzero(np.isfinite(m))[0]
+        out = {"margin": (sel.astype(np.int32), m[sel]), "axis": [], "diag": {}}
+        tmpl = self._edge_template(F)
+        for kind, part in (("axis", tmpl["axis"]), ("diag", tmpl["diag"])):
+            items = enumerate(part) if kind == "axis" else part.items()
+            for k, e in items:
+                P0, P1 = self.pos[e["a"]], self.pos[e["b"]]
+                c = np.nonzero(np.all((np.minimum(P0, P1) < hi + gpad) & (np.maximum(P0, P1) > lo - gpad), 1))[0]
+                em = self._pipes_mask(P0[c], P1[c], groups)
+                touched = em != 0xFFFF
+                entry = (c[touched].astype(np.int32), em[touched].astype(np.uint16))   # 희소·작은 정수형 (메모리)
+                if kind == "axis":
+                    out["axis"].append(entry)
+                else:
+                    out["diag"][k] = entry
+        cache[ck] = out
+        return out
+
+    def _item_node_margin(self, F) -> np.ndarray:
+        m = np.full(len(self.pos), np.inf)
+        for key, op, w in self._items:
+            idx, val = self._item_contrib(F, key, op, w)["margin"]
+            m[idx] = np.minimum(m[idx], val)
+        return m
+
+    def _edge_template(self, F) -> dict:
+        """변형 A 의 고정 레이어 엣지 목록 (놓인 배관과 무관한 부분) — 고정 레이어에 1회 캐시.
+        axis[ax]·diag[d] = {a: 시작 노드, b: 끝 노드, obs: 고정 장애물 마스크, L: 길이, sc: 추정 서포트}.
+        _axis_edges·_diag_edges 와 같은 식. 좌표는 저장하지 않고 노드 번호로 (메모리)."""
+        key = ("tmpl", self.r, self.use_support_cost)
+        cache = F.__dict__.setdefault("_tmpl_cache", {})
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        bi = np.nonzero(F.node_ok)
+        Fidx = np.stack(bi, -1)   # 변형 A: 노드 = 고정 레이어 노드 (같은 순서)
+        axis = []
+        for ax in range(3):
+            o1, o2 = [k for k in range(3) if k != ax]
+            order = np.lexsort((self.idx[:, ax], self.idx[:, o2], self.idx[:, o1]))
+            a, b = order[:-1], order[1:]
+            same = (self.idx[a, o1] == self.idx[b, o1]) & (self.idx[a, o2] == self.idx[b, o2])
+            a, b = a[same], b[same]
+            P0, P1 = self.pos[a], self.pos[b]
+            adj = Fidx[b, ax] == Fidx[a, ax] + 1
+            free = np.zeros(len(a), dtype=bool)
+            ia = Fidx[a[adj]]
+            free[adj] = F.axis_ok[ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+            obs = np.full(len(a), 0xFFFF, dtype=np.int64)
+            if F.axis_mask[ax] is not None:
+                obs[adj] = F.axis_mask[ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+            rest = np.nonzero(~adj)[0]
+            if len(rest):
+                free[rest] = self._segments_clear(P0[rest], P1[rest], o1)
+            sel = np.nonzero(free)[0]
+            a, b, adj = a[sel], b[sel], adj[sel]
+            L = np.abs(self.pos[b, ax] - self.pos[a, ax])
+            sc_ = np.zeros(len(a))
+            if self._sup is not None:
+                ia = Fidx[a[adj]]
+                sc_[adj] = self._sup[0][ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+                r_ = np.nonzero(~adj)[0]
+                sc_[r_] = support_edge_cost(self._ext, self.box_lo, self.box_hi, self.pipe.nominal_size,
+                                            self.pos[a[r_]], self.pos[b[r_]])
+            axis.append({"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
+                         "sc": sc_})
+        diag = {}
+        for d in range(6, 18):
+            vec = DIRS[d]
+            pa, pb = [ax for ax in range(3) if vec[ax] != 0]
+            src = np.nonzero(F.diag_ok[d])
+            if not len(src[0]):
+                continue
+            to_a, to_b = F.diag_to[d]
+            dst = list(src)
+            dst[pa] = to_a[src[pa], src[pb]]
+            dst[pb] = to_b[src[pa], src[pb]]
+            s_id = self._ids_from_fixed(F, src)
+            d_id = self._ids_from_fixed(F, dst)
+            obs = F.diag_mask[d][src] if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.uint16)
+            diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": obs.astype(np.uint16),
+                       "L": np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1),
+                       "sc": self._sup[1][d][src] if self._sup is not None else np.zeros(len(s_id))}
+        cache[key] = {"axis": axis, "diag": diag}
+        return cache[key]
+
+    def _incremental_edges(self, F, is_base, bi, first) -> int:
+        """D67: 엣지 마스크 = 고정 레이어 마스크 AND (지금 항목들의 캐시된 마스크). _axis_edges·_diag_edges 와 같은 결과."""
+        tmpl = self._edge_template(F)
+        contribs = [self._item_contrib(F, key, op, w) for key, op, w in self._items]
+        n = 0
+        for ax, e in enumerate(tmpl["axis"]):
+            em = e["obs"].astype(np.int64)
+            for c in contribs:
+                idx, val = c["axis"][ax]
+                em[idx] &= val
+            keep = np.nonzero(em != 0)[0]
+            a, b, em = e["a"][keep], e["b"][keep], em[keep]
+            dp, dm = 2 * ax, 2 * ax + 1
+            self.step[a, dp], self.elen[a, dp] = b, e["L"][keep]
+            self.step[b, dm], self.elen[b, dm] = a, e["L"][keep]
+            self.emask[a, dp] = em
+            self.emask[b, dm] = swap_mask(em)
+            if self._sup is not None:
+                self.scost[a, dp] = e["sc"][keep]
+                self.scost[b, dm] = e["sc"][keep]
+            n += len(a)
+        nd = 0
+        for d, e in tmpl["diag"].items():
+            em = e["obs"].astype(np.int64)
+            for c in contribs:
+                idx, val = c["diag"][d]
+                em[idx] &= val
+            keep = np.nonzero(em != 0)[0]
+            s_id = e["a"][keep]
+            self.step[s_id, d] = e["b"][keep]
+            self.emask[s_id, d] = em[keep]
+            self.elen[s_id, d] = e["L"][keep]
+            if self._sup is not None:
+                self.scost[s_id, d] = e["sc"][keep]
+            nd += len(s_id)
+        return n + nd // 2
 
     # ---------------------------------------------------------------- 구성
 
@@ -326,11 +484,13 @@ class LayeredGraph:
         assert self.flat[j] == f
         return j
 
-    def _node_margin(self, P: np.ndarray) -> np.ndarray:
-        """노드 ↔ 놓인 배관 여유 (거리 − slack − r_other). EscapeGraph._pipe_node_margin 과 같은 식, 점 목록용."""
+    def _node_margin(self, P: np.ndarray, groups=None) -> np.ndarray:
+        """노드 ↔ 놓인 배관 여유 (거리 − slack − r_other). EscapeGraph._pipe_node_margin 과 같은 식, 점 목록용.
+        groups: 조각 묶음 (기본 = 이 그래프의 놓인 배관·예약 전부, D67 항목 하나만 넘기기도 한다)."""
+        groups = self.pipe_groups if groups is None else groups
         m = np.full(len(P), np.inf)
         reach = self.r + self.tangent[135]
-        for A, B, S, ro, lo, hi in self.pipe_groups:
+        for A, B, S, ro, lo, hi in groups:
             pad = reach + ro + S.max()
             sel = np.nonzero(np.all((P > lo - pad) & (P < hi + pad), 1))[0]
             if not len(sel):
@@ -343,16 +503,17 @@ class LayeredGraph:
             m[sel] = np.minimum(m[sel], (dist - S[None]).min(1) - ro)
         return m
 
-    def _pipes_clear(self, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+    def _pipes_clear(self, P0: np.ndarray, P1: np.ndarray, groups=None) -> np.ndarray:
         """선분들 ↔ 놓인 배관 조각 (EscapeGraph._segments_clear_of_pipes 와 같은 판정). x 정렬로 후보 범위를 좁힌다."""
+        groups = self.pipe_groups if groups is None else groups
         free = np.ones(len(P0), dtype=bool)
-        if not len(P0) or not self.pipe_groups:
+        if not len(P0) or not groups:
             return free
         slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
         order = np.argsort(slo[:, 0], kind="stable")
         sx = slo[order, 0]
         maxlen = float((shi[:, 0] - slo[:, 0]).max())
-        for A, B, S, ro, lo, hi in self.pipe_groups:
+        for A, B, S, ro, lo, hi in groups:
             g = self.r + ro + S.max()
             i0 = int(np.searchsorted(sx, lo[0] - g - maxlen, "left"))
             i1 = int(np.searchsorted(sx, hi[0] + g, "right"))
@@ -361,7 +522,7 @@ class LayeredGraph:
             EscapeGraph._block_cand(self, free, w, P0, P1, A, B, S, ro)
         return free
 
-    def _pipes_mask(self, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+    def _pipes_mask(self, P0: np.ndarray, P1: np.ndarray, groups=None) -> np.ndarray:
         """D60: 엣지마다 16비트 마스크 — 비트 (i × 4 + j) = 시작을 꺾임 등급 i, 끝을 등급 j 의 엘보 접선만큼 깎은
         직관이 놓인 배관(·예약)과 r + r_o 이상 (검증기와 같은 거리 식). 등급 0/45/90/135. 0 = 어떤 경우에도 못 씀.
 
@@ -369,11 +530,12 @@ class LayeredGraph:
         깎기 (ts, te) 로 허용 ⇔ 모든 구간이 b1 ≤ ts 또는 b0 ≥ L − te. 깎기가 엣지보다 길면 엣지 길이까지만
         (그 앞 엣지는 깎지 않고 판정 — 보수적).
         """
+        groups = self.pipe_groups if groups is None else groups
         n = len(P0)
         mask = np.full(n, 0xFFFF, dtype=np.int64)
-        if not n or not self.pipe_groups:
+        if not n or not groups:
             return mask
-        full = self._pipes_clear(P0, P1)
+        full = self._pipes_clear(P0, P1, groups)
         bad = np.nonzero(~full)[0]
         if not len(bad):
             return mask
@@ -394,7 +556,7 @@ class LayeredGraph:
 
         # (엣지, 조각) 쌍을 모든 묶음에서 모은 뒤 이분 탐색을 한 번에 — 쌍마다 같은 식 (결과 같음)
         E, AA, BB, SS, NN, SST = [], [], [], [], [], []
-        for A, B, S, ro, lo, hi in self.pipe_groups:
+        for A, B, S, ro, lo, hi in groups:
             g = self.r + ro + S.max()
             near = np.nonzero(np.all((slo < hi + g) & (shi > lo - g), 1))[0]
             if not len(near):
@@ -652,22 +814,25 @@ def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
 
 
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
-                        grid: GridSpec = G0):
+                        grid: GridSpec = G0, incremental: bool = True):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
-    reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형."""
+    reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
+    incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용)."""
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
-                         grid=grid)
+                         grid=grid, incremental=incremental)
         r = _route(g, pipe, time_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
     router.__name__ = (f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
-                       f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}")
+                       f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}"
+                       f"{'' if incremental else '_full'}")
     router.grid = grid
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
-        router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid)
+        router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
+                                                          incremental=incremental)
     return router
 
 
