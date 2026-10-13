@@ -288,6 +288,8 @@ def main(argv=None) -> int:
                          "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
     ap.add_argument("--no-support-cost", action="store_true",
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
+    ap.add_argument("--full-marking", action="store_true",
+                    help="D67 증분 배치층 표시를 끄고 배관마다 전체 재계산 (결과 같음 — 시간 비교용)")
     ap.add_argument("--grid", default="g0",
                     help="D66 고정층 격자 보강 변형 (layered 라우터): g0 = 기본, g1 = 중력관 높이·수평 보조선, "
                          "g2:<mm> = 전 배관 일정 간격 보조선, g1+g2:<mm> = 조합")
@@ -306,7 +308,7 @@ def main(argv=None) -> int:
         router = astar_router
     else:
         router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
-                                     grid=parse_grid(args.grid))
+                                     grid=parse_grid(args.grid), incremental=not args.full_marking)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:
