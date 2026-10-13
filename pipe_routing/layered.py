@@ -33,7 +33,8 @@ from .verifier.geom import support_faces
 
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
-EXPAND_BUDGET = 1_660_928   # = 811 × 2048 ≈ 27,675 확장/초 × 60초 (D72 측정)
+EXPAND_BUDGET = 4_194_304   # = 2²² (D73 — 기준선의 정의, 머신 속도 환산값 아님. D72 의 1,660,928 대체)
+DIAG_FACTOR = 4             # D74: 실패 분류용 진단 단독 재라우팅 예산 = 라우팅 예산 × 4 (16,777,216)
 
 _FIXED: dict = {}   # (id(scenario), 구경, 중력관 층 여부, 격자 변형) → (scenario, 고정 레이어 EscapeGraph)
 
@@ -818,11 +819,13 @@ def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
 
 
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
-                        grid: GridSpec = G0, incremental: bool = True, expand_limit="default"):
+                        grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
+                        diagnostic: bool = True):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
-    expand_limit = D72 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적)."""
+    expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
+    diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다."""
     if expand_limit == "default":
         expand_limit = EXPAND_BUDGET
     def router(sc, pipe, time_limit, placed=()):
@@ -841,7 +844,13 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                             else {"kind": "wall_clock_sec", "limit": None})
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
         router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
-                                                          incremental=incremental, expand_limit=expand_limit)
+                                                          incremental=incremental, expand_limit=expand_limit,
+                                                          diagnostic=False)
+    if diagnostic and expand_limit is not None:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
+        router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
+                                                incremental=incremental, expand_limit=expand_limit * DIAG_FACTOR,
+                                                diagnostic=False)
+        router.search_budget["diagnosis_limit"] = expand_limit * DIAG_FACTOR
     return router
 
 

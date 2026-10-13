@@ -15,9 +15,10 @@ from .verifier.geom import EPS, build_centerline, segment_segment_distance
 
 MAX_RIPUPS = 3   # D50④ 시나리오당
 # D51 실패 3분류: 간섭-차단 (단독 경로가 놓인 배관과 충돌) / 간섭-탐색 (충돌 없는데 실패, 성능) / 개별 경로 (단독 실패)
-FAIL_CLASSES = ("interference_block", "interference_search", "individual", "router_mismatch")
+FAIL_CLASSES = ("interference_block", "interference_search", "individual", "router_mismatch", "diagnosis_inconclusive")
 FAIL_CLASS_KO = {"interference_block": "간섭-차단", "interference_search": "간섭-탐색", "individual": "개별 경로",
-                 "router_mismatch": "라우터 규칙 불일치"}   # D60: 간섭-탐색은 timeout 만
+                 "router_mismatch": "라우터 규칙 불일치",   # D60: 간섭-탐색은 timeout 만
+                 "diagnosis_inconclusive": "진단 불명"}      # D74: 진단 단독 재라우팅도 예산 소진
 
 
 @dataclass
@@ -30,6 +31,7 @@ class PlanResult:
     fail_class: dict = field(default_factory=dict)   # 최종 실패 배관 → FAIL_CLASSES 중 하나 (D50⑥, D51)
     fail_detail: dict = field(default_factory=dict)  # 최종 실패 배관 → {class, seq_status, solo_status, blockers}
     solo: dict = field(default_factory=dict)      # 단독 라우팅 결과 (rip-up·분류용)
+    diag_solo: dict = field(default_factory=dict)  # D74: 진단 예산 단독 재라우팅 (분류에만)
     attempts: dict = field(default_factory=dict)  # pipe_id → [{"status", "graph_sec", "search_sec"}] (D50③)
     total_sec: float = 0.0
     planner: str = ""
@@ -144,15 +146,28 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after}")
             tried.clear()                            # 상태가 바뀌었으니 다른 실패 배관을 다시 시도할 수 있다
 
-    # D50⑥ · D51 · D60: 최종 실패 배관 분류
+    # D50⑥ · D51 · D60 · D74: 최종 실패 배관 분류. 단독 경로가 라우팅 예산을 소진했으면 진단 예산(× 4)으로 다시 —
+    # 분류에만 쓰고 경로·J·성공에는 쓰지 않는다. 예산 안에서 끝난 단독 결과는 진단 예산으로도 같다 (A* 결정적).
+    diag = getattr(router, "diagnostic", None)
+
+    def diag_solo(pid):
+        s = solo(pid)
+        if s.status != "timeout" or diag is None:
+            return s
+        if pid not in res.diag_solo:
+            res.diag_solo[pid] = diag(sc, pipes[pid], time_limit, [])
+        return res.diag_solo[pid]
+
     for pid in order:
         if pid not in placed:
-            s = solo(pid)
+            s = diag_solo(pid)
             blockers = [] if s.status != "ok" else [
                 q for q in order if q in placed
                 and routes_conflict(pipes[pid], s.waypoints, pipes[q], placed[q].waypoints)]
             seq = routes[pid].status
-            if s.status != "ok":
+            if s.status == "timeout" and diag is not None:
+                cls = "diagnosis_inconclusive"      # D74: 진단 예산도 소진 — 개별/간섭을 가릴 수 없다
+            elif s.status != "ok":
                 cls = "individual"
             elif blockers:
                 cls = "interference_block"
@@ -161,7 +176,9 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             else:   # D60: 충돌 없는 단독 경로가 있는데 순차에서 unreachable — 라우터 규칙이 검증기와 어긋남
                 cls = "router_mismatch"
             detail = {"class": cls, "seq_status": seq, "solo_status": s.status, "blockers": blockers}
-            alt = getattr(router, "without_reservations", None)
+            if pid in res.diag_solo:
+                detail["solo_budget"] = "diagnostic"    # D74: 진단 예산으로 다시 판정함
+            alt = getattr(diag or router, "without_reservations", None)
             if cls == "individual" and alt is not None:   # D59: 예약을 빼면 단독으로 되는가 = 예약끼리 충돌
                 r2 = alt(sc, pipes[pid], time_limit, [])
                 detail["reservation_conflict"] = r2.status == "ok"

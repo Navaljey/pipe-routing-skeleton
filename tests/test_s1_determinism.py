@@ -46,7 +46,7 @@ class DeterminismTest(unittest.TestCase):
             ref = view(solo)
             out = json.loads((Path(solo) / "proc_005_output.json").read_text(encoding="utf-8"))
             self.assertGreater(out["global"]["timeout_count"], 0)            # 예산 소진이 실제로 있었다
-            self.assertEqual(out["global"]["search_budget"], {"kind": "expansions", "limit": LIMIT})
+            self.assertEqual(out["global"]["search_budget"], {"kind": "expansions", "limit": LIMIT, "diagnosis_limit": 4 * LIMIT})
             for d, _ in procs:
                 self.assertEqual(view(d), ref, d)
 
