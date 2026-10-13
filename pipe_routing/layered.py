@@ -353,16 +353,16 @@ class LayeredGraph:
         gpad = self.r + max(g[3] + g[2].max() for g in groups)
         m = self._node_margin(self.pos, groups)
         sel = np.nonzero(np.isfinite(m))[0]
-        out = {"margin": (sel, m[sel]), "axis": [], "diag": {}}
+        out = {"margin": (sel.astype(np.int32), m[sel]), "axis": [], "diag": {}}
         tmpl = self._edge_template(F)
         for kind, part in (("axis", tmpl["axis"]), ("diag", tmpl["diag"])):
             items = enumerate(part) if kind == "axis" else part.items()
             for k, e in items:
-                P0, P1 = e["P0"], e["P1"]
+                P0, P1 = self.pos[e["a"]], self.pos[e["b"]]
                 c = np.nonzero(np.all((np.minimum(P0, P1) < hi + gpad) & (np.maximum(P0, P1) > lo - gpad), 1))[0]
                 em = self._pipes_mask(P0[c], P1[c], groups)
                 touched = em != 0xFFFF
-                entry = (c[touched], em[touched])
+                entry = (c[touched].astype(np.int32), em[touched].astype(np.uint16))   # 희소·작은 정수형 (메모리)
                 if kind == "axis":
                     out["axis"].append(entry)
                 else:
@@ -379,7 +379,8 @@ class LayeredGraph:
 
     def _edge_template(self, F) -> dict:
         """변형 A 의 고정 레이어 엣지 목록 (놓인 배관과 무관한 부분) — 고정 레이어에 1회 캐시.
-        axis[ax] = {a, b, P0, P1, obs, L, sc}, diag[d] = {s, t, src, P0, P1, obs, L, sc}. _axis_edges·_diag_edges 와 같은 식."""
+        axis[ax]·diag[d] = {a: 시작 노드, b: 끝 노드, obs: 고정 장애물 마스크, L: 길이, sc: 추정 서포트}.
+        _axis_edges·_diag_edges 와 같은 식. 좌표는 저장하지 않고 노드 번호로 (메모리)."""
         key = ("tmpl", self.r, self.use_support_cost)
         cache = F.__dict__.setdefault("_tmpl_cache", {})
         hit = cache.get(key)
@@ -415,7 +416,8 @@ class LayeredGraph:
                 r_ = np.nonzero(~adj)[0]
                 sc_[r_] = support_edge_cost(self._ext, self.box_lo, self.box_hi, self.pipe.nominal_size,
                                             self.pos[a[r_]], self.pos[b[r_]])
-            axis.append({"a": a, "b": b, "P0": P0[sel], "P1": P1[sel], "obs": obs[sel], "L": L, "sc": sc_})
+            axis.append({"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
+                         "sc": sc_})
         diag = {}
         for d in range(6, 18):
             vec = DIRS[d]
@@ -429,8 +431,8 @@ class LayeredGraph:
             dst[pb] = to_b[src[pa], src[pb]]
             s_id = self._ids_from_fixed(F, src)
             d_id = self._ids_from_fixed(F, dst)
-            obs = F.diag_mask[d][src].astype(np.int64) if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.int64)
-            diag[d] = {"s": s_id, "t": d_id, "P0": self.pos[s_id], "P1": self.pos[d_id], "obs": obs,
+            obs = F.diag_mask[d][src] if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.uint16)
+            diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": obs.astype(np.uint16),
                        "L": np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1),
                        "sc": self._sup[1][d][src] if self._sup is not None else np.zeros(len(s_id))}
         cache[key] = {"axis": axis, "diag": diag}
@@ -442,7 +444,7 @@ class LayeredGraph:
         contribs = [self._item_contrib(F, key, op, w) for key, op, w in self._items]
         n = 0
         for ax, e in enumerate(tmpl["axis"]):
-            em = e["obs"].copy()
+            em = e["obs"].astype(np.int64)
             for c in contribs:
                 idx, val = c["axis"][ax]
                 em[idx] &= val
@@ -459,13 +461,13 @@ class LayeredGraph:
             n += len(a)
         nd = 0
         for d, e in tmpl["diag"].items():
-            em = e["obs"].copy()
+            em = e["obs"].astype(np.int64)
             for c in contribs:
                 idx, val = c["diag"][d]
                 em[idx] &= val
             keep = np.nonzero(em != 0)[0]
-            s_id = e["s"][keep]
-            self.step[s_id, d] = e["t"][keep]
+            s_id = e["a"][keep]
+            self.step[s_id, d] = e["b"][keep]
             self.emask[s_id, d] = em[keep]
             self.elen[s_id, d] = e["L"][keep]
             if self._sup is not None:
