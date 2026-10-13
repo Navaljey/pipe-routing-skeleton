@@ -157,6 +157,43 @@ class RipupTest(unittest.TestCase):
         res = sequential_ripup_planner(sc, router=router)
         self.assertEqual(res.fail_class, {"B": "router_mismatch"})
 
+    def _budget_router(self, diag_result):
+        """B 는 라우팅 예산으로는 순차·단독 모두 예산 소진(timeout), 진단 라우터(D74)는 diag_result 를 돌려준다."""
+        sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 20100)])
+        mock = MockRouter({"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(20100)})
+        calls = []
+
+        def router(sc_, pipe, limit, placed=()):
+            if pipe.id == "B":
+                return RouteResult("B", "timeout", search_sec=0.0)
+            return mock(sc_, pipe, limit, placed)
+
+        def diagnostic(sc_, pipe, limit, placed=()):
+            calls.append((pipe.id, len(placed)))
+            return diag_result(sc_, pipe, limit, placed)
+        router.diagnostic = diagnostic
+        return sc, router, mock, calls
+
+    def test_diagnostic_reroute_reclassifies(self):
+        """D74: 단독 재라우팅이 라우팅 예산을 소진하면 진단 예산으로 다시 — 진단 경로가 놓인 A 와 충돌하면 간섭-차단.
+        진단 경로는 분류에만 쓰고 결과(B 실패)는 그대로."""
+        sc, router, mock, calls = self._budget_router(lambda *a: MockRouter(
+            {"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(20100)})(*a))
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.fail_class, {"B": "interference_block"})
+        self.assertEqual(res.fail_detail["B"]["solo_budget"], "diagnostic")
+        self.assertEqual(res.fail_detail["B"]["blockers"], ["A"])
+        self.assertEqual(res.routes["B"].status, "timeout")
+        self.assertEqual(res.ripups, 0)          # rip-up 판단은 라우팅 예산 단독 결과(timeout)로 — 진단은 영향 없음
+        self.assertEqual(calls, [("B", 0)])
+
+    def test_diagnosis_inconclusive(self):
+        """D74: 진단 예산으로도 소진 → "진단 불명" (개별 경로로 세지 않는다)."""
+        sc, router, mock, calls = self._budget_router(lambda sc_, pipe, limit, placed=(): RouteResult(
+            pipe.id, "timeout", search_sec=0.0))
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.fail_class, {"B": "diagnosis_inconclusive"})
+
     def test_independent_planner(self):
         sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 20100)])
         router = MockRouter({"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(20100)})

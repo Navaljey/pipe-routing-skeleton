@@ -240,7 +240,7 @@ def main(argv=None) -> int:
         def solo_route(pid):
             if pid not in solo_cache:
                 p = next(q for q in sc.pipes if q.id == pid)
-                solo_cache[pid] = router(sc, p, 60.0, [])
+                solo_cache[pid] = getattr(router, "diagnostic", router)(sc, p, 60.0, [])   # D74 진단 예산
             return solo_cache[pid]
         points = []
         for e, t, routes, kind in tr.points:
