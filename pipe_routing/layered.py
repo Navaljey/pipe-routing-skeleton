@@ -31,6 +31,10 @@ from .space import DEFLECTION, DIRS
 ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
 from .verifier.geom import support_faces
 
+# D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
+# CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
+EXPAND_BUDGET = 1_660_928   # = 811 × 2048 ≈ 27,675 확장/초 × 60초 (D72 측정)
+
 _FIXED: dict = {}   # (id(scenario), 구경, 중력관 층 여부, 격자 변형) → (scenario, 고정 레이어 EscapeGraph)
 
 G1_MAX_LEVELS = 20   # D66 G1 `추정:` 중력관 한 개당 높이 보조선 최대 개수
@@ -802,11 +806,11 @@ class LayeredGraph:
                 "fixed_grid": list(self.fixed.shape)}
 
 
-def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
+def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
     from .astar_fast import astar_route_generic
     t0 = time.perf_counter()
     h = heuristic_factory(g, pipe)
-    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h(g.start_state(pipe)))
+    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h(g.start_state(pipe)), expand_limit)
     if status != "ok":
         return RouteResult(pipe.id, status, expanded=expanded, generated=generated,
                            search_sec=time.perf_counter() - t0)
@@ -814,15 +818,18 @@ def _route(g: LayeredGraph, pipe, time_limit) -> RouteResult:
 
 
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
-                        grid: GridSpec = G0, incremental: bool = True):
+                        grid: GridSpec = G0, incremental: bool = True, expand_limit="default"):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
-    incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용)."""
+    incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
+    expand_limit = D72 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적)."""
+    if expand_limit == "default":
+        expand_limit = EXPAND_BUDGET
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
                          grid=grid, incremental=incremental)
-        r = _route(g, pipe, time_limit)
+        r = _route(g, pipe, time_limit, expand_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
@@ -830,9 +837,11 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                        f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}"
                        f"{'' if incremental else '_full'}")
     router.grid = grid
+    router.search_budget = ({"kind": "expansions", "limit": expand_limit} if expand_limit is not None
+                            else {"kind": "wall_clock_sec", "limit": None})
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
         router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
-                                                          incremental=incremental)
+                                                          incremental=incremental, expand_limit=expand_limit)
     return router
 
 

@@ -453,7 +453,15 @@ def _grow(arrs, need):
     return tuple(np.concatenate([a, np.zeros(cap - len(a), a.dtype)]) for a in arrs)
 
 
-def astar_route_fast(space, pipe, time_limit, h_start):
+def budget_over(t0: float, time_limit, expand_limit, expanded: int) -> bool:
+    """탐색 중단 판정. D72: expand_limit(배관당 확장 상태 수 상한)이 있으면 그것만 본다 — 결정적, 벽시계 무관.
+    없으면 예전 벽시계 제한 (D40②, 비교용). 확인은 CHECK_EVERY 확장마다 — 상한은 CHECK_EVERY 의 배수로 둔다."""
+    if expand_limit is not None:
+        return expanded >= expand_limit
+    return time.perf_counter() - t0 > time_limit
+
+
+def astar_route_fast(space, pipe, time_limit, h_start, expand_limit=None):
     """router_astar.astar_route 와 같은 결과를 내는 컴파일 구현. 반환: (status, goal_state_chain | None, expanded, generated)."""
     t0 = time.perf_counter()
     T, C = _tables(space, pipe)
@@ -484,7 +492,7 @@ def astar_route_fast(space, pipe, time_limit, h_start):
             K = _grow(K, ctr[7] + 1)
             continue
         if code == _CHECK_TIME:
-            if time.perf_counter() - t0 > time_limit:
+            if budget_over(t0, time_limit, expand_limit, int(ctr[0])):
                 return "timeout", None, int(ctr[0]), int(ctr[1])
             continue
         if code == _EMPTY:
@@ -717,7 +725,7 @@ def _dir_kinds():
 _DKIND = _dir_kinds()
 
 
-def astar_route_generic(space, pipe, time_limit, h_start):
+def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None):
     """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태."""
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
@@ -754,7 +762,7 @@ def astar_route_generic(space, pipe, time_limit, h_start):
             K = _grow(K, ctr[7] + 1)
             continue
         if code == _CHECK_TIME:
-            if time.perf_counter() - t0 > time_limit:
+            if budget_over(t0, time_limit, expand_limit, int(ctr[0])):
                 return "timeout", None, int(ctr[0]), int(ctr[1])
             continue
         if code == _EMPTY:
