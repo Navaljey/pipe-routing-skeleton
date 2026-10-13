@@ -76,7 +76,7 @@ collision · boundary · bend · gravity_slope · valve · branch · support 를
 라우터가 실제 엘보 형상(R = 1.5D)을 반영한다: 직관 길이 = max(§3.3, 엘보 접선 합), 경계 단자 쪽 직관 ≥ r + t, 꺾을 때 엘보 호 ↔ 장애물 이격.
 서포트 지지면은 가까운 순서로 막히지 않는 첫 면 (D46).
 
-## 6단계 — 지표·J 분해·출력 JSON (★ M1)
+## 6단계 — 지표·J 분해·출력 JSON (★ MS1)
 
 ```
 python -m pipe_routing.pipeline scenarios/manual/manual_01.json -o out/run
