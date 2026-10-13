@@ -127,9 +127,20 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
+        "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+
+
+def deterministic_view(out):
+    """D72: 판정 결과만 남긴 출력 (벽시계 시간·메모리 필드 제거). 같은 입력·코드·시드면 머신 부하·병렬 수와 무관하게
+    바이트 동일해야 한다 — tests/test_s1_determinism.py."""
+    if isinstance(out, dict):
+        return {k: deterministic_view(v) for k, v in out.items() if "sec" not in k and "rss" not in k}
+    if isinstance(out, list):
+        return [deterministic_view(v) for v in out]
+    return out
 
 
 def _gravity_summary(routes: list) -> dict:
@@ -288,6 +299,8 @@ def main(argv=None) -> int:
                          "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
     ap.add_argument("--no-support-cost", action="store_true",
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
+    ap.add_argument("--expand-limit", type=int, default=None,
+                    help="D72 배관당 탐색 예산 (확장 상태 수). 기본 = layered.EXPAND_BUDGET, 0 = 예전 벽시계 --time-limit (비결정적)")
     ap.add_argument("--full-marking", action="store_true",
                     help="D67 증분 배치층 표시를 끄고 배관마다 전체 재계산 (결과 같음 — 시간 비교용)")
     ap.add_argument("--grid", default="g0",
@@ -308,7 +321,9 @@ def main(argv=None) -> int:
         router = astar_router
     else:
         router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
-                                     grid=parse_grid(args.grid), incremental=not args.full_marking)
+                                     grid=parse_grid(args.grid), incremental=not args.full_marking,
+                                     expand_limit=("default" if args.expand_limit is None
+                                                   else (args.expand_limit or None)))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     for path in args.paths:

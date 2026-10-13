@@ -80,11 +80,12 @@ def heuristic_factory(space: SpaceRepresentation, pipe: Pipe):
 
 
 def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME_LIMIT_SEC,
-                heuristic=None, impl: str = "auto") -> RouteResult:
+                heuristic=None, impl: str = "auto", expand_limit=None) -> RouteResult:
     """heuristic=None 이면 heuristic_factory (D41). 시험용으로 lambda s: 0 (Dijkstra) 을 넣을 수 있다.
 
     impl: "auto" = escape graph 이고 기본 휴리스틱이며 numba 가 있으면 컴파일 구현(astar_fast, M10), 아니면 파이썬.
           "python" / "fast" 로 강제할 수 있다. 두 구현의 결과(경로·J·확장 수)는 같다 (D40①, tests/test_astar_fast.py).
+    expand_limit: D72 결정적 탐색 예산 (확장 상태 수). 있으면 벽시계 time_limit 대신 쓴다. 상태 "timeout" = 예산 소진.
     """
     t0 = time.perf_counter()
     h = heuristic or heuristic_factory(space, pipe)
@@ -92,7 +93,8 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
     if impl != "python" and heuristic is None and hasattr(space, "axis_ok"):
         from . import astar_fast
         if astar_fast.HAVE_NUMBA:
-            status, chain, expanded, generated = astar_fast.astar_route_fast(space, pipe, time_limit, h(start))
+            status, chain, expanded, generated = astar_fast.astar_route_fast(space, pipe, time_limit, h(start),
+                                                                             expand_limit)
             if status != "ok":
                 return RouteResult(pipe.id, status, expanded=expanded, generated=generated,
                                    search_sec=time.perf_counter() - t0)
@@ -124,7 +126,8 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
         expanded += 1
         if space.is_goal(s, pipe):
             return _finish(space, pipe, s, parent, expanded, generated, time.perf_counter() - t0)
-        if expanded % _CHECK_EVERY == 0 and time.perf_counter() - t0 > time_limit:
+        if expanded % _CHECK_EVERY == 0 and (expanded >= expand_limit if expand_limit is not None
+                                             else time.perf_counter() - t0 > time_limit):
             return RouteResult(pipe.id, "timeout", expanded=expanded, generated=generated,
                                search_sec=time.perf_counter() - t0)
         for nb in space.neighbors(s, pipe):
