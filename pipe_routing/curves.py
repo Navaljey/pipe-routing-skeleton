@@ -118,8 +118,8 @@ def figure(groups: dict, axis: str = "sec"):
     from plotly.subplots import make_subplots
 
     sets = sorted({lab.split(":")[0] for lab in groups}, key=lambda s: (s != "base", s))
-    rows = [("success", "Layer 0 통과 배관 수"), ("J_total", "J_total (통과 배관 합, kg)"),
-            ("routed", "경로 배관 수"), ("interference_block", "간섭-차단 수")]
+    rows = [("first", "첫 해를 낸 시나리오 수 (t₀ 분포)"), ("success", "Layer 0 통과 배관 수"),
+            ("J_total", "J_total (통과 배관 합, kg)"), ("routed", "경로 배관 수"), ("interference_block", "간섭-차단 수")]
     colors = {"G0": "#2a6fdb", "G1": "#d9822b"}
     fig = make_subplots(rows=len(rows), cols=len(sets), shared_xaxes=False, vertical_spacing=0.06,
                         horizontal_spacing=0.08,
@@ -129,11 +129,19 @@ def figure(groups: dict, axis: str = "sec"):
         col = sets.index(s) + 1
         ser = set_series(curves, axis)
         xs = [x / 60 if axis == "sec" else x / 1e6 for x, _ in ser]
-        for ri, (m, _) in enumerate(rows, start=1):
+        key = "sec" if axis == "sec" else "expanded"
+        t0s = sorted(c["points"][0][key] for c in curves)     # t₀ (또는 e₀) 누적 분포 — 세트 곡선 시작 전 구간
+        end = max(c["total_sec"] if axis == "sec" else c["total_expanded"] for c in curves)
+        cx = [x / 60 if axis == "sec" else x / 1e6 for x in t0s + [end]]
+        fig.add_trace(go.Scatter(x=cx, y=list(range(1, len(t0s) + 1)) + [len(t0s)], mode="lines+markers",
+                                 line=dict(shape="hv", width=2, color=colors.get(name)), marker=dict(size=8),
+                                 name=name, legendgroup=name, showlegend=(col == 1),
+                                 hovertemplate=f"{name} %{{x:.2f}} · 첫 해 %{{y}}<extra></extra>"), row=1, col=col)
+        for ri, (m, _) in enumerate(rows[1:], start=2):
             fig.add_trace(go.Scatter(
                 x=xs, y=[v[m] for _, v in ser], mode="lines+markers", line=dict(shape="hv", width=2,
                                                                                     color=colors.get(name)),
-                marker=dict(size=8), name=name, legendgroup=name, showlegend=(ri == 1 and col == 1),
+                marker=dict(size=8), name=name, legendgroup=name, showlegend=False,
                 hovertemplate=f"{name} %{{x:.2f}} · {m} %{{y}}<extra></extra>"), row=ri, col=col)
     xt = "벽시계 (분, 로그)" if axis == "sec" else "누적 확장 상태 수 (백만, 로그)"
     for ri in range(1, len(rows) + 1):
@@ -142,8 +150,9 @@ def figure(groups: dict, axis: str = "sec"):
                              gridcolor="#e6e6e6")
             fig.update_yaxes(gridcolor="#e6e6e6", row=ri, col=ci)
     fig.update_layout(height=260 * len(rows), width=520 * len(sets), template="plotly_white",
-                      title=f"시간-품질 곡선 (D68) — x = {xt}", legend=dict(orientation="h", y=1.0, yanchor="bottom", x=1, xanchor="right"),
-                      margin=dict(t=110),
+                      title=dict(text=f"시간-품질 곡선 (D68) — x = {xt}", y=0.995, yanchor="top"),
+                      legend=dict(orientation="h", y=1.035, yanchor="bottom", x=0, xanchor="left"),
+                      margin=dict(t=140),
                       font=dict(size=12))
     return fig
 
