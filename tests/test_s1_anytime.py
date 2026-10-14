@@ -1,10 +1,10 @@
-"""S1-5 시험: anytime 기준선 (D68) — 같은 시드·결정적 예산이면 궤적(누적 확장·해·이동 종류)이 같고, 최선 해는 단조 개선,
-곡선 집계는 계단 함수 (D72)."""
+"""S1-5 시험: anytime 기준선 (D68·D75) — 같은 시드·결정적 예산이면 궤적(누적 확장·해·이동 종류·검증 점수)이 같고,
+최선 해의 검증 점수는 단조 개선 (통과 수 같으면 검증 J 비증가), 곡선 집계는 계단 함수 (D72)."""
 import unittest
 from pathlib import Path
 
 from pipe_routing import astar_fast
-from pipe_routing.anytime import _objective, anytime_run
+from pipe_routing.anytime import _objective, anytime_run, better, score
 from pipe_routing.curves import relative_value, set_value, value_at
 from pipe_routing.layered import make_layered_router
 from pipe_routing.scenario import load
@@ -14,8 +14,8 @@ SCEN = ROOT / "scenarios" / "manual" / "manual_01.json"
 
 
 def sig(tr):
-    return [(e, k, tuple((pid, r.status, tuple(map(tuple, r.waypoints or []))) for pid, r in sorted(routes.items())))
-            for e, _t, routes, k in tr.points], tr.moves, tr.total_expanded
+    return [(e, k, sc, tuple((pid, r.status, tuple(map(tuple, r.waypoints or []))) for pid, r in sorted(routes.items())))
+            for e, _t, routes, k, sc in tr.points], tr.moves, tr.total_expanded, tr.verified, tr.rejected
 
 
 @unittest.skipUnless(astar_fast.HAVE_NUMBA, "numba 없음")
@@ -35,9 +35,27 @@ class AnytimeTest(unittest.TestCase):
         self.assertEqual(self.a.stop, "expansions")
 
     def test_monotone_best(self):
-        objs = [_objective(routes) for _e, _t, routes, _k in self.a.points]
+        """D75: 받아들인 해는 라우터 추정(1차)도, 검증 점수도 직전 최선보다 좋다 — 통과 수가 같으면 검증 J 는 줄기만 한다."""
+        objs = [_objective(routes) for _e, _t, routes, _k, _s in self.a.points]
         self.assertEqual(objs, sorted(objs))
         self.assertEqual(self.a.points[0][3], "first")
+        scores = [s for *_x, s in self.a.points]
+        for prev, cur in zip(scores, scores[1:]):
+            self.assertTrue(better(cur, prev))
+            self.assertGreaterEqual(cur[0], prev[0])
+            if cur[0] == prev[0]:
+                self.assertLess(cur[1], prev[1])
+        for _e, _t, routes, _k, s in self.a.points:      # 저장한 점수 = 그 해를 다시 채점한 값
+            self.assertEqual(score(self.sc, routes), s)
+        self.assertGreaterEqual(self.a.verified, len(self.a.points) - 1)
+        self.assertEqual(self.a.verified - self.a.rejected, len(self.a.points) - 1)
+
+    def test_better(self):
+        self.assertTrue(better((5, 100.0), (4, 50.0)))       # 통과 수 우선
+        self.assertTrue(better((4, 49.0), (4, 50.0)))
+        self.assertFalse(better((4, 50.0), (4, 50.0)))
+        self.assertFalse(better((4, 51.0), (4, 50.0)))       # 라우터 추정은 좋아도 검증 J 가 늘면 버린다
+        self.assertFalse(better((3, 10.0), (4, 50.0)))
 
     def test_curve_step(self):
         c = {"total_sec": 10.0, "total_expanded": 100, "t0_sec": 2.0, "e0": 20, "n_pipes": 4,
