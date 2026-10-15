@@ -76,7 +76,11 @@
         "J_total_routed": {"type": "number"},
         "fail_causes": {"type": "object"},
         "pairwise_violation": {"type": "integer"},
-        "computation_time_sec": {"type": "number"}
+        "computation_time_sec": {"type": "number"},
+        "full_success": {"type": "boolean", "description": "D77 ①: 규칙상 가능한(D64) 배관이 모두 Layer 0 통과"},
+        "required_pipes": {"type": "integer", "minimum": 0, "description": "D77 ① 분모: D64 규칙상 불가능 배관만 뺀 배관 수"},
+        "required_passed": {"type": "integer", "minimum": 0},
+        "excluded_infeasible": {"type": "array", "items": {"type": "string"}, "description": "D77: 분모에서 뺀 D64 규칙상 불가능 배관 id"}
       }
     }
   },

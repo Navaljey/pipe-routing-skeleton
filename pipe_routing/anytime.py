@@ -23,7 +23,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from .multi import default_order, routes_conflict, sequential_ripup_planner
+from .multi import classify_failures, default_order, routes_conflict, sequential_ripup_planner
 
 RESTART_EVERY = 8   # `추정:` 이동 몇 번마다 한 번 순서 무작위 재시작
 
@@ -194,8 +194,10 @@ class _Removed:
 
 def quality(sc, routes: dict, solo_route, scored=None) -> dict:
     """궤적 한 점의 품질 (검증기 기준, D44·D49): 경로 배관 수 · Layer 0 통과 수 · success_rate · J_total(통과 배관 합) ·
-    간섭-차단 수(실패 배관 중 단독 경로가 놓인 배관과 충돌, D51). solo_route(pid) = 단독 경로 (평가용, 예산 밖).
+    간섭-차단 수(실패 배관 중 단독 경로가 놓인 배관과 충돌, D51) · 완전 성공(D77 ①, 규칙상 가능한 배관 전부 통과).
+    solo_route(pid) = 단독 경로 (평가용, 예산 밖).
     scored = 이미 계산한 D75 검증 점수 (통과, J) — 있으면 다시 검증하지 않는다."""
+    from .pipeline import required_pipe_ids
     pipes = {p.id: p for p in sc.pipes}
     success, J = scored if scored is not None else score(sc, routes)
     ok = [pid for pid, r in routes.items() if r.status == "ok"]
@@ -207,8 +209,19 @@ def quality(sc, routes: dict, solo_route, scored=None) -> dict:
         if s.status == "ok" and any(routes_conflict(pipes[pid], s.waypoints, pipes[q], routes[q].waypoints) for q in ok):
             block += 1
     n = len(sc.pipes)
+    req, _exc = required_pipe_ids(sc)
+    passed = passed_ids(sc, routes)
+    full = all(pid in passed for pid in req)              # D77 ①
     return {"routed": len(ok), "success": success, "success_rate": round(success / n, 4) if n else 0.0,
-            "J_total": round(J, 3), "interference_block": block}
+            "J_total": round(J, 3), "interference_block": block, "full_success": int(full),
+            "required_passed": sum(1 for pid in req if pid in passed)}
+
+
+def passed_ids(sc, routes: dict) -> set:
+    """Layer 0 통과 배관 id (검증기)."""
+    from .verifier import PipeRoute, verify
+    rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else []) for pid, r in routes.items()])
+    return {pid for pid, v in rep["pipes"].items() if v.success}
 
 
 def machine_info() -> dict:
@@ -240,7 +253,7 @@ def main(argv=None) -> int:
 
     from .layered import make_layered_router, parse_grid
     from .multi import PlanResult
-    from .pipeline import report_md, run, validate_output
+    from .pipeline import report_md, required_pipe_ids, run, validate_output
     from .scenario import load
 
     ap = argparse.ArgumentParser(description="S1-5 anytime 기준선 — 시간-품질 궤적 (D68)")
@@ -272,10 +285,21 @@ def main(argv=None) -> int:
             q.update({"expanded": e, "sec": round(t, 3), "move": kind})
             points.append(q)
         best = tr.points[-1][2]
-        out = run(sc, router=router, planner=lambda sc_, r_, tl: PlanResult(routes=best, order=list(best),
-                                                                             planner="anytime_best"))
+        # 최선 해의 실패 배관 분류 (D51·D60·D74, 순차 플래너와 같은 함수 — 예산 밖)
+        order = [p.id for p in default_order(sc)]
+        plan = PlanResult(routes=best, order=order, planner="anytime_best")
+        placed = {pid: r for pid, r in best.items() if r.status == "ok"}
+        solo_rb: dict = {}
+
+        def solo_routing_budget(pid):
+            if pid not in solo_rb:
+                solo_rb[pid] = router(sc, next(q for q in sc.pipes if q.id == pid), 60.0, [])
+            return solo_rb[pid]
+        classify_failures(plan, sc, router, 60.0, order, placed, best, solo_routing_budget)
+        out = run(sc, router=router, planner=lambda sc_, r_, tl: plan)
         validate_output(out)
-        curve = {"scenario": stem, "n_pipes": len(sc.pipes), "grid_variant": args.grid, "seed": args.seed, "search_budget": router.search_budget,
+        curve = {"scenario": stem, "n_pipes": len(sc.pipes), "required_pipes": len(required_pipe_ids(sc)[0]),
+                 "grid_variant": args.grid, "seed": args.seed, "search_budget": router.search_budget,
                  "stop": tr.stop, "max_sec": args.max_sec, "max_expanded": args.max_expanded,
                  "acceptance": "D75", "verified": tr.verified, "rejected": tr.rejected,
                  "t0_sec": round(tr.t0_sec, 3), "e0": tr.e0, "moves": tr.moves, "total_expanded": tr.total_expanded,
@@ -285,7 +309,8 @@ def main(argv=None) -> int:
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         (out_dir / f"{stem}_report.md").write_text(report_md(out, path), encoding="utf-8")
         print(f"{path}: t0 {tr.t0_sec:.0f}s · 점 {len(points)} · 이동 {tr.moves} · 확장 {tr.total_expanded} · "
-              f"최종 경로 {points[-1]['routed']} 통과 {points[-1]['success']} J {points[-1]['J_total']}")
+              f"최종 경로 {points[-1]['routed']} 통과 {points[-1]['success']} 완전 성공 {points[-1]['full_success']} "
+              f"J {points[-1]['J_total']}")
     return 0
 
 
