@@ -1,0 +1,510 @@
+{
+ "base:G0": {
+  "scenarios": 21,
+  "seeds": [
+   0
+  ],
+  "concurrency": [
+   2
+  ],
+  "machine": {
+   "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "cores": 4,
+   "python": "3.13.16",
+   "numpy": "2.5.3",
+   "numba": "0.68.0"
+  },
+  "search_budget": {
+   "kind": "expansions",
+   "limit": 4194304,
+   "diagnosis_limit": 16777216
+  },
+  "t0_max_sec": 351.111,
+  "e0_max": 14000460,
+  "total_sec_max": 975.504,
+  "moves": 4491,
+  "improvements": 5,
+  "wall": {
+   "60": null,
+   "300": null,
+   "900": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 0
+   },
+   "3600": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 21
+   }
+  },
+  "wall_t0x": {
+   "1": {
+    "success": 189,
+    "J_total": 320599.3,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "success": 189,
+    "J_total": 320452.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 0
+   },
+   "4": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 2
+   },
+   "8": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 11
+   }
+  },
+  "exp_e0x": {
+   "1": {
+    "success": 189,
+    "J_total": 320599.3,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "success": 189,
+    "J_total": 320472.4,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 0
+   },
+   "4": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 1
+   },
+   "8": {
+    "success": 189,
+    "J_total": 320367.8,
+    "routed": 189,
+    "interference_block": 0,
+    "success_rate": 0.922,
+    "pipes": 205,
+    "censored": 3
+   }
+  },
+  "final": {
+   "success": 189,
+   "J_total": 320367.8,
+   "routed": 189,
+   "interference_block": 0,
+   "success_rate": 0.922,
+   "pipes": 205,
+   "censored": 21
+  }
+ },
+ "base:G1": {
+  "scenarios": 21,
+  "seeds": [
+   0
+  ],
+  "concurrency": [
+   2
+  ],
+  "machine": {
+   "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "cores": 4,
+   "python": "3.13.16",
+   "numpy": "2.5.3",
+   "numba": "0.68.0"
+  },
+  "search_budget": {
+   "kind": "expansions",
+   "limit": 4194304,
+   "diagnosis_limit": 16777216
+  },
+  "t0_max_sec": 556.343,
+  "e0_max": 22682132,
+  "total_sec_max": 968.721,
+  "moves": 2359,
+  "improvements": 5,
+  "wall": {
+   "60": null,
+   "300": null,
+   "900": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 0
+   },
+   "3600": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 21
+   }
+  },
+  "wall_t0x": {
+   "1": {
+    "success": 193,
+    "J_total": 327354.9,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "success": 193,
+    "J_total": 327219.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 2
+   },
+   "4": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 5
+   },
+   "8": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 16
+   }
+  },
+  "exp_e0x": {
+   "1": {
+    "success": 193,
+    "J_total": 327354.9,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "success": 193,
+    "J_total": 327239.5,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 0
+   },
+   "4": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 2
+   },
+   "8": {
+    "success": 193,
+    "J_total": 327134.8,
+    "routed": 193,
+    "interference_block": 0,
+    "success_rate": 0.9415,
+    "pipes": 205,
+    "censored": 7
+   }
+  },
+  "final": {
+   "success": 193,
+   "J_total": 327134.8,
+   "routed": 193,
+   "interference_block": 0,
+   "success_rate": 0.9415,
+   "pipes": 205,
+   "censored": 21
+  }
+ },
+ "dense50:G0": {
+  "scenarios": 5,
+  "seeds": [
+   0
+  ],
+  "concurrency": [
+   2
+  ],
+  "machine": {
+   "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "cores": 4,
+   "python": "3.13.16",
+   "numpy": "2.5.3",
+   "numba": "0.68.0"
+  },
+  "search_budget": {
+   "kind": "expansions",
+   "limit": 4194304,
+   "diagnosis_limit": 16777216
+  },
+  "t0_max_sec": 2772.291,
+  "e0_max": 65588518,
+  "total_sec_max": 7237.241,
+  "moves": 66,
+  "improvements": 4,
+  "wall": {
+   "60": null,
+   "300": null,
+   "900": null,
+   "3600": {
+    "success": 223,
+    "J_total": 460896.1,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 0
+   }
+  },
+  "wall_t0x": {
+   "1": {
+    "success": 223,
+    "J_total": 461126.8,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 0
+   },
+   "2": {
+    "success": 223,
+    "J_total": 460279.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 0
+   },
+   "4": {
+    "success": 223,
+    "J_total": 460272.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 5
+   },
+   "8": {
+    "success": 223,
+    "J_total": 460272.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 5
+   }
+  },
+  "exp_e0x": {
+   "1": {
+    "success": 223,
+    "J_total": 461126.8,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 0
+   },
+   "2": {
+    "success": 223,
+    "J_total": 460279.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 1
+   },
+   "4": {
+    "success": 223,
+    "J_total": 460272.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 5
+   },
+   "8": {
+    "success": 223,
+    "J_total": 460272.9,
+    "routed": 226,
+    "interference_block": 2,
+    "success_rate": 0.892,
+    "pipes": 250,
+    "censored": 5
+   }
+  },
+  "final": {
+   "success": 223,
+   "J_total": 460272.9,
+   "routed": 226,
+   "interference_block": 2,
+   "success_rate": 0.892,
+   "pipes": 250,
+   "censored": 5
+  }
+ },
+ "dense50:G1": {
+  "scenarios": 5,
+  "seeds": [
+   0
+  ],
+  "concurrency": [
+   2
+  ],
+  "machine": {
+   "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "cores": 4,
+   "python": "3.13.16",
+   "numpy": "2.5.3",
+   "numba": "0.68.0"
+  },
+  "search_budget": {
+   "kind": "expansions",
+   "limit": 4194304,
+   "diagnosis_limit": 16777216
+  },
+  "t0_max_sec": 4809.634,
+  "e0_max": 81425123,
+  "total_sec_max": 7458.271,
+  "moves": 39,
+  "improvements": 5,
+  "wall": {
+   "60": null,
+   "300": null,
+   "900": null,
+   "3600": null
+  },
+  "wall_t0x": {
+   "1": {
+    "success": 222,
+    "J_total": 458696.3,
+    "routed": 225,
+    "interference_block": 3,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 0
+   },
+   "2": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 3
+   },
+   "4": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 5
+   },
+   "8": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 5
+   }
+  },
+  "exp_e0x": {
+   "1": {
+    "success": 222,
+    "J_total": 458696.3,
+    "routed": 225,
+    "interference_block": 3,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 0
+   },
+   "2": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 1
+   },
+   "4": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 5
+   },
+   "8": {
+    "success": 222,
+    "J_total": 457351.5,
+    "routed": 225,
+    "interference_block": 4,
+    "success_rate": 0.888,
+    "pipes": 250,
+    "censored": 5
+   }
+  },
+  "final": {
+   "success": 222,
+   "J_total": 457351.5,
+   "routed": 225,
+   "interference_block": 4,
+   "success_rate": 0.888,
+   "pipes": 250,
+   "censored": 5
+  }
+ }
+}
