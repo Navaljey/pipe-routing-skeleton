@@ -59,7 +59,7 @@
 |---|---|
 | 검증기·Layer 0 규칙 (collision · boundary · bend · gravity_slope · valve · branch · support) | `pipe_routing/verifier/`, CLAUDE.md §6·D44·D45~D48·D61 |
 | J 정의·물리 상수 (직관·엘보·티·밸브·서포트, §3 표) | CLAUDE.md §3·§5·D49, `pipe_routing/constants.py` |
-| 평가셋: 시나리오 파일·배관 수량·시드·파일 해시 | `scenarios/`, 동결본 `docs/eval_set_E1.md` (평가셋 E1, S1-7, D70) |
+| 평가셋: 시나리오 파일·배관 수량·시드·파일 해시 | `scenarios/`, 동결본 `docs/eval_set_E1.md` (평가셋 E1, S1-8, D70) |
 | 출력 스키마 | `schemas/scenario_output.schema.json` |
 | 탐색 예산 (D72·D73·D74) | 기준선 라우터 = 배관당 A* 확장 상태 수 상한 **4,194,304 (2²²)** (출력 global `search_budget`). 상태 `timeout` = 예산 소진 (budget_exhausted). 실패 분류용 진단 단독 재라우팅 = × 4 (16,777,216), 그래도 소진하면 `diagnosis_inconclusive` |
 | 시간 측정 방법 | `pipeline.run` — 시나리오 벽시계 `computation_time_sec` (라우팅 `routing_time_sec` + 검증 `verify_time_sec`), 배관별 `router.search_sec`·`graph_sec`, `peak_rss_mb`. 시나리오당 프로세스 1개. 병렬 수·머신은 결과와 함께 기록 |
@@ -102,7 +102,7 @@ V3 결과는 반드시 이 검증기로 판정한 출력 JSON 이어야 한다. 
 | 계단 확인 | 20264008 ~ 20264012 |
 
 **학습용·검증용 시드 범위**
-- 같은 생성기에서 시드 범위만 나눈다. `추정:` 아래 값은 S1-7 평가셋 E1 에서 확정한다 (D70).
+- 같은 생성기에서 시드 범위만 나눈다. `추정:` 아래 값은 S1-8 평가셋 E1 에서 확정한다 (D70).
   - 학습용: `30000000 ~ 39999999`
   - 검증용 (모델 선택·튜닝): `40000000 ~ 49999999`
 - 생성기 설정(배관 수·채움률·구경·중력관 비율 등)은 바꿔도 된다. 바꾼 설정은 결과와 함께 기록한다.
@@ -145,7 +145,7 @@ V3 결과는 반드시 이 검증기로 판정한 출력 JSON 이어야 한다. 
 
 | 판 | 세트 | 준비 시점 |
 |---|---|---|
-| E1 | 수작업 · 기본 · 계단 · 밀집 30 · 밀집 50 · 블록 쌍 | S1-7 |
+| E1 | 수작업 · 기본 · 계단 · 밀집 30 · 밀집 50 · 블록 쌍 | S1-8 |
 | E2 | E1 + 큰 맵 세트 | V3 2단계 전 |
 | E3 | E2 + 밸브·분기 세트 (skeleton S2, R6) | V3 4단계 전 |
 
@@ -181,7 +181,7 @@ V3 개발 중 규칙·검증기·지표·평가셋에서 문제를 발견하면 
 |---|---|
 | `docs/v3_contract.md` | 이 문서 — V3 개발 계약 (D71) |
 | `docs/v3_requirements.md` | skeleton 이 드러낸 V3 과제 R1~R6 (CLAUDE.md §11) |
-| `docs/eval_set_E1.md` | 평가셋 E1 — 동결된 세트·채점 규칙·기준선 결과 (S1-7, D70 — 아직 없음) |
+| `docs/eval_set_E1.md` | 평가셋 E1 — 동결된 세트·채점 규칙·기준선 결과 (S1-8, D70 — 아직 없음) |
 | `docs/slots.md` | 라우터·다중 배관 슬롯 시그니처 |
 | `CLAUDE.md` | 정본 사양: 결정 D·미결 M·상수·단계 |
 | `docs/reports/` | 단계별 측정 보고 |
