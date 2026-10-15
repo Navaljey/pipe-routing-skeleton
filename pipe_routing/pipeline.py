@@ -126,6 +126,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
+        **full_success_summary(routes),        # D77 ①
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
         "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
@@ -224,6 +225,30 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
     }
 
 
+def required_pipe_ids(sc_or_routes) -> tuple:
+    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관만 뺀 전부. "단독 도달 불가" 는 증명된 불가능이
+    아니므로 분모에 남는다 (D34). 반환 (필수 배관 id 목록, 제외 id 목록). 시나리오 또는 출력 routes[] 를 받는다."""
+    req, exc = [], []
+    if hasattr(sc_or_routes, "pipes"):
+        for p in sc_or_routes.pipes:
+            f = feasibility(p)
+            (exc if f and not f["feasible"] else req).append(p.id)
+    else:
+        for x in sc_or_routes:
+            f = x.get("gravity_feasibility")
+            (exc if f and not f["feasible"] else req).append(x["pipe_id"])
+    return req, exc
+
+
+def full_success_summary(routes: list) -> dict:
+    """D77 ①: 완전 성공 = 규칙상 가능한 배관이 모두 Layer 0 통과."""
+    req, exc = required_pipe_ids(routes)
+    ok = {x["pipe_id"] for x in routes if x["success"]}
+    passed = sum(1 for pid in req if pid in ok)
+    return {"full_success": passed == len(req), "required_pipes": len(req), "required_passed": passed,
+            "excluded_infeasible": exc}
+
+
 def validate_output(out: dict) -> None:
     schema = json.loads(OUTPUT_SCHEMA.read_text(encoding="utf-8"))
     jsonschema.validate(out, schema)
@@ -237,6 +262,9 @@ def report_md(out: dict, scenario_path: str = "") -> str:
     L += ["## 요약", "",
           "| 항목 | 값 |", "|---|---|",
           f"| 배관 | {g['total_pipes']} (경로 있음 {g['routed_count']}) |",
+          (f"| 완전 성공 (D77 ①) | {'예' if g['full_success'] else '아니오'} — 규칙상 가능한 {g['required_pipes']} 중 통과 "
+           f"{g['required_passed']} (제외: 규칙상 불가능 {', '.join(g['excluded_infeasible']) or '없음'}) |"
+           if "full_success" in g else "| 완전 성공 (D77 ①) | - |"),
           f"| Layer 0 전체 통과 | {g['success_count']} ({g['success_rate']:.0%}, 경로 있는 배관 기준 {g['success_rate_routed'] or 0:.0%}) |",
           f"| J_total (성공 배관 합) | {g['J_total']:,.2f} kg |",
           "| J 분해 (성공 배관) | " + " · ".join(f"{k} {v:,.2f}" for k, v in g["J_breakdown_success"].items()) + " |",

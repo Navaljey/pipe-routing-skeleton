@@ -19,12 +19,22 @@ from pathlib import Path
 
 WALL_GRID = (60, 300, 900, 3600)
 T0_MULT = (1, 2, 4, 8)
-METRICS = ("success", "success_rate", "J_total", "routed", "interference_block")
-SUM_METRICS = ("success", "J_total", "routed", "interference_block")
+METRICS = ("full_success", "success", "success_rate", "J_total", "routed", "interference_block")
+SUM_METRICS = ("full_success", "success", "J_total", "routed", "interference_block")   # D77 ①→②→③ 순
 
 
 def load_curves(d) -> list:
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(Path(d).glob("*_curve.json"))]
+    return [_backfill(json.loads(p.read_text(encoding="utf-8"))) for p in sorted(Path(d).glob("*_curve.json"))]
+
+
+def _backfill(c: dict) -> dict:
+    """D77 이전 곡선: full_success 가 없으면 (통과 수 ≥ required_pipes) 로 채운다. D64 규칙상 불가능 배관은 낙차 하한을
+    못 맞춰 Layer 0 를 통과할 수 없으므로 같은 값이다. required_pipes 도 없으면 채우지 않는다 (집계에서 0)."""
+    req = c.get("required_pipes")
+    for p in c["points"]:
+        if "full_success" not in p:
+            p["full_success"] = int(p["success"] >= req) if req is not None else 0
+    return c
 
 
 def value_at(curve: dict, budget: float, axis: str = "sec"):
@@ -54,7 +64,7 @@ def set_value(curves: list, budget: float, axis: str = "sec") -> dict:
         if pt is None:
             return None
         for m in SUM_METRICS:
-            agg[m] += pt[m]
+            agg[m] += pt.get(m, 0)
         n += c.get("n_pipes") or n_pipes(c)
         cens += int(ce)
     agg["J_total"] = round(agg["J_total"], 1)
@@ -71,7 +81,7 @@ def relative_value(curves: list, mult: float, axis: str = "sec") -> dict:
         b = (c["t0_sec"] if axis == "sec" else c["e0"]) * mult
         pt, ce = value_at(c, b, axis)
         for m in SUM_METRICS:
-            agg[m] += pt[m]
+            agg[m] += pt.get(m, 0)
         n += c.get("n_pipes") or n_pipes(c)
         cens += int(ce)
     agg["J_total"] = round(agg["J_total"], 1)
@@ -118,8 +128,9 @@ def figure(groups: dict, axis: str = "sec"):
     from plotly.subplots import make_subplots
 
     sets = sorted({lab.split(":")[0] for lab in groups}, key=lambda s: (s != "base", s))
-    rows = [("first", "첫 해를 낸 시나리오 수 (t₀ 분포)"), ("success", "Layer 0 통과 배관 수"),
-            ("J_total", "J_total (통과 배관 합, kg)"), ("routed", "경로 배관 수"), ("interference_block", "간섭-차단 수")]
+    rows = [("first", "첫 해를 낸 시나리오 수 (t₀ 분포)"), ("full_success", "① 완전 성공 시나리오 수 (D77)"),
+            ("success", "② Layer 0 통과 배관 수"),
+            ("J_total", "③ J_total (통과 배관 합, kg)"), ("routed", "경로 배관 수"), ("interference_block", "간섭-차단 수")]
     colors = {"G0": "#2a6fdb", "G1": "#d9822b"}
     fig = make_subplots(rows=len(rows), cols=len(sets), shared_xaxes=False, vertical_spacing=0.06,
                         horizontal_spacing=0.08,

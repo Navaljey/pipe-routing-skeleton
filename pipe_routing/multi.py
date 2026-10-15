@@ -146,8 +146,19 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after}")
             tried.clear()                            # 상태가 바뀌었으니 다른 실패 배관을 다시 시도할 수 있다
 
-    # D50⑥ · D51 · D60 · D74: 최종 실패 배관 분류. 단독 경로가 라우팅 예산을 소진했으면 진단 예산(× 4)으로 다시 —
-    # 분류에만 쓰고 경로·J·성공에는 쓰지 않는다. 예산 안에서 끝난 단독 결과는 진단 예산으로도 같다 (A* 결정적).
+    classify_failures(res, sc, router, time_limit, order, placed, routes, solo)
+    res.routes = routes
+    res.total_sec = time.perf_counter() - t0
+    return res
+
+
+def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limit: float, order, placed: dict,
+                      routes: dict, solo: Callable) -> None:
+    """D50⑥ · D51 · D60 · D74: 최종 실패 배관(placed 에 없는 배관) 분류를 res.fail_class·fail_detail 에 쓴다.
+    solo(pid) = 라우팅 예산 단독 결과 (캐시). 단독 경로가 라우팅 예산을 소진했으면 진단 예산(× 4)으로 다시 —
+    분류에만 쓰고 경로·J·성공에는 쓰지 않는다. 예산 안에서 끝난 단독 결과는 진단 예산으로도 같다 (A* 결정적).
+    순차 플래너와 anytime 기준선(최선 해, 예산 밖)이 같은 함수를 쓴다."""
+    pipes = {p.id: p for p in sc.pipes}
     diag = getattr(router, "diagnostic", None)
 
     def diag_solo(pid):
@@ -184,9 +195,6 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
                 detail["reservation_conflict"] = r2.status == "ok"
             res.fail_class[pid] = cls
             res.fail_detail[pid] = detail
-    res.routes = routes
-    res.total_sec = time.perf_counter() - t0
-    return res
 
 
 def independent_planner(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0) -> PlanResult:
