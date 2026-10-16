@@ -5,12 +5,15 @@
   지지면 쪽 표면 높이(바닥 = 아랫면 z − OD/2, 천장 = 윗면 z + OD/2) 차이 ≤ 50 mm, 가로대 폭 L1·다리 높이 L2 가
   D 표(L1 = D1 표, L2 = D2 표, 기준 구경 = 묶음 최대 구경) 범위 안, 가로대·다리가 장애물·묶이지 않은 배관과 간섭 없음,
   묶음 무게 < 개별 합일 때만. 좌표 순서 탐욕 (같은 축 위치의 서포트를 가로 방향 순서로 하나씩 붙여 본다).
-배관별 kg_share = 묶음 무게를 얹힌 배관 수로 똑같이 나눈 값 (`추정:`), J 서포트 항은 이 값을 쓴다.
+배관별 kg_share = 묶음 무게를 얹힌 배관들의 직관 단위중량(§3.1 kg/m) 비례로 나눈 값 (D81 J 귀속 규칙 — 물리적 유일해가
+없는 회계 규약), J 서포트 항은 이 값을 쓴다.
 """
 import numpy as np
 
 from .. import support_std as ss
+from ..constants import PIPE_SPECS
 
+ATTRIBUTION_RULE = "unit_weight_proportional"   # D81
 WINDOW_MM = 250.0
 SURFACE_TOL_MM = 50.0
 
@@ -126,9 +129,11 @@ def group_d(ctx, reports) -> int:
         kg, ang, mem, L1, L2, basis = best
         n_groups += 1
         gid = f"D{n_groups:03d}"
-        share = kg / len(grp)
+        w = {g["pid"]: PIPE_SPECS[g["nd"]].kg_per_m for g in grp}
+        wsum = sum(w.values())
         carried = sorted(g["pid"] for g in grp)
         for j, g in enumerate(grp):
+            share = kg * w[g["pid"]] / wsum
             used.add((g["pid"], g["i"]))
             s = reports[g["pid"]].supports[g["i"]]
             s.update({"form": "D", "variant": "standard", "section": ang, "group": gid, "carried": carried,

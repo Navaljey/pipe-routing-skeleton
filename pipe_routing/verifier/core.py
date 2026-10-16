@@ -104,31 +104,45 @@ def verify(scenario: Scenario, routes: list, modules=None, std=None) -> dict:
     """
     from . import modules as _  # noqa: F401  (모듈 등록)
     t0 = time.perf_counter()
+    timing = {"centerline": 0.0, **{m: 0.0 for m in (modules or MODULE_ORDER)}, "group_d": 0.0}   # D84 시간 분해
     pipes = {p.id: p for p in scenario.pipes}
     rmap = {r.pipe_id: r for r in routes if r.waypoints}
-    cls = {}
-    for pid, r in rmap.items():
-        R = elbow_radius(pipes[pid].nominal_size)
-        cls[pid] = [build_centerline(r.waypoints, R, ANGLE_TOL_DEG)] + \
-                   [build_centerline(b, R, ANGLE_TOL_DEG) for b in r.branches if len(b) >= 2]
+    cls = {pid: centerlines_of(pipes[pid], r) for pid, r in rmap.items()}
+    timing["centerline"] = time.perf_counter() - t0
     from ..support_std import load_standard
     ctx = Context(scenario, pipes, rmap, cls, std=std or load_standard())
-    out = {}
-    for p in scenario.pipes:
-        rep = PipeReport(p.id, p.id in rmap)
-        if rep.routed:
-            for name in modules or MODULE_ORDER:
-                res = MODULES[name](ctx, rmap[p.id])
-                rep.layer0[name] = None if res is None else not res
-                rep.violations += res or []
-            rep.fittings = fittings_of(cls[p.id], p)
-            rep.supports = ctx.cache.get(("supports", p.id), [])
-            rep.support_gaps = ctx.cache.get(("support_gaps", p.id), [])
-        out[p.id] = rep
+    out = {p.id: pipe_report(ctx, p, modules, timing) for p in scenario.pipes}
     if modules is None or "support" in modules:
         from .support_group import group_d
+        t1 = time.perf_counter()
         group_d(ctx, out)   # D80 ⑥: 배치 후 병합만 (위치 불변)
-    return {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info()}
+        timing["group_d"] = time.perf_counter() - t1
+    return {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info(),
+            "timing": timing}
+
+
+def centerlines_of(pipe: Pipe, r: PipeRoute) -> list:
+    """주관 + 분기 실제 중심선 (D44)."""
+    R = elbow_radius(pipe.nominal_size)
+    return [build_centerline(r.waypoints, R, ANGLE_TOL_DEG)] + \
+           [build_centerline(b, R, ANGLE_TOL_DEG) for b in r.branches if len(b) >= 2]
+
+
+def pipe_report(ctx: Context, p: Pipe, modules=None, timing=None) -> "PipeReport":
+    """배관 하나의 Layer 0 판정 (D 묶음 전). 증분 검증(D85)도 이 함수를 쓴다."""
+    rep = PipeReport(p.id, p.id in ctx.routes)
+    if rep.routed:
+        for name in modules or MODULE_ORDER:
+            t = time.perf_counter()
+            res = MODULES[name](ctx, ctx.routes[p.id])
+            if timing is not None:
+                timing[name] += time.perf_counter() - t
+            rep.layer0[name] = None if res is None else not res
+            rep.violations += res or []
+        rep.fittings = fittings_of(ctx.centerlines[p.id], p)
+        rep.supports = ctx.cache.get(("supports", p.id), [])
+        rep.support_gaps = ctx.cache.get(("support_gaps", p.id), [])
+    return rep
 
 
 def fittings_of(cls: list, pipe: Pipe) -> list:

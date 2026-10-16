@@ -292,11 +292,19 @@ def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, 
         hit |= near
     if others is not None and len(others[0]):
         oA, oB, oR, oS = others
+        olo, ohi = np.minimum(oA, oB), np.maximum(oA, oB)
+        lim = oR + oS + half + 1.0      # 결과 불변 가속 (D84): 이보다 먼 조각은 판정을 바꿀 수 없다
         idx = np.nonzero(vf & ~hit)[0]
         for k0 in range(0, len(idx), 256):
             ii = idx[k0:k0 + 256]
-            d, _, _ = segment_segment_distance(Af[ii][:, None], Bf[ii][:, None], oA[None], oB[None])
-            hit[ii] |= np.any(d - oS[None] < oR[None] + half - _EPS, 1)
+            clo = np.minimum(Af[ii], Bf[ii]).min(0)
+            chi = np.maximum(Af[ii], Bf[ii]).max(0)
+            g = np.maximum(0.0, np.maximum(olo - chi, clo - ohi))
+            jj = np.nonzero(np.sqrt((g * g).sum(-1)) <= lim)[0]   # 선분 거리 ≥ AABB 간격
+            if not len(jj):
+                continue
+            d, _, _ = segment_segment_distance(Af[ii][:, None], Bf[ii][:, None], oA[jj][None], oB[jj][None])
+            hit[ii] |= np.any(d - oS[jj][None] < oR[jj][None] + half - _EPS, 1)
     bad |= hit.reshape(N, M).any(1)
     return bad
 
