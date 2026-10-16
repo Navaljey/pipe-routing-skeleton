@@ -37,7 +37,8 @@ def supports_kg(sc, p, wps):
 @unittest.skipUnless(astar_fast.HAVE_NUMBA, "numba 없음")
 class SupportCostTest(unittest.TestCase):
     def test_route_avoids_long_supports_over_equipment(self):
-        """추정 서포트를 넣으면 장비 위를 곧장 지나는 경로 대신 구조면 가까이 도는 경로를 고르고, 검증기 J 가 준다."""
+        """D80 ⑨: 서포트 모델을 넣으면 장비 위(바닥 C 다리 막힘, 천장·격벽은 표 범위 밖)를 곧장 지나는 경로 대신
+        서포트 가능한 쪽으로 돌고, 검증기 support 통과. 서포트를 모르면 곧장 가서 support 위반."""
         sc = from_dict(EQUIP)
         p = sc.pipes[0]
         clear_cache()
@@ -45,9 +46,10 @@ class SupportCostTest(unittest.TestCase):
         r1 = _route(LayeredGraph(sc, p, support_cost=True), p, 60)
         self.assertEqual(len(r0.waypoints), 2)                    # 서포트를 모르면 장비 위를 곧장
         self.assertGreater(len(r1.waypoints), 2)                  # 알면 돌아간다
-        s0, s1 = supports_kg(sc, p, r0.waypoints), supports_kg(sc, p, r1.waypoints)
-        self.assertLess(s1, s0 / 2)
-        self.assertLess(r1.J_pipe + r1.J_elbow + s1, r0.J_pipe + r0.J_elbow + s0)   # 검증기 기준 J (직관+엘보+서포트)
+        v0 = verify(sc, [PipeRoute(p.id, r0.waypoints)], modules=["support"])["pipes"][p.id]
+        v1 = verify(sc, [PipeRoute(p.id, r1.waypoints)], modules=["support"])["pipes"][p.id]
+        self.assertFalse(v0.layer0["support"])
+        self.assertTrue(v1.layer0["support"], [v.message for v in v1.violations])
         self.assertGreater(r1.J_support_est, 0)
 
     def test_support_cost_nonnegative_and_heuristic_admissible(self):
