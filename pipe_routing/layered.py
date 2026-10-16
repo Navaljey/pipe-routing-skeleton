@@ -359,6 +359,9 @@ class LayeredGraph:
         self._ls = line_support(F, sc, pipe) if support_cost else None
         hm, vm = SUPPORT_SPACING[pipe.nominal_size]
         self.smax_dir = np.array([vm if (DIRS[d][0] == 0 and DIRS[d][1] == 0) else hm for d in range(18)], float)
+        # 꺾임 등급(0/45/90/135)별 u 추가 = 2·t_θ / 수평 간격 (support_router.support_step)
+        self.bend_u = np.array([0.0] + [2 * elbow_tangent(pipe.nominal_size, a) / hm for a in (45, 90, 135)]) \
+            if support_cost else np.zeros(4)
         self.incremental = bool(incremental and not patches)
         self._items = [(("P", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
                        for op, w in others if w] + \
@@ -852,7 +855,8 @@ class LayeredGraph:
                 if not ok:
                     continue
                 hz = round(h2, 6)
-            su, ok = support_step(state.su, int(self.spack[state.node, d]), length, float(self.smax_dir[d]))
+            su, ok = support_step(state.su, int(self.spack[state.node, d]), length, float(self.smax_dir[d]),
+                                  float(self.bend_u[ANG_INDEX[defl]]) if self._sup is not None else 0.0)
             if not ok:   # D80 ⑨: 최대 간격 안에 서포트 가능 지점이 없다
                 continue
             if defl:

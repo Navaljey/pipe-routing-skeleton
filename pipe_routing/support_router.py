@@ -377,9 +377,12 @@ def _convex_interval(a, b, ax, bl, bh, h):
     return [s, lo]
 
 
-def support_step(u: float, pk: int, length: float, smax: float):
+def support_step(u: float, pk: int, length: float, smax: float, bend_u: float = 0.0):
     """D80 ⑨ 상태 갱신 (라우터 파이썬판, 컴파일판과 같은 식). 반환 (새 u, 가능 여부).
-    가능 점이 없으면 u + L/smax ≤ 1, 있으면 u + a/smax ≤ 1 이고 g/smax ≤ 1, 새 u = b/smax."""
+    가능 점이 없으면 u + L/smax ≤ 1, 있으면 u + a/smax ≤ 1 이고 g/smax ≤ 1, 새 u = b/smax.
+    bend_u = 이 엣지 시작에서 꺾으면 2·t_θ / 수평 간격 — 검증기 중심선은 꺾임점을 엘보 호로 바꾸므로 꺾임점 앞뒤 t 안은
+    서포트 가능 점으로 치지 않는다 (보수적, 호 조각은 수평 간격으로 정규화 — 검증기와 같음)."""
+    u = u + bend_u
     a = pk & MASK
     if a == NONE:
         nu = u + length / smax

@@ -532,7 +532,7 @@ if HAVE_NUMBA:
         ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
-        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat, dkind, gpar, spack, smaxd) = T
+        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat, dkind, gpar, spack, smaxd, bendu) = T
         gflag = gpar[0] > 0.5   # D61 중력관
         lmax = gpar[1]
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
@@ -645,13 +645,14 @@ if HAVE_NUMBA:
                 pk = spack[cflat, d]
                 sm = smaxd[d]
                 pa = pk & 2097151
+                cu2 = cu + bendu[di]
                 if pa == 2097151:
-                    nu = cu + length / sm
+                    nu = cu2 + length / sm
                     if not (nu <= 1 + 1e-9):
                         continue
                     nu = _round6(nu)
                 else:
-                    if not (cu + pa / sm <= 1 + 1e-9):
+                    if not (cu2 + pa / sm <= 1 + 1e-9):
                         continue
                     if not (((pk >> 42) & 2097151) / sm <= 1 + 1e-9):
                         continue
@@ -747,7 +748,7 @@ def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None):
     P = space.pos
     T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node),
-         _DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, _lmax(pipe)]), space.spack, space.smax_dir)
+         _DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, _lmax(pipe)]), space.spack, space.smax_dir, space.bend_u)
     _, C = _consts(space, pipe, goal)
     G = _arc_tables(space)
     _CURRENT.update(space=space)
