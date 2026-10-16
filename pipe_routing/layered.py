@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent, support_kg
+from .constants import PIPE_SPECS, SUPPORT_SPACING, elbow_kg, elbow_tangent
 from .escape_graph import EPS, EscapeGraph, _snap_down, _snap_up, swap_mask
 from .router_astar import RouteResult, _finish_chain, heuristic_factory
 from .gravity import gravity_lmax, move_kind
@@ -29,7 +29,8 @@ from .gravity import step as gstep
 from .space import DEFLECTION, DIRS
 
 ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
-from .verifier.geom import support_faces
+from .support_router import LineSupport, reverse as reverse_support, support_step
+from .support_std import load_standard
 
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
@@ -111,17 +112,53 @@ def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec):
     return [xs, ys, zs]
 
 
-def fixed_layer(sc, pipe, grid: GridSpec = G0):
+def support_extra_coords(sc, size: str):
+    """D80 ⑨ 서포트 보조 격자 좌표 [x, y, z] — 배치와 무관, 규칙에서만 정한다. `추정:`
+      ① 서포트 띠 경계: 바닥·천장 형식(C) 표 끝 바로 안쪽 높이 (z = L_max − 10, H − L_max + 10), 격벽 형식(A·B) 표 끝
+         바로 안쪽 (x·y = L_max − 10, 끝 − L_max + 10) — 띠 안으로 들어갈 노드
+      ② 단자 첫 꺾임 선: 그 구경 배관 단자마다 단자 방향 축으로 첫(마지막) 꺾임 최소 직관만큼 떨어진 좌표
+         (max(§3.3, t₁₃₅), 경계 단자는 r + t₁₃₅, 10 mm 올림) — 단자 바로 앞에서 띠 쪽으로 꺾을 수 있게."""
+    from .support_std import band_lmax, load_standard
+    std = load_standard()
+    ext = sc.block.extent
+    lm = band_lmax(std, size)
+    out = [[], [], []]
+    for f, (ax, side) in ss_face_axis().items():
+        L = lm[f]
+        if math.isfinite(L) and 0 < L < ext[ax]:
+            out[ax].append(_snap_down(L - 10) if side == 0 else _snap_up(ext[ax] - L + 10))
+    t135 = elbow_tangent(size, 135)
+    for p in sc.pipes:
+        if p.nominal_size != size:
+            continue
+        for term, sgn in ((p.start, 1.0), (p.end, -1.0)):
+            d = np.asarray(term.dir, dtype=float)
+            ax = int(np.argmax(np.abs(d)))
+            need = max(p.min_straight, t135) if term.kind != "boundary" else max(p.min_straight, p.radius + t135)
+            out[ax].append(float(term.pos[ax]) + sgn * d[ax] * _snap_up(need))
+    return out
+
+
+def ss_face_axis():
+    from .support_std import FACE_AXIS
+    return FACE_AXIS
+
+
+def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True):
     """구경별 고정 레이어 (캐시). 반환: (그래프, 이번 호출에서 쓴 구성 시간).
-    D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다."""
+    D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다. support_lines = D80 ⑨ 서포트 보조 격자선."""
     gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
-    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2)
+    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2, support_lines)
     hit = _FIXED.get(key)
     if hit is not None and hit[0] is sc:
         return hit[1], 0.0
     same = [p for p in sc.pipes if p.nominal_size == pipe.nominal_size]
+    extra = grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid)
+    if support_lines:
+        sl = support_extra_coords(sc, pipe.nominal_size)
+        extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], sl)]
     g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
-                    extra_coords=grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid))
+                    extra_coords=extra)
     _FIXED[key] = (sc, g)
     return g, g.build_sec
 
@@ -133,11 +170,11 @@ def clear_cache():
 def fixed_layer_stats(sc) -> list:
     """이 시나리오에서 만든 고정 레이어 목록 (D66 보고용): 구경·중력관 층·G2 간격·격자·노드·엣지·생성 시간."""
     out = []
-    for (sid, size, grav, g2), (s, F) in _FIXED.items():
+    for (sid, size, grav, g2, slines), (s, F) in _FIXED.items():
         if s is not sc:
             continue
         edges = int(sum(int(m.sum()) for m in F.axis_ok) + sum(int(m.sum()) for m in F.diag_ok.values()) // 2)
-        out.append({"size": size, "gravity_layer": grav, "g2": g2, "grid": list(F.shape),
+        out.append({"size": size, "gravity_layer": grav, "g2": g2, "support_lines": slines, "grid": list(F.shape),
                     "nodes": int(F.node_ok.sum()), "edges": edges, "build_sec": round(F.build_sec, 3)})
     return sorted(out, key=lambda x: (int(x["size"][:-1]), x["gravity_layer"]))
 
@@ -161,51 +198,59 @@ def terminal_reservations(sc, exclude=()) -> list:
     return out
 
 
-def support_edge_cost(ext, box_lo, box_hi, size: str, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
-    """D57 직관 구간의 추정 서포트 비용 (kg) — 구간 길이 ÷ 최대 간격 × 서포트 1개 kg.
-
-    지지면 = 검증기와 같은 규칙·함수(support_faces, D46): 배관 축과 평행하지 않은 법선의 면 중 고정 장애물에 막히지 않는
-    가장 가까운 면. 다른 놓인 배관에 의한 막힘은 무시 (D57 근사).
-    `추정:` ① 거리·막힘은 구간 중점 한 곳에서 본다 (45° 구간처럼 거리가 변하거나 구간 중간에 막히는 면이 바뀌어도 중점 값)
-            ② 모든 면이 막히면 막힘을 무시한 가장 먼 후보 면 거리로 친다 (보수적, 검증기는 이 위치에 서포트를 못 둔다)
-            ③ 단자를 고정점으로 보는 효과(간격 계산이 단자에서 끊김)는 넣지 않는다 — 길이에 비례하는 밀도로만 본다
-            ④ 수직 구간 = 수직 최대 간격, 그 밖(45° 포함) = 수평 최대 간격 (검증기와 같음)
-    """
-    if not len(P0):
-        return np.zeros(0)
-    D = P1 - P0
-    L = np.linalg.norm(D, axis=1)
-    U = D / np.where(L > 0, L, 1.0)[:, None]
-    dist, blocked = support_faces(ext, box_lo, box_hi, (P0 + P1) / 2, U)
-    d_ok = np.where(blocked, np.inf, dist)
-    dmin = d_ok.min(1)
-    far = np.where(np.isfinite(dist), dist, -np.inf).max(1)
-    dmin = np.where(np.isfinite(dmin), dmin, far)
-    hmax, vmax = SUPPORT_SPACING[size]
-    smax = np.where(np.abs(U[:, 2]) >= 1 - 1e-9, vmax, hmax)
-    return L / smax * support_kg(dmin)
+def line_support(F, sc, pipe) -> LineSupport:
+    """D80 ⑨ 라우터 서포트 모델 (구경·표준별 1회, 고정 레이어에 캐시)."""
+    std = load_standard()
+    key = (pipe.nominal_size, std.sha256)
+    cache = F.__dict__.setdefault("_line_support", {})
+    if key not in cache:
+        cache[key] = LineSupport(std, sc.block.extent, F.box_lo, F.box_hi, pipe.nominal_size, pipe.od,
+                                 SUPPORT_SPACING[pipe.nominal_size])
+    return cache[key]
 
 
-def _fixed_support(F, sc, size):
-    """고정 레이어 엣지의 추정 서포트 비용 (구경별 1회, 고정 레이어에 캐시). axis[ax][idx], diag[d][idx] (idx = 출발 격자점)."""
-    hit = getattr(F, "_support_cache", None)
-    if hit is not None:
-        return hit
-    ext = np.array(sc.block.extent, dtype=float)
+def support_edge_model(LS: LineSupport, P0: np.ndarray, P1: np.ndarray):
+    """엣지들 → (추정 서포트 비용 kg, 서포트 가능 구간 요약 pack) (D80 ⑨). 축 엣지는 격자선 모델, 45° 는 중점."""
+    n = len(P0)
+    cost = np.zeros(n)
+    pk = np.zeros(n, dtype=np.int64)
+    if not n:
+        return cost, pk
+    D = np.abs(P1 - P0)
+    nz = (D > 1e-9).sum(1)
+    for ax in range(3):
+        sel = np.nonzero((nz == 1) & (D[:, ax] > 1e-9))[0]
+        if len(sel):
+            cost[sel], pk[sel] = LS.axis_edges(ax, P0[sel], P1[sel])
+    sel = np.nonzero(nz > 1)[0]
+    if len(sel):
+        cost[sel], pk[sel] = LS.diag_edges(P0[sel], P1[sel])
+    return cost, pk
+
+
+def _fixed_support(F, sc, pipe):
+    """고정 레이어 엣지의 (비용, pack) — 구경·표준별 1회 캐시. axis[ax] = (cost, pack) 배열 (F.shape), diag[d] 도 같다."""
+    LS = line_support(F, sc, pipe)
+    key = (pipe.nominal_size, LS.std.sha256)
+    cache = F.__dict__.setdefault("_support_cache", {})
+    if key in cache:
+        return cache[key]
     axis = []
     for ax in range(3):
-        arr = np.zeros(F.shape)
+        c_arr = np.zeros(F.shape)
+        p_arr = np.zeros(F.shape, dtype=np.int64)
         idx = np.nonzero(F.axis_ok[ax])
         if len(idx[0]):
             P0 = np.stack([F.axes[k][idx[k]] for k in range(3)], -1)
             nxt = list(idx)
             nxt[ax] = idx[ax] + 1
             P1 = np.stack([F.axes[k][nxt[k]] for k in range(3)], -1)
-            arr[idx] = support_edge_cost(ext, F.box_lo, F.box_hi, size, P0, P1)
-        axis.append(arr)
+            c_arr[idx], p_arr[idx] = support_edge_model(LS, P0, P1)
+        axis.append((c_arr, p_arr))
     diag = {}
     for d in range(6, 18):
-        arr = np.zeros(F.shape)
+        c_arr = np.zeros(F.shape)
+        p_arr = np.zeros(F.shape, dtype=np.int64)
         idx = np.nonzero(F.diag_ok[d])
         if len(idx[0]):
             pa, pb = [k for k in range(3) if DIRS[d][k] != 0]
@@ -215,10 +260,10 @@ def _fixed_support(F, sc, size):
             dst[pb] = to_b[idx[pa], idx[pb]]
             P0 = np.stack([F.axes[k][idx[k]] for k in range(3)], -1)
             P1 = np.stack([F.axes[k][dst[k]] for k in range(3)], -1)
-            arr[idx] = support_edge_cost(ext, F.box_lo, F.box_hi, size, P0, P1)
-        diag[d] = arr
-    F._support_cache = (axis, diag)
-    return F._support_cache
+            c_arr[idx], p_arr[idx] = support_edge_model(LS, P0, P1)
+        diag[d] = (c_arr, p_arr)
+    cache[key] = (axis, diag)
+    return cache[key]
 
 
 class _Scratch:
@@ -237,7 +282,7 @@ class LayeredGraph:
     _segments_clear = EscapeGraph._segments_clear
 
     def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0,
-                 incremental: bool = True):
+                 incremental: bool = True, support_lines: bool = True):
         """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
         reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음).
         grid: D66 고정층 격자 보강 변형 (기본 G0).
@@ -245,7 +290,7 @@ class LayeredGraph:
         항목 단위로 캐시하고, 지금 항목 집합으로 합성한다 (AND·min — 전체 재계산과 비트 동일). False = 매번 전체 재계산
         (시험 대조용)."""
         t0 = time.perf_counter()
-        F, fixed_sec = fixed_layer(sc, pipe, grid)
+        F, fixed_sec = fixed_layer(sc, pipe, grid, support_lines=support_cost and support_lines)
         self.grid = grid
         self.fixed = F
         self.pipe = pipe
@@ -310,7 +355,10 @@ class LayeredGraph:
         # pipe_margin 은 엘보 빠른 통과 판정(이격 ≥ r + t)에만 쓴다
         self.use_support_cost = support_cost
         self._ext = np.array(sc.block.extent, dtype=float)
-        self._sup = _fixed_support(F, sc, pipe.nominal_size) if support_cost else None
+        self._sup = _fixed_support(F, sc, pipe) if support_cost else None
+        self._ls = line_support(F, sc, pipe) if support_cost else None
+        hm, vm = SUPPORT_SPACING[pipe.nominal_size]
+        self.smax_dir = np.array([vm if (DIRS[d][0] == 0 and DIRS[d][1] == 0) else hm for d in range(18)], float)
         self.incremental = bool(incremental and not patches)
         self._items = [(("P", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
                        for op, w in others if w] + \
@@ -325,6 +373,7 @@ class LayeredGraph:
         self.step = np.full((N, 18), -1, dtype=np.int64)
         self.elen = np.zeros((N, 18))
         self.scost = np.zeros((N, 18))
+        self.spack = np.zeros((N, 18), dtype=np.int64)   # D80 ⑨ 서포트 가능 구간 요약 (0 = 제약 없음)
         self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
         if self.incremental:
             self.n_edges = self._incremental_edges(F, is_base, bi, first)
@@ -386,7 +435,8 @@ class LayeredGraph:
         """변형 A 의 고정 레이어 엣지 목록 (놓인 배관과 무관한 부분) — 고정 레이어에 1회 캐시.
         axis[ax]·diag[d] = {a: 시작 노드, b: 끝 노드, obs: 고정 장애물 마스크, L: 길이, sc: 추정 서포트}.
         _axis_edges·_diag_edges 와 같은 식. 좌표는 저장하지 않고 노드 번호로 (메모리)."""
-        key = ("tmpl", self.r, self.use_support_cost)
+        key = ("tmpl", self.r, self.use_support_cost, self._ls.std.sha256 if self._ls else None,
+               self.pipe.nominal_size if self.use_support_cost else None)
         cache = F.__dict__.setdefault("_tmpl_cache", {})
         hit = cache.get(key)
         if hit is not None:
@@ -415,14 +465,15 @@ class LayeredGraph:
             a, b, adj = a[sel], b[sel], adj[sel]
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
             sc_ = np.zeros(len(a))
+            sp_ = np.zeros(len(a), dtype=np.int64)
             if self._sup is not None:
                 ia = Fidx[a[adj]]
-                sc_[adj] = self._sup[0][ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sc_[adj] = self._sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sp_[adj] = self._sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
                 r_ = np.nonzero(~adj)[0]
-                sc_[r_] = support_edge_cost(self._ext, self.box_lo, self.box_hi, self.pipe.nominal_size,
-                                            self.pos[a[r_]], self.pos[b[r_]])
+                sc_[r_], sp_[r_] = support_edge_model(self._ls, self.pos[a[r_]], self.pos[b[r_]])
             axis.append({"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
-                         "sc": sc_})
+                         "sc": sc_, "sp": sp_})
         diag = {}
         for d in range(6, 18):
             vec = DIRS[d]
@@ -439,7 +490,8 @@ class LayeredGraph:
             obs = F.diag_mask[d][src] if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.uint16)
             diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": obs.astype(np.uint16),
                        "L": np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1),
-                       "sc": self._sup[1][d][src] if self._sup is not None else np.zeros(len(s_id))}
+                       "sc": self._sup[1][d][0][src] if self._sup is not None else np.zeros(len(s_id)),
+                       "sp": self._sup[1][d][1][src] if self._sup is not None else np.zeros(len(s_id), np.int64)}
         cache[key] = {"axis": axis, "diag": diag}
         return cache[key]
 
@@ -463,6 +515,8 @@ class LayeredGraph:
             if self._sup is not None:
                 self.scost[a, dp] = e["sc"][keep]
                 self.scost[b, dm] = e["sc"][keep]
+                self.spack[a, dp] = e["sp"][keep]
+                self.spack[b, dm] = reverse_support(e["sp"][keep])
             n += len(a)
         nd = 0
         for d, e in tmpl["diag"].items():
@@ -477,6 +531,7 @@ class LayeredGraph:
             self.elen[s_id, d] = e["L"][keep]
             if self._sup is not None:
                 self.scost[s_id, d] = e["sc"][keep]
+                self.spack[s_id, d] = e["sp"][keep]
             nd += len(s_id)
         return n + nd // 2
 
@@ -641,13 +696,16 @@ class LayeredGraph:
             if self._sup is not None:      # D57: 고정 레이어 인접 엣지는 캐시, 그 밖(패치)은 같은 함수로 계산
                 adj = adj[sel]
                 sc_ = np.empty(len(a))
+                sp_ = np.zeros(len(a), dtype=np.int64)
                 ia = Fidx[a[adj]]
-                sc_[adj] = self._sup[0][ax][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sc_[adj] = self._sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sp_[adj] = self._sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
                 rest = np.nonzero(~adj)[0]
-                sc_[rest] = support_edge_cost(self._ext, self.box_lo, self.box_hi, self.pipe.nominal_size,
-                                              self.pos[a[rest]], self.pos[b[rest]])
+                sc_[rest], sp_[rest] = support_edge_model(self._ls, self.pos[a[rest]], self.pos[b[rest]])
                 self.scost[a, dp] = sc_
                 self.scost[b, dm] = sc_
+                self.spack[a, dp] = sp_
+                self.spack[b, dm] = reverse_support(sp_)
             n += len(a)
         return n
 
@@ -678,7 +736,8 @@ class LayeredGraph:
             self.emask[s_id, d] = em
             self.elen[s_id, d] = np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1)
             if self._sup is not None:
-                self.scost[s_id, d] = self._sup[1][d][src]
+                self.scost[s_id, d] = self._sup[1][d][0][src]
+                self.spack[s_id, d] = self._sup[1][d][1][src]
             n += len(s_id)
         return n // 2
 
@@ -793,11 +852,14 @@ class LayeredGraph:
                 if not ok:
                     continue
                 hz = round(h2, 6)
+            su, ok = support_step(state.su, int(self.spack[state.node, d]), length, float(self.smax_dir[d]))
+            if not ok:   # D80 ⑨: 최대 간격 안에 서포트 가능 지점이 없다
+                continue
             if defl:
                 run, bend = length, defl
             else:
                 run, bend = state.run + length, state.bend
-            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend, nm, hz)
+            yield State(nxt, d, round(min(run, self.run_cap[bend]), 6), bend, nm, hz, su)
 
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),
@@ -820,7 +882,7 @@ def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
 
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
-                        diagnostic: bool = True):
+                        diagnostic: bool = True, support_lines: bool = True):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
@@ -831,25 +893,26 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
-                         grid=grid, incremental=incremental)
+                         grid=grid, incremental=incremental, support_lines=support_lines)
         r = _route(g, pipe, time_limit, expand_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
     router.__name__ = (f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
                        f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}"
-                       f"{'' if incremental else '_full'}")
+                       f"{'' if incremental else '_full'}{'' if support_lines else '_nosuplines'}")
     router.grid = grid
+    router.support_lines = support_lines
     router.search_budget = ({"kind": "expansions", "limit": expand_limit} if expand_limit is not None
                             else {"kind": "wall_clock_sec", "limit": None})
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
         router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
                                                           incremental=incremental, expand_limit=expand_limit,
-                                                          diagnostic=False)
+                                                          diagnostic=False, support_lines=support_lines)
     if diagnostic and expand_limit is not None:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
                                                 incremental=incremental, expand_limit=expand_limit * DIAG_FACTOR,
-                                                diagnostic=False)
+                                                diagnostic=False, support_lines=support_lines)
         router.search_budget["diagnosis_limit"] = expand_limit * DIAG_FACTOR
     return router
 

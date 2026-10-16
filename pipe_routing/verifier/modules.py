@@ -3,9 +3,10 @@ import math
 
 import numpy as np
 
-from ..constants import SUPPORT_SPACING, VALVE_FRONT_MM, VALVE_Z_RANGE, support_kg
+from .. import support_std as ss
+from ..constants import SUPPORT_SPACING, VALVE_FRONT_MM, VALVE_Z_RANGE
 from .core import Context, PipeRoute, Violation, register
-from .geom import EPS, angle_deg, boxes_overlap, segment_box_distance, segment_segment_distance, support_faces, unit
+from .geom import EPS, angle_deg, boxes_overlap, segment_box_distance, segment_segment_distance, unit
 
 ON_LINE_MM = 1.0   # 밸브·분기점이 직관 위에 있다고 볼 거리 허용오차
 
@@ -268,41 +269,44 @@ def branch(ctx: Context, pr: PipeRoute):
 
 # ---------------------------------------------------------------- support
 
-FACES = (("floor", 2, 0), ("ceiling", 2, 1), ("wall_x0", 0, 0), ("wall_x1", 0, 1), ("wall_y0", 1, 0), ("wall_y1", 1, 1))
 CANDIDATE_STEP_MM = 10   # D5 정밀도
 _CHUNK = 64
 
 
 def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray) -> list:
-    """후보 위치마다 서포트 (face, 거리, kg) 또는 None (D21~D23, D46).
+    """후보 위치마다 서포트 dict 또는 None (D80 ③④⑧).
 
-    지지면 = 배관 축과 평행하지 않은 법선의 구조면을 가까운 순서로 시도해, 지지선(배관 중심 → 면 수직)이
-    장애물과 닿지 않고 다른 배관 유효 반경 안을 지나지 않는 첫 면 (D46). 모두 막히면 None.
+    (면, 형식) 조합 중 표 범위 안이고 부재(앵글 단면 막대)가 장애물·얹히지 않은 배관(유효 반경)·블록 밖과 간섭하지 않는
+    가장 가벼운 것 (천장 선호 D79 ④). 라우터(D80 ⑨)와 같은 함수 support_std.evaluate 를 쓴다.
     """
-    ext = np.array(ctx.scenario.block.extent)
+    pipe = ctx.pipes[pid]
+    std = ctx.std
+    ext = np.array(ctx.scenario.block.extent, dtype=float)
     oA, oB, oR, oS, _ = ctx.others(pid)
     box_lo = [o.box.min for o in ctx.scenario.obstacles]
     box_hi = [o.box.max for o in ctx.scenario.obstacles]
+    od = pipe.od
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
-        dist, blocked = support_faces(ext, box_lo, box_hi, P, U)   # 평행 면은 inf, 장애물 막힘 (라우터 D57 과 같은 함수)
-        for f, (_, ax, side) in enumerate(FACES):
-            Q = P.copy()
-            Q[:, ax] = side * ext[ax]
-            if len(oA):
-                d, _, _ = segment_segment_distance(P[:, None], Q[:, None], oA[None], oB[None])
-                blocked[:, f] |= np.any(d - oS[None] < oR[None] - EPS, 1)
+        ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True)
         for i in range(len(P)):
-            pick = None
-            for f in np.argsort(dist[i], kind="stable"):
-                if math.isinf(dist[i, f]):
-                    break
-                if not blocked[i, f]:
-                    pick = (FACES[f][0], float(dist[i, f]), support_kg(float(dist[i, f])))
-                    break
-            res.append(pick)
+            o = int(ev["opt"][i])
+            if o < 0:
+                res.append(None)
+                continue
+            face, frm = ss.OPTIONS[o]
+            L = float(ev["L"][i])
+            reinf = bool(ev["reinf"][i])
+            ang = std.angle_of(frm, pipe.nominal_size, int(ev["k"][i]))
+            mem = ss.members(frm, P[i], U[i], face, L, od, reinf)
+            res.append({"form": frm, "variant": "reinforced" if reinf else "standard", "face": face,
+                        "section": ang, "L": round(L, 1), "dims": {"L": round(L, 1)},
+                        "members": [{"a": _pt(a), "b": _pt(b), "role": role} for a, b, role in mem],
+                        "member_length_mm": round(float(ss.member_length(frm, np.array([L]), od,
+                                                                         np.array([reinf]))[0]), 1),
+                        "kg": round(float(ev["kg"][i]), 4)})
     return res
 
 
@@ -311,7 +315,8 @@ def support(ctx: Context, pr: PipeRoute):
     """§3.6 최대 간격 안에 설치 가능 위치가 있는가. 단자는 고정점(서포트)으로 본다 (D44).
 
     간격 규칙: 직전 서포트부터 Σ(구간 길이 / 그 구간 최대간격) ≤ 1 (수직 구간 = 수직 간격, 그 밖 = 수평 간격).
-    배치 = 탐욕적 최원거리 (도달 가능한 가장 먼 가능 위치). 결과 서포트 목록은 J 서포트 항(6단계)에 쓴다.
+    배치 = 탐욕적 최원거리 (도달 가능한 가장 먼 가능 위치, D80 ⑤). 위치마다 형식 선택 = D80 ③.
+    결과 서포트 목록은 J 서포트 항(6단계)에 쓰고, D 묶음(D80 ⑥)은 verify() 끝에서 병합한다.
     """
     pipe = ctx.pipes[pr.pipe_id]
     P = ctx.centerlines[pipe.id][0].points
@@ -336,7 +341,7 @@ def support(ctx: Context, pr: PipeRoute):
         i = int(min(np.searchsorted(ucum, u, side="right") - 1, len(lens) - 1))
         return min(total, cum[i] + (u - ucum[i]) * smax[i])
 
-    supports, out = [], []
+    supports, out, gaps = [], [], []
     s_last = 0.0
     while u_at(total) - u_at(s_last) > 1 + 1e-9:
         s_reach = s_at_u(u_at(s_last) + 1)
@@ -344,25 +349,30 @@ def support(ctx: Context, pr: PipeRoute):
         grid = grid[grid > s_last + EPS]
         found = None
         for k0 in range(0, len(grid), _CHUNK):
-            ss = grid[k0:k0 + _CHUNK]
-            locs = [locate(s) for s in ss]
+            ss_ = grid[k0:k0 + _CHUNK]
+            locs = [locate(s) for s in ss_]
             pts = np.array([q for q, _ in locs])
             dirs = np.array([unit(seg[i]) for _, i in locs])
-            for s, q, c in zip(ss, pts, support_candidates(ctx, pipe.id, pts, dirs)):
+            for s, q, u, c in zip(ss_, pts, dirs, support_candidates(ctx, pipe.id, pts, dirs)):
                 if c is not None:
-                    found = (float(s), q, c)
+                    found = (float(s), q, u, c)
                     break
             if found:
                 break
         if found is None:
             mid, _ = locate((s_last + s_reach) / 2)
             out.append(Violation("support", pipe.id, _pt(mid),
-                                 f"{s_last / 1000:.2f}~{s_reach / 1000:.2f} m 구간에 서포트 설치 가능 위치 없음 (§3.6)",
+                                 f"{s_last / 1000:.2f}~{s_reach / 1000:.2f} m 구간에 서포트 설치 가능 위치 없음 (§3.6, D80 ④)",
                                  s_reach - s_last))
+            n = max(2, int((s_reach - s_last) / 200) + 1)
+            gaps.append([_pt(locate(s)[0]) for s in np.linspace(s_last, s_reach, n)])
             s_last = s_reach
             continue
-        s, q, (face, dist, kg) = found
-        supports.append({"pos": _pt(q), "face": face, "angle_length_mm": round(dist + 100, 1), "kg": round(kg, 4)})
+        s, q, u, c = found
+        c.update({"pos": _pt(q), "axis": _pt(u), "carried": [pipe.id], "basis_nd": pipe.nominal_size,
+                  "angle_length_mm": c["member_length_mm"], "kg_total": c["kg"], "kg_share": c["kg"]})
+        supports.append(c)
         s_last = s
     ctx.cache[("supports", pipe.id)] = supports
+    ctx.cache[("support_gaps", pipe.id)] = gaps
     return out

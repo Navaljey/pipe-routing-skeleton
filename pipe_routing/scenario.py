@@ -76,6 +76,11 @@ class Pipe:
     def min_straight(self) -> int:
         return PIPE_SPECS[self.nominal_size].min_straight
 
+    @property
+    def od(self) -> float:
+        """외경 mm (§3.1)."""
+        return PIPE_SPECS[self.nominal_size].od
+
 
 @dataclass
 class Scenario:
