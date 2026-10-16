@@ -48,7 +48,9 @@ class VerifierFixtureTest(unittest.TestCase):
         self.assertLayer0(rep, gravity_slope=None, valve=None, branch=None)
         self.assertEqual(len(rep.supports), 13)   # 40m / 3m 간격 → 내부 서포트 13개
         self.assertTrue(all(s["face"] == "floor" for s in rep.supports))
-        self.assertAlmostEqual(rep.supports[0]["kg"], 4.43 * 1.1)   # 거리 1000 + 100
+        # D80 ② C 형식 (공개 임시 표: L50 4.43 kg/m): 다리 2 × 1000 + 가로대 (OD 114.3 + 200)
+        self.assertEqual(rep.supports[0]["form"], "C")
+        self.assertAlmostEqual(rep.supports[0]["kg"], round(4.43 * (2 * 1000 + 114.3 + 200) / 1000, 4))
 
     # -------- collision
     def test_collision_obstacle(self):
@@ -281,23 +283,22 @@ class VerifierFixtureTest(unittest.TestCase):
 
     # -------- support
     def test_support_falls_back_to_next_face(self):
-        """D46: 가장 가까운 면(바닥) 지지선이 장애물에 막히면 다음으로 가까운 면(y=0 격벽, 5000mm)을 쓴다."""
-        rep = run([pipe()], [("P", STRAIGHT)], obstacles=[([14000, 4000, 0], [26000, 6000, 500])])
+        """D80 ③: 바닥 C 다리가 장비에 막히면 가능한 다음 조합 (y=0 격벽 A, 거리 2500) 을 쓴다."""
+        p = pipe(start=[0, 2500, 1000], end=[40000, 2500, 1000])
+        rep = run([p], [("P", [[0, 2500, 1000], [40000, 2500, 1000]])],
+                  obstacles=[([14000, 1500, 0], [26000, 3500, 500])])
         self.assertLayer0(rep, support=True)
         over = [s for s in rep.supports if 14000 < s["pos"][0] < 26000]
-        self.assertTrue(over and all(s["face"] == "wall_y0" for s in over))
-        self.assertAlmostEqual(over[0]["kg"], round(4.43 * 5.1, 4))   # 실제 선택된 면까지 거리 + 100
+        self.assertTrue(over and all(s["face"] == "wall_y0" and s["form"] == "A" for s in over))
+        self.assertAlmostEqual(over[0]["kg"], round(4.43 * 2.6, 4))   # A = w × (L + 100)
 
-    def test_support_over_equipment_hangs_from_ceiling(self):
-        """D46: 장비 위 배관 — 바닥 지지선은 장비에 막히고, 그다음 가까운 천장(5500mm)에 매단다."""
+    def test_support_over_equipment_out_of_table(self):
+        """D79 ③·D80 ④: 장비 위 배관 — 바닥은 막히고 천장은 표 범위(공개 임시 표 3,000) 밖 → 설치 위치 없음."""
         p = pipe(start=[0, 20000, 4500], end=[40000, 20000, 4500])
         rep = run([p], [("P", [[0, 20000, 4500], [40000, 20000, 4500]])],
                   obstacles=[([10000, 15000, 0], [30000, 25000, 4000])])
-        self.assertLayer0(rep, support=True)
-        over = [s for s in rep.supports if 10000 < s["pos"][0] < 30000]
-        self.assertTrue(over and all(s["face"] == "ceiling" for s in over))
-        self.assertAlmostEqual(over[0]["angle_length_mm"], 5600)
-        self.assertAlmostEqual(over[0]["kg"], round(4.43 * 5.6, 4))
+        self.assertLayer0(rep, support=False)
+        self.assertTrue(rep.support_gaps)
 
     def test_support_all_faces_blocked(self):
         """바닥·천장·양쪽 격벽 지지선이 모두 막힌 12m 터널 → 설치 위치 없음 (x 격벽은 배관 축과 평행이라 후보 아님)."""
@@ -310,8 +311,8 @@ class VerifierFixtureTest(unittest.TestCase):
 
     def test_support_vertical_spacing(self):
         """수직 구간은 수직 간격(100A 4m)을 쓴다."""
-        p = pipe(start=[20000, 5000, 0], end=[20000, 5000, 10000], sdir=(0, 0, 1), edir=(0, 0, 1))
-        rep = run([p], [("P", [[20000, 5000, 0], [20000, 5000, 10000]])])
+        p = pipe(start=[20000, 2000, 0], end=[20000, 2000, 10000], sdir=(0, 0, 1), edir=(0, 0, 1))
+        rep = run([p], [("P", [[20000, 2000, 0], [20000, 2000, 10000]])])
         self.assertLayer0(rep, support=True)
         self.assertEqual(len(rep.supports), 2)   # 10m / 4m
 

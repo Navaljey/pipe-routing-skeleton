@@ -1,0 +1,146 @@
+{
+ "기본:G0 S1-6": {
+  "scenarios": 21,
+  "seeds": [
+   0
+  ],
+  "concurrency": [
+   2
+  ],
+  "machine": {
+   "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "cores": 4,
+   "python": "3.13.16",
+   "numpy": "2.5.3",
+   "numba": "0.68.0"
+  },
+  "search_budget": {
+   "kind": "expansions",
+   "limit": 4194304,
+   "diagnosis_limit": 16777216
+  },
+  "t0_max_sec": 305.518,
+  "e0_max": 26242727,
+  "total_sec_max": 934.902,
+  "moves": 8722,
+  "improvements": 8,
+  "wall": {
+   "60": null,
+   "300": null,
+   "900": {
+    "full_success": 6,
+    "success": 171,
+    "J_total": 322855.5,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8341,
+    "pipes": 205,
+    "censored": 0
+   },
+   "3600": {
+    "full_success": 6,
+    "success": 171,
+    "J_total": 322855.5,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8341,
+    "pipes": 205,
+    "censored": 21
+   }
+  },
+  "wall_t0x": {
+   "1": {
+    "full_success": 6,
+    "success": 169,
+    "J_total": 321516.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8244,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "full_success": 6,
+    "success": 169,
+    "J_total": 320971.0,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8244,
+    "pipes": 205,
+    "censored": 0
+   },
+   "4": {
+    "full_success": 6,
+    "success": 171,
+    "J_total": 322864.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8341,
+    "pipes": 205,
+    "censored": 3
+   },
+   "8": {
+    "full_success": 6,
+    "success": 171,
+    "J_total": 322864.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8341,
+    "pipes": 205,
+    "censored": 10
+   }
+  },
+  "exp_e0x": {
+   "1": {
+    "full_success": 6,
+    "success": 169,
+    "J_total": 321516.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8244,
+    "pipes": 205,
+    "censored": 0
+   },
+   "2": {
+    "full_success": 6,
+    "success": 169,
+    "J_total": 321330.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8244,
+    "pipes": 205,
+    "censored": 0
+   },
+   "4": {
+    "full_success": 6,
+    "success": 169,
+    "J_total": 320868.3,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8244,
+    "pipes": 205,
+    "censored": 0
+   },
+   "8": {
+    "full_success": 6,
+    "success": 171,
+    "J_total": 322864.9,
+    "routed": 178,
+    "interference_block": 0,
+    "success_rate": 0.8341,
+    "pipes": 205,
+    "censored": 4
+   }
+  },
+  "final": {
+   "full_success": 6,
+   "success": 171,
+   "J_total": 322855.5,
+   "routed": 178,
+   "interference_block": 0,
+   "success_rate": 0.8341,
+   "pipes": 205,
+   "censored": 21
+  }
+ }
+}

@@ -311,6 +311,48 @@ def add_verification(fig: go.Figure, report: dict, show_supports: bool = True) -
                 hoverinfo="text"))
 
 
+SUPPORT_COLORS = {"A": "#1f77b4", "B": "#2ca02c", "C": "#ff7f0e", "D": "#9467bd"}
+
+
+def add_support_members(fig: go.Figure, report: dict) -> None:
+    """D80 ⑫: 서포트 부재를 실제 크기(앵글 단면 반폭 막대)로, 형식별 색. hover = 형식·variant·L·앵글·kg·얹힌 배관.
+    서포트 불가 구간(support_gaps)은 빨간 굵은 선."""
+    from .support_std import ANGLE_HALF
+    by_form = {}
+    for rep in report["pipes"].values():
+        for s in rep.supports:
+            by_form.setdefault(s.get("form", "?"), []).append((rep.pipe_id, s))
+    for form, items in sorted(by_form.items()):
+        A, B, H = [], [], []
+        for _, s in items:
+            for m in s.get("members", []):
+                A.append(m["a"]); B.append(m["b"]); H.append(ANGLE_HALF.get(s.get("section"), 25.0))
+        color = SUPPORT_COLORS.get(form, "#555")
+        for h in sorted(set(H)):
+            sel = [i for i, v in enumerate(H) if v == h]
+            x, y, z, i, j, k = _tube_mesh([A[q] for q in sel], [B[q] for q in sel], h, sides=6)
+            fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color=color, opacity=0.9, flatshading=True,
+                                    name=f"서포트 {form} 부재", legendgroup=f"sup_{form}", showlegend=False,
+                                    hoverinfo="skip"))
+        def info(pid, s):
+            dims = ", ".join(f"{k}={v:.0f}" for k, v in (s.get("dims") or {}).items())
+            return (f"<b>서포트 {form}</b> ({s.get('variant', '')}) {s.get('face', '')}<br>{dims} · {s.get('section', '')}"
+                    f"<br>{s.get('kg_total', s['kg']):.2f} kg · 얹힌 배관 {', '.join(s.get('carried', [pid]))}")
+        x, y, z = zip(*[s["pos"] for _, s in items])
+        fig.add_trace(go.Scatter3d(x=x, y=y, z=z, mode="markers", name=f"서포트 {form} ({len(items)})",
+                                   legendgroup=f"sup_{form}", marker=dict(size=3, color=color),
+                                   hovertext=[info(pid, s) for pid, s in items], hoverinfo="text"))
+    gx, gy, gz, gt = [], [], [], []
+    for rep in report["pipes"].values():
+        for gap in getattr(rep, "support_gaps", []) or []:
+            for q in gap:
+                gx.append(q[0]); gy.append(q[1]); gz.append(q[2]); gt.append(f"{rep.pipe_id} 서포트 불가 구간")
+            gx.append(None); gy.append(None); gz.append(None); gt.append("")
+    if gx:
+        fig.add_trace(go.Scatter3d(x=gx, y=gy, z=gz, mode="lines", name="서포트 불가 구간 (D80 ④)",
+                                   line=dict(color="red", width=10), hovertext=gt, hoverinfo="text"))
+
+
 def write_html(fig: go.Figure, path, offline: bool = False) -> None:
     """offline=True 면 plotly.js(약 3.5MB)를 파일에 넣는다. 기본은 CDN 참조."""
     fig.write_html(str(path), include_plotlyjs=True if offline else "cdn", full_html=True)

@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Callable
 
 import jsonschema
+import numpy as np
 
 from .constants import FITTINGS, PIPE_SPECS
 from .gravity import feasibility
+from .support_std import load_standard, support_feasibility
 from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load
@@ -74,7 +76,9 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
     plan = planner(sc, router, time_limit)
     results = plan.routes
     route_sec = time.perf_counter() - t0
-    rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else []) for pid, r in results.items()])
+    std = load_standard()   # D78·D80 서포트 표준 (비공개 표 또는 공개 임시 표)
+    rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else []) for pid, r in results.items()], std=std)
+    ext = np.array(sc.block.extent, dtype=float)
 
     routes = []
     for p in sc.pipes:
@@ -89,6 +93,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "waypoints": [[round(c, 3) for c in w] for w in r.waypoints] if r.status == "ok" else [],
             "fittings": v.fittings,
             "supports": v.supports,
+            "support_gaps": v.support_gaps,        # D80 ④ 서포트 불가 구간 (3D 표시)
             "layer0": {m: v.layer0.get(m) for m in MODULE_ORDER} if v.routed else {},
             "J": J,
             "real_weight": real_weight(p, r.waypoints, J) if J else None,
@@ -96,6 +101,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
             "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
+            "support_feasibility": support_feasibility(p, ext, std),   # D80 ⑩
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -126,6 +132,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
+        "support_standard": rep["support_standard"],   # D78·D80 ⑪ 비공개 데이터 사용 여부·해시
+        "support": _support_summary(routes),           # D80 ⑬
         **full_success_summary(routes),        # D77 ①
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
         "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
@@ -157,6 +165,24 @@ def _gravity_summary(routes: list) -> dict:
             "routed_feasible": sum(1 for x in feas if x["waypoints"]),
             "gravity_violation_routed_feasible": sum(1 for x in feas if x["waypoints"]
                                                      and x["layer0"].get("gravity_slope") is False)}
+
+
+def _support_summary(routes: list) -> dict:
+    """D80 ⑬: 서포트 수·형식별 사용·무게, J 대비 비중, support 위반 배관, 규칙상 서포트 불가 (D80 ⑩), D 묶음 수."""
+    routed = [x for x in routes if x["J"] is not None]
+    sup = [s for x in routed for s in x["supports"]]
+    by_form, by_kg = {}, {}
+    for s in sup:
+        f = s.get("form", "?")
+        by_form[f] = by_form.get(f, 0) + 1
+        by_kg[f] = round(by_kg.get(f, 0.0) + s["kg"], 4)
+    jt = sum(x["J"]["total"] for x in routed)
+    js = sum(x["J"]["support"] for x in routed)
+    infeas = [x["pipe_id"] for x in routes if x.get("support_feasibility") and not x["support_feasibility"]["feasible"]]
+    return {"n_supports": len(sup), "by_form": dict(sorted(by_form.items())), "kg_by_form": dict(sorted(by_kg.items())),
+            "support_kg_routed": round(js, 4), "support_share_routed": round(js / jt, 4) if jt else None,
+            "support_violation_pipes": sum(1 for x in routed if x["layer0"].get("support") is False),
+            "infeasible": infeas, "d_groups": len({s["group"] for s in sup if s.get("group")})}
 
 
 def _peak_rss_mb():
@@ -226,17 +252,22 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
 
 
 def required_pipe_ids(sc_or_routes) -> tuple:
-    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관만 뺀 전부. "단독 도달 불가" 는 증명된 불가능이
-    아니므로 분모에 남는다 (D34). 반환 (필수 배관 id 목록, 제외 id 목록). 시나리오 또는 출력 routes[] 를 받는다."""
+    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관과 D80 ⑩ 규칙상 서포트 불가 배관을 뺀 전부.
+    "단독 도달 불가" 는 증명된 불가능이 아니므로 분모에 남는다 (D34). 반환 (필수 배관 id 목록, 제외 id 목록).
+    시나리오 또는 출력 routes[] 를 받는다. `추정:` D80 ⑩ 을 D64 와 같이 분모에서 뺀다 (D80 ⑩ "D64 방식")."""
     req, exc = [], []
     if hasattr(sc_or_routes, "pipes"):
+        std = load_standard()
+        ext = np.array(sc_or_routes.block.extent, dtype=float)
         for p in sc_or_routes.pipes:
             f = feasibility(p)
-            (exc if f and not f["feasible"] else req).append(p.id)
+            sf = support_feasibility(p, ext, std)
+            (exc if (f and not f["feasible"]) or not sf["feasible"] else req).append(p.id)
     else:
         for x in sc_or_routes:
             f = x.get("gravity_feasibility")
-            (exc if f and not f["feasible"] else req).append(x["pipe_id"])
+            sf = x.get("support_feasibility")
+            (exc if (f and not f["feasible"]) or (sf and not sf["feasible"]) else req).append(x["pipe_id"])
     return req, exc
 
 
@@ -327,6 +358,8 @@ def main(argv=None) -> int:
                          "astar = 배관마다 escape graph 재생성 (7단계 방식, 비교용)")
     ap.add_argument("--no-support-cost", action="store_true",
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
+    ap.add_argument("--no-support-lines", action="store_true",
+                    help="D80 ⑨ 서포트 보조 격자선 (띠 경계·단자 첫 꺾임) 을 끈다 (비교용)")
     ap.add_argument("--expand-limit", type=int, default=None,
                     help="D72 배관당 탐색 예산 (확장 상태 수). 기본 = layered.EXPAND_BUDGET, 0 = 예전 벽시계 --time-limit (비결정적)")
     ap.add_argument("--full-marking", action="store_true",
@@ -350,6 +383,7 @@ def main(argv=None) -> int:
     else:
         router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
                                      grid=parse_grid(args.grid), incremental=not args.full_marking,
+                                     support_lines=not args.no_support_lines,
                                      expand_limit=("default" if args.expand_limit is None
                                                    else (args.expand_limit or None)))
     out_dir = Path(args.out)
@@ -373,7 +407,7 @@ def main(argv=None) -> int:
 def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> None:
     from .router_astar import RouteResult
     from .verifier.core import PipeReport, Violation
-    from .viz import add_pipe_tubes, add_routes, add_verification, scenario_figure, write_html
+    from .viz import add_pipe_tubes, add_routes, add_support_members, add_verification, scenario_figure, write_html
     fig = scenario_figure(sc, connect=False)
     add_pipe_tubes(fig, sc, {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]})   # §0 보고 규칙
     add_routes(fig, sc, [RouteResult(x["pipe_id"], "ok" if x["waypoints"] else x["router"]["status"],
@@ -382,8 +416,10 @@ def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> N
     reps = {x["pipe_id"]: PipeReport(x["pipe_id"], bool(x["waypoints"]),
                                      violations=[Violation(v["module"], x["pipe_id"], v["pos"], v["message"])
                                                  for v in x["violations"]],
-                                     supports=x["supports"]) for x in out["routes"]}
-    add_verification(fig, {"pipes": reps})
+                                     supports=x["supports"], support_gaps=x.get("support_gaps", []))
+            for x in out["routes"]}
+    add_verification(fig, {"pipes": reps}, show_supports=False)
+    add_support_members(fig, {"pipes": reps})   # D80 ⑫
     g = out["global"]
     fig.update_layout(title=dict(text=fig.layout.title.text +
                                  f"<br>통과 {g['success_count']}/{g['total_pipes']} · J_total {g['J_total']:,.1f} kg"))

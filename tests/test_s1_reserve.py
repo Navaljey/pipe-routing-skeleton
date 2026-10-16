@@ -108,7 +108,7 @@ class CornerArcTest(unittest.TestCase):
         sc = load(ROOT / "scenarios" / "procedural" / "proc_009.json")
         pipes = {p.id: p for p in sc.pipes}
         p5, p2 = pipes["P005"], pipes["P002"]
-        g = LayeredGraph(sc, p5, [(p2, P002)])
+        g = LayeredGraph(sc, p5, [(p2, P002)], support_cost=False)   # D60 꺾임점 시험 (서포트 모델과 무관)
         r = _route(g, p5, 60)
         self.assertEqual(r.status, "ok")
         corner = np.array(r.waypoints[1])

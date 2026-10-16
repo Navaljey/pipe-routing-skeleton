@@ -32,7 +32,15 @@
                 "pos": {"$ref": "#/$defs/vec3"},
                 "face": {"enum": ["floor", "ceiling", "wall_x0", "wall_x1", "wall_y0", "wall_y1"]},
                 "angle_length_mm": {"type": "number", "minimum": 0},
-                "kg": {"type": "number", "minimum": 0}
+                "kg": {"type": "number", "minimum": 0},
+                "form": {"enum": ["A", "B", "C", "D"], "description": "D80 서포트 형식"},
+                "variant": {"enum": ["standard", "reinforced"]},
+                "section": {"type": "string"},
+                "carried": {"type": "array", "items": {"type": "string"}},
+                "kg_total": {"type": "number", "minimum": 0},
+                "kg_share": {"type": "number", "minimum": 0},
+                "members": {"type": "array", "items": {"type": "object", "required": ["a", "b", "role"],
+                  "properties": {"a": {"$ref": "#/$defs/vec3"}, "b": {"$ref": "#/$defs/vec3"}, "role": {"type": "string"}}}}
               }
             }
           },

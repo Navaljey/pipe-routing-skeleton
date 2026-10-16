@@ -30,13 +30,14 @@ def closest(p1, w1, p2, w2):
     return float(d[i, j]), c1[i, j], c2[i, j]
 
 
-def case_figure(sc, out: dict, pid: str, margin_mm: float = 4000.0, close: bool = False):
-    """close=True 면 최근접 지점 주변(± margin)만, 아니면 단자·최근접 지점 전체를 화면에 담는다."""
+def case_figure(sc, out: dict, pid: str, margin_mm: float = 4000.0, close: bool = False, support_cost: bool = True):
+    """close=True 면 최근접 지점 주변(± margin)만, 아니면 단자·최근접 지점 전체를 화면에 담는다.
+    support_cost = 단독 경로 라우터의 D80 서포트 모델 (실행에 쓴 라우터와 맞춘다)."""
     pipes = {p.id: p for p in sc.pipes}
     p = pipes[pid]
     routes = {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]}
     clear_cache()
-    solo = _route(LayeredGraph(sc, p), p, 60)
+    solo = _route(LayeredGraph(sc, p, support_cost=support_cost), p, 60)
     blockers = [q for q in routes if q != pid and solo.status == "ok"
                 and routes_conflict(p, solo.waypoints, pipes[q], routes[q])]
     fig = scenario_figure(sc, connect=False)

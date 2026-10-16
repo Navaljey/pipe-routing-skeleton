@@ -53,7 +53,8 @@ class PipeReport:
     layer0: dict = field(default_factory=dict)       # 모듈 → True(통과)/False(위반)/None(해당 없음)
     violations: list = field(default_factory=list)
     fittings: list = field(default_factory=list)     # [{"type": "elbow_90", "pos": [...]}] (D25: 135° = 90+45)
-    supports: list = field(default_factory=list)     # [{"pos", "face", "angle_length_mm", "kg"}]
+    supports: list = field(default_factory=list)     # D80 ⑦ 부재 묶음 [{"pos", "form", "face", "members", "kg", ...}]
+    support_gaps: list = field(default_factory=list)  # 서포트 불가 구간 (중심선 점 목록, 3D 표시용)
 
     @property
     def success(self) -> bool:
@@ -73,6 +74,7 @@ class Context:
     centerlines: dict                # pipe_id → [Centerline] (주관 + 분기)
     angle_tol: float = ANGLE_TOL_DEG
     cache: dict = field(default_factory=dict)
+    std: object = None               # 서포트 표준 (D78·D80, support_std.Standard)
 
     def others(self, pipe_id: str):
         """다른 배관들의 중심선 조각 배열 (A, B, 반경, slack, id)."""
@@ -95,7 +97,7 @@ class Context:
         return self.cache[key]
 
 
-def verify(scenario: Scenario, routes: list, modules=None) -> dict:
+def verify(scenario: Scenario, routes: list, modules=None, std=None) -> dict:
     """routes: PipeRoute 목록 (경로를 못 찾은 배관은 빠져 있거나 waypoints 가 비어 있다).
 
     반환: {"pipes": {pipe_id: PipeReport}, "sec": 검증 시간}
@@ -109,7 +111,8 @@ def verify(scenario: Scenario, routes: list, modules=None) -> dict:
         R = elbow_radius(pipes[pid].nominal_size)
         cls[pid] = [build_centerline(r.waypoints, R, ANGLE_TOL_DEG)] + \
                    [build_centerline(b, R, ANGLE_TOL_DEG) for b in r.branches if len(b) >= 2]
-    ctx = Context(scenario, pipes, rmap, cls)
+    from ..support_std import load_standard
+    ctx = Context(scenario, pipes, rmap, cls, std=std or load_standard())
     out = {}
     for p in scenario.pipes:
         rep = PipeReport(p.id, p.id in rmap)
@@ -120,8 +123,12 @@ def verify(scenario: Scenario, routes: list, modules=None) -> dict:
                 rep.violations += res or []
             rep.fittings = fittings_of(cls[p.id], p)
             rep.supports = ctx.cache.get(("supports", p.id), [])
+            rep.support_gaps = ctx.cache.get(("support_gaps", p.id), [])
         out[p.id] = rep
-    return {"pipes": out, "sec": time.perf_counter() - t0}
+    if modules is None or "support" in modules:
+        from .support_group import group_d
+        group_d(ctx, out)   # D80 ⑥: 배치 후 병합만 (위치 불변)
+    return {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info()}
 
 
 def fittings_of(cls: list, pipe: Pipe) -> list:

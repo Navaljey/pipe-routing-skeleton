@@ -46,6 +46,7 @@ class State(NamedTuple):
     bend: int = 0
     ends: int = 15   # D60: 들어온 엣지 끝에서 허용되는 꺾임 등급 비트 (0/45/90/135). 15 = 제약 없음
     hz: float = 0.0  # D61: 중력관 — 마지막 하향 이동 이후 수평 누적 길이 (압력관은 0)
+    su: float = 0.0  # D80 ⑨: 마지막 서포트 가능 지점 이후 지지 없이 온 정규화 길이 (Σ 길이 / 최대 간격, ≤ 1)
 
 
 class SpaceRepresentation(Protocol):
