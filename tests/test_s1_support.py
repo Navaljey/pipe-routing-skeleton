@@ -124,6 +124,18 @@ class VerifierTest(unittest.TestCase):
         indiv = 4.43 * (2 * 1000 + 314.3) / 1000
         self.assertLess(g["kg_total"], 2 * indiv)
 
+    def test_d_share_unit_weight(self):
+        """D81: 묶음 무게를 얹힌 배관 단위중량(§3.1 kg/m) 비례로 귀속 (100A 16.10 · 65A 9.11, 같은 간격 3 m)."""
+        a = pipe("A", start=[0, 20000, 1000], end=[40000, 20000, 1000])
+        b = pipe("B", size="65A", start=[0, 20600, 980], end=[40000, 20600, 980])
+        reps = run([a, b], [("A", [[0, 20000, 1000], [40000, 20000, 1000]]),
+                            ("B", [[0, 20600, 980], [40000, 20600, 980]])])
+        sa, sb = reps["A"].supports[0], reps["B"].supports[0]
+        self.assertEqual((sa["form"], sb["form"], sa["group"]), ("D", "D", sb["group"]))
+        self.assertAlmostEqual(sa["kg_share"], sa["kg_total"] * 16.10 / (16.10 + 9.11), places=3)
+        self.assertAlmostEqual(sb["kg_share"], sb["kg_total"] * 9.11 / (16.10 + 9.11), places=3)
+        self.assertEqual(sa["kg"], sa["kg_share"])
+
     def test_no_grouping_when_surfaces_differ(self):
         a = pipe("A", start=[0, 20000, 1000], end=[40000, 20000, 1000])
         b = pipe("B", start=[0, 20600, 1100], end=[40000, 20600, 1100])

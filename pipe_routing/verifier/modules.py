@@ -33,17 +33,32 @@ def _pipe_hits(ctx: Context, A, B, slack, r, module, pid, what):
     oA, oB, oR, oS, ids = ctx.others(pid)
     if not len(A) or not len(oA):
         return []
-    d, p, _ = segment_segment_distance(A[:, None], B[:, None], oA[None], oB[None])
-    gap = d - slack[:, None] - oS[None] - (r + oR[None])
+    # 결과 불변 가속 (D84): AABB 간격이 이격 문턱 + 1 mm 보다 먼 조각 쌍은 위반일 수 없다 (선분 거리 ≥ AABB 간격).
+    # 행을 64 개씩 묶어 묶음 AABB 로 열을 거른 뒤 그 쌍만 계산한다. 배관별 최소는 (gap, 행, 열) 사전식 —
+    # 전체 계산의 argmin (같은 값이면 행 우선 첫 번째) 과 같다.
+    olo, ohi = np.minimum(oA, oB), np.maximum(oA, oB)
+    lim_o = oS + r + oR + 1.0
+    best = {}
+    for k0 in range(0, len(A), 64):
+        a, b, sl = A[k0:k0 + 64], B[k0:k0 + 64], slack[k0:k0 + 64]
+        clo, chi = np.minimum(a, b).min(0), np.maximum(a, b).max(0)
+        g = np.maximum(0.0, np.maximum(olo - chi, clo - ohi))
+        jj = np.nonzero(np.sqrt((g * g).sum(-1)) <= lim_o + sl.max())[0]
+        if not len(jj):
+            continue
+        d, p, _ = segment_segment_distance(a[:, None], b[:, None], oA[jj][None], oB[jj][None])
+        gap = d - sl[:, None] - oS[jj][None] - (r + oR[jj][None])
+        idj = np.array([ids[j] for j in jj])
+        for other in np.unique(idj):
+            gm = np.where((idj == other)[None], gap, np.inf)
+            i, j = np.unravel_index(int(gm.argmin()), gm.shape)
+            if gm[i, j] < -EPS and (str(other) not in best or gm[i, j] < best[str(other)][0]):
+                best[str(other)] = (gm[i, j], p[i, j], float(d[i, j]), float(oR[jj[j]]))
     out = []
-    for other in sorted(set(ids)):
-        mask = np.array([i == other for i in ids])
-        g = np.where(mask[None], gap, np.inf)
-        i, j = np.unravel_index(int(g.argmin()), g.shape)
-        if g[i, j] < -EPS:
-            out.append(Violation(module, pid, _pt(p[i, j]),
-                                 f"{what} ↔ 배관 {other} 이격 부족 {-g[i, j]:.1f}mm (필요 {r + oR[j]:.2f})",
-                                 float(d[i, j]), other))
+    for other in sorted(best):
+        g, q, dd, ro = best[other]
+        out.append(Violation(module, pid, _pt(q), f"{what} ↔ 배관 {other} 이격 부족 {-g:.1f}mm (필요 {r + ro:.2f})",
+                             dd, other))
     return out
 
 

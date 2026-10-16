@@ -134,6 +134,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "gravity": _gravity_summary(routes),   # D64
         "support_standard": rep["support_standard"],   # D78·D80 ⑪ 비공개 데이터 사용 여부·해시
         "support": _support_summary(routes),           # D80 ⑬
+        **_shared_support(routes),                     # D81 공유 서포트 귀속 규칙·총무게
         **full_success_summary(routes),        # D77 ①
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
         "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
@@ -183,6 +184,21 @@ def _support_summary(routes: list) -> dict:
             "support_kg_routed": round(js, 4), "support_share_routed": round(js / jt, 4) if jt else None,
             "support_violation_pipes": sum(1 for x in routed if x["layer0"].get("support") is False),
             "infeasible": infeas, "d_groups": len({s["group"] for s in sup if s.get("group")})}
+
+
+def _shared_support(routes: list) -> dict:
+    """D81: 서포트 실물 총무게(묶음은 한 번만, 경로 배관 전체 — 실패 배관 몫 포함)와 공유(D 묶음) 서포트 수·무게.
+    J_total(D49) 은 통과 배관의 귀속 몫(kg_share) 합 그대로다."""
+    from .verifier.support_group import ATTRIBUTION_RULE
+    sup = [s for x in routes if x["J"] is not None for s in x["supports"]]
+    groups = {}
+    for s in sup:
+        if s.get("group"):
+            groups[s["group"]] = s["kg_total"]
+    single = sum(s["kg"] for s in sup if not s.get("group"))
+    shared = sum(groups.values())
+    return {"support_attribution": ATTRIBUTION_RULE, "support_total_kg": round(single + shared, 4),
+            "shared_support_count": len(groups), "shared_support_kg": round(shared, 4)}
 
 
 def _peak_rss_mb():
