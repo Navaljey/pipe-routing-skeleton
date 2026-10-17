@@ -265,6 +265,10 @@ def main(argv=None) -> int:
     ap.add_argument("--max-expanded", type=int, default=None, help="누적 확장 상한 (결정적 멈춤)")
     ap.add_argument("--concurrency", type=int, default=None, help="측정 조건 기록용 (동시 실행 수)")
     args = ap.parse_args(argv)
+    from .support_std import load_standard
+    if load_standard().source != "private":   # D78: 공개 임시 표 결과는 비교에 쓰지 않는다
+        import sys
+        print("경고: 서포트 선정표 = 공개 임시 표 (PIPE_SUPPORT_STANDARD 없음). 측정·비교용 결과가 아니다.", file=sys.stderr)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     router = make_layered_router(grid=parse_grid(args.grid))

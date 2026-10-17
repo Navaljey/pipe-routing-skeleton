@@ -305,7 +305,8 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
-        ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True)
+        ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True,
+                         trace=ctx.cache.setdefault(("support_trace", pid), []))
         for i in range(len(P)):
             o = int(ev["opt"][i])
             if o < 0:
@@ -357,6 +358,7 @@ def support(ctx: Context, pr: PipeRoute):
         return min(total, cum[i] + (u - ucum[i]) * smax[i])
 
     supports, out, gaps = [], [], []
+    ctx.cache[("support_trace", pipe.id)] = []   # 판정한 부재 영역 (증분 검증 D85 영향 범위)
     s_last = 0.0
     while u_at(total) - u_at(s_last) > 1 + 1e-9:
         s_reach = s_at_u(u_at(s_last) + 1)

@@ -74,16 +74,25 @@ class SessionTest(unittest.TestCase):
         self.assertGreater(blocked, 0)      # 다른 배관에 의한 서포트 막힘도
 
     def test_far_pipe_not_recomputed(self):
-        """영향 범위 밖 배관은 다시 판정하지 않고, 가까운 배관은 다시 판정한다."""
+        """영향 범위 밖 배관은 다시 판정하지 않고, 가까운 배관은 영향받는 모듈만 다시 판정한다 (D87 ⑤)."""
         a = pipe("A", start=[0, 5000, 1000], end=[40000, 5000, 1000])
         b = pipe("B", start=[0, 35000, 1000], end=[40000, 35000, 1000])
-        c = pipe("C", start=[0, 5600, 1000], end=[40000, 5600, 1000])
-        sc = scenario([a, b, c])
+        c = pipe("C", start=[0, 5600, 1000], end=[40000, 5600, 1000])     # A 서포트 부재 영역 밖 (가로 600)
+        d = pipe("D", start=[0, 5300, 1000], end=[40000, 5300, 1000])     # A 다리 자리 안 (가로 300)
+        sc = scenario([a, b, c, d])
         sess = Session(sc, std=SYN)
         self.assertEqual(sess.add("A", [[0, 5000, 1000], [40000, 5000, 1000]])["recomputed"], ["A"])
         self.assertEqual(sess.add("B", [[0, 35000, 1000], [40000, 35000, 1000]])["recomputed"], ["B"])
-        self.assertEqual(sess.add("C", [[0, 5600, 1000], [40000, 5600, 1000]])["recomputed"], ["A", "C"])
-        self.assertEqual(sess.remove("C")["recomputed"], ["A"])
+        self.assertEqual(sess.add("C", [[0, 5600, 1000], [40000, 5600, 1000]])["recomputed"], ["C"])
+        r = sess.add("D", [[0, 5300, 1000], [40000, 5300, 1000]])
+        self.assertEqual(r["recomputed_modules"]["A"], ["support"])
+        self.assertIn("C", r["recomputed"])
+        ref = verify(sc, [PipeRoute(p, w) for p, w in [("A", [[0, 5000, 1000], [40000, 5000, 1000]]),
+                                                       ("B", [[0, 35000, 1000], [40000, 35000, 1000]]),
+                                                       ("C", [[0, 5600, 1000], [40000, 5600, 1000]]),
+                                                       ("D", [[0, 5300, 1000], [40000, 5300, 1000]])]], std=SYN)
+        self.assertEqual(dump(sess.reports()), dump(ref["pipes"]))
+        self.assertNotIn("B", sess.remove("D")["recomputed"])
 
     def test_errors(self):
         sc, ends, _ = make(1, 2)
