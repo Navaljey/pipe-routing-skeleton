@@ -9,6 +9,7 @@
 """
 import argparse
 import json
+import sys
 import math
 import time
 from collections import Counter
@@ -404,6 +405,11 @@ def main(argv=None) -> int:
                                                    else (args.expand_limit or None)))
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    from .support_std import load_standard
+    src = load_standard().source
+    if src != "private":   # D78: 측정은 비공개 표로 — 공개 임시 표 결과는 비교에 쓰지 않는다 (v3_contract §b)
+        print(f"경고: 서포트 선정표 = {src} (환경 변수 PIPE_SUPPORT_STANDARD 없음). 측정·비교용 결과가 아니다.",
+              file=sys.stderr)
     for path in args.paths:
         sc = load(path)
         out = run(sc, router=router, time_limit=args.time_limit,

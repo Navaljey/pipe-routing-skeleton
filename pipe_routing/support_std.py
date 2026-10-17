@@ -310,7 +310,7 @@ def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, 
 
 
 def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarray, U: np.ndarray,
-             others=None, exact=True, prefer_ceiling=True) -> dict:
+             others=None, exact=True, prefer_ceiling=True, trace=None) -> dict:
     """서포트 후보 점들 → 가장 가벼운 가능한 (면, 형식) (D80 ③). 반환 배열 dict:
     kg (불가 = inf), opt (OPTIONS 번호, 불가 = -1), L, k (앵글 구간), reinf."""
     N = len(X)
@@ -337,6 +337,8 @@ def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarr
         A, B, v = member_arrays(frm, X[rows], U[rows], face, Lr, od, RF[rows, o])
         halves = np.array([ANGLE_HALF[std.angle_of(frm, nd, int(k))] for k in K[rows, o]])
         res = np.zeros(len(rows), dtype=bool)
+        if trace is not None and v.any():   # D85 증분 검증: 다른 배관과 판정한 부재 영역 (AABB, 반폭 최대)
+            trace.append((np.minimum(A, B)[v].min(0), np.maximum(A, B)[v].max(0), float(halves.max())))
         for hv in np.unique(halves):
             m = halves == hv
             o_sub = others
