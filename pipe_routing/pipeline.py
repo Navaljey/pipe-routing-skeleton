@@ -378,6 +378,8 @@ def main(argv=None) -> int:
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
     ap.add_argument("--no-support-lines", action="store_true",
                     help="D80 ⑨ 서포트 보조 격자선 (띠 경계·단자 첫 꺾임) 을 끈다 (비교용)")
+    ap.add_argument("--no-member-reservation", action="store_true",
+                    help="D90 (a1) 놓인 배관 서포트 부재 예약을 끈다 (비교용)")
     ap.add_argument("--expand-limit", type=int, default=None,
                     help="D72 배관당 탐색 예산 (확장 상태 수). 기본 = layered.EXPAND_BUDGET, 0 = 예전 벽시계 --time-limit (비결정적)")
     ap.add_argument("--full-marking", action="store_true",
@@ -402,6 +404,7 @@ def main(argv=None) -> int:
         router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
                                      grid=parse_grid(args.grid), incremental=not args.full_marking,
                                      support_lines=not args.no_support_lines,
+                                     member_reserve=not args.no_member_reservation,
                                      expand_limit=("default" if args.expand_limit is None
                                                    else (args.expand_limit or None)))
     out_dir = Path(args.out)

@@ -30,7 +30,7 @@ from .space import DEFLECTION, DIRS
 
 ANG_INDEX = {0: 0, 45: 1, 90: 2, 135: 3}
 from .support_router import LineSupport, reverse as reverse_support, support_step
-from .support_std import load_standard
+from .support_std import ANGLE_HALF, load_standard
 
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
@@ -282,13 +282,15 @@ class LayeredGraph:
     _segments_clear = EscapeGraph._segments_clear
 
     def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0,
-                 incremental: bool = True, support_lines: bool = True):
+                 incremental: bool = True, support_lines: bool = True, members=()):
         """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
         reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음).
         grid: D66 고정층 격자 보강 변형 (기본 G0).
         incremental: D67 증분 배치층 표시 (변형 A 만) — 놓인 배관·예약 항목별 표시(엣지 마스크·노드 여유)를 고정 레이어에
         항목 단위로 캐시하고, 지금 항목 집합으로 합성한다 (AND·min — 전체 재계산과 비트 동일). False = 매번 전체 재계산
-        (시험 대조용)."""
+        (시험 대조용).
+        members: D90 (a1) 놓인 배관 서포트 부재 예약 [(부재 op, [a, b])] — op.radius = 앵글 반폭, 이격 r + 반폭 으로
+        피한다 (검증기 D80 ⑧ 과 같은 문턱). 예약 구역과 같이 격자선은 만들지 않고 D67 항목 캐시에 들어간다."""
         t0 = time.perf_counter()
         F, fixed_sec = fixed_layer(sc, pipe, grid, support_lines=support_cost and support_lines)
         self.grid = grid
@@ -309,8 +311,9 @@ class LayeredGraph:
         self.lmax = gravity_lmax(pipe.nominal_size) if pipe.gravity_pipe else 0.0   # D62
         self.box_lo, self.box_hi = F.box_lo, F.box_hi
         self.dom_lo, self.dom_hi = F.dom_lo, F.dom_hi
-        self.pipe_groups = self._pipe_groups(list(others) + list(reserved))
+        self.pipe_groups = self._pipe_groups(list(others) + list(reserved) + list(members))
         self.n_reserved = len(reserved)
+        self.n_members = len(members)
         self.local_lines = local_lines
 
         # 1) 축 좌표 = 고정 레이어 + (B) 국소 이격선 좌표
@@ -365,7 +368,9 @@ class LayeredGraph:
         self.incremental = bool(incremental and not patches)
         self._items = [(("P", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
                        for op, w in others if w] + \
-                      [(("R", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w) for op, w in reserved]
+                      [(("R", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w) for op, w in reserved] + \
+                      [(("S", op.id, op.radius) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
+                       for op, w in members]
         self.pipe_margin = self._item_node_margin(F) if self.incremental else self._node_margin(self.pos)
         self.node_valid = ok
         self.n_patch_nodes = int(np.sum(~is_base & ok))
@@ -868,6 +873,7 @@ class LayeredGraph:
     def stats(self) -> dict:
         return {"pipe": self.pipe.id, "size": self.pipe.nominal_size, "grid": list(self.shape),
                 "nodes": int(self.node_valid.sum()), "patch_nodes": self.n_patch_nodes, "edges": int(self.n_edges),
+                "support_members": self.n_members,
                 "build_sec": round(self.build_sec, 3), "fixed_sec": round(self.fixed_sec, 3),
                 "grid_variant": self.grid.name, "fixed_nodes": int(self.fixed.node_ok.sum()),
                 "fixed_grid": list(self.fixed.shape)}
@@ -884,27 +890,77 @@ def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
     return _finish_chain(g, pipe, chain, expanded, generated, time.perf_counter() - t0)
 
 
+@dataclass(frozen=True)
+class MemberOp:
+    """D90 (a1) 서포트 부재 하나를 배치층 항목으로 — 직선 캡슐 (반경 = 앵글 반폭). nominal_size 는 엘보 반경용 자리
+    채움 (부재는 두 점 직선이라 엘보가 없다)."""
+    id: str
+    radius: float
+    nominal_size: str = "15A"
+
+
+class SupportMembers:
+    """D90 (a1): 놓인 배관의 서포트 부재 (검증기 Session — 전체 검증과 비트 동일, D85) 를 배치층 항목으로.
+    시나리오마다 Session 하나를 놓인 배관 집합에 맞춰 add/remove/replace 로 동기화한다 — rip-up 으로 들어낸 배관의
+    부재는 사라진다 (해제). 놓인 배관이 없으면 Session 을 건드리지 않고 빈 목록 (단독 재라우팅·진단)."""
+
+    def __init__(self):
+        self.sc = None
+        self.sess = None
+        self.routes = {}
+
+    def __call__(self, sc, placed) -> list:
+        want = {p.id: [list(map(float, w)) for w in wps] for p, wps in placed if wps}
+        if not want:
+            return []
+        from .verifier import Session
+        if self.sc is not sc:
+            self.sc, self.sess, self.routes = sc, Session(sc), {}
+        for pid in [q for q in self.routes if q not in want]:
+            self.sess.remove(pid)
+            del self.routes[pid]
+        for pid, w in want.items():
+            if pid not in self.routes:
+                self.sess.add(pid, w)
+            elif self.routes[pid] != w:
+                self.sess.replace(pid, w)
+            self.routes[pid] = w
+        out = []
+        for pid, rep in self.sess.reports().items():
+            for s in rep.supports:
+                for m in s.get("members") or []:
+                    out.append((MemberOp(pid, float(ANGLE_HALF[s["section"]])), [m["a"], m["b"]]))
+        return out
+
+
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
-                        diagnostic: bool = True, support_lines: bool = True):
+                        diagnostic: bool = True, support_lines: bool = True, member_reserve: bool = True,
+                        _members: "SupportMembers | None" = None):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
     expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
-    diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다."""
+    diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
+    member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다."""
     if expand_limit == "default":
         expand_limit = EXPAND_BUDGET
+    if member_reserve and _members is None:
+        _members = SupportMembers()
+
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
+        members = _members(sc, placed) if member_reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
-                         grid=grid, incremental=incremental, support_lines=support_lines)
+                         grid=grid, incremental=incremental, support_lines=support_lines, members=members)
         r = _route(g, pipe, time_limit, expand_limit)
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
     router.__name__ = (f"layered_router_{'b' if local_lines else 'a'}{'' if support_cost else '_nosup'}"
                        f"{'' if reserve else '_noreserve'}{'' if grid == G0 else '_' + grid.name}"
-                       f"{'' if incremental else '_full'}{'' if support_lines else '_nosuplines'}")
+                       f"{'' if incremental else '_full'}{'' if support_lines else '_nosuplines'}"
+                       f"{'' if member_reserve else '_nomembers'}")
     router.grid = grid
     router.support_lines = support_lines
     router.search_budget = ({"kind": "expansions", "limit": expand_limit} if expand_limit is not None
@@ -912,11 +968,13 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
         router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
                                                           incremental=incremental, expand_limit=expand_limit,
-                                                          diagnostic=False, support_lines=support_lines)
+                                                          diagnostic=False, support_lines=support_lines,
+                                                          member_reserve=member_reserve, _members=_members)
     if diagnostic and expand_limit is not None:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
                                                 incremental=incremental, expand_limit=expand_limit * DIAG_FACTOR,
-                                                diagnostic=False, support_lines=support_lines)
+                                                diagnostic=False, support_lines=support_lines,
+                                                member_reserve=member_reserve, _members=_members)
         router.search_budget["diagnosis_limit"] = expand_limit * DIAG_FACTOR
     return router
 
