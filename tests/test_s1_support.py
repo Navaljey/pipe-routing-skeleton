@@ -157,5 +157,68 @@ class VerifierTest(unittest.TestCase):
                     self.assertGreater(abs(m["a"][0] - 20000), r_c + 25 - 1e-6)
 
 
+class TogetherTest(unittest.TestCase):
+    """D89 막히면 함께 받친다 · D82 보완 간격 재확인 (2026-10-19)."""
+
+    def test_d89_mutual_pair(self):
+        """가로 250 mm 로 붙은 두 100A 배관 (z = 1000): 서로 상대 C 다리 자리를 막고 천장·벽은 표 밖 → A·B·C 불가.
+        서로 함께 얹는 D 하나씩 (같은 위치라 실물 하나), D81 몫, support 통과."""
+        a = pipe("A", start=[0, 20000, 1000], end=[40000, 20000, 1000])
+        b = pipe("B", start=[0, 20250, 1000], end=[40000, 20250, 1000])
+        routes = [("A", [[0, 20000, 1000], [40000, 20000, 1000]]), ("B", [[0, 20250, 1000], [40000, 20250, 1000]])]
+        alone = run([a], routes[:1])
+        self.assertTrue(all(s["form"] == "C" for s in alone["A"].supports))
+        reps = run([a, b], routes)
+        self.assertTrue(reps["A"].layer0["support"] and reps["B"].layer0["support"])
+        sa, sb = reps["A"].supports, reps["B"].supports
+        self.assertTrue(all(s.get("origin") == "D89" and s["carried"] == ["A", "B"] for s in sa + sb))
+        real = [s for s in sa + sb if not s.get("attached")]
+        self.assertTrue(real and all(s["members"] for s in real))
+        by_gid = {}
+        for s in sa + sb:
+            by_gid.setdefault(s["group"], []).append(s)
+        for gid, lst in by_gid.items():
+            self.assertEqual(len(lst), 2)                         # 실물 1 + 사본 1
+            self.assertEqual(sum(1 for s in lst if not s.get("attached")), 1)
+            self.assertAlmostEqual(sum(s["kg"] for s in lst), lst[0]["kg_total"], places=3)
+            share_a = next(s["kg"] for s in lst if s in sa)
+            self.assertAlmostEqual(share_a, lst[0]["kg_total"] / 2, places=3)   # 같은 구경 → 반반 (D81)
+        # 서로 막는 쌍이라 양쪽 탐욕 위치가 같다 → B 의 서포트도 모두 B 자기 위치 (s_mm 유지)
+        self.assertTrue(all("s_mm" in s for s in sb))
+
+    def test_d82_spacing_recheck(self):
+        """B 가 400 mm 늦게 시작 — 탐욕 위치가 서로 400 mm 어긋나 묶으면 평균 위치로 200 mm 씩 옮겨지고,
+        최대 간격(100A 3.0 m) 끝에 놓인 서포트가 간격을 넘는다 → 묶지 않는다. 재확인을 끄면 묶인다."""
+        from pipe_routing.verifier import support_group as sg
+        a = pipe("A", start=[0, 20000, 1000], end=[40000, 20000, 1000])
+        b = pipe("B", end=[40000, 20600, 1000])
+        b["start"] = {"pos": [400, 20600, 1000], "kind": "nozzle", "dir": [1, 0, 0]}
+        routes = [("A", [[0, 20000, 1000], [40000, 20000, 1000]]), ("B", [[400, 20600, 1000], [40000, 20600, 1000]])]
+        reps = run([a, b], routes)
+        self.assertTrue(all(s["form"] == "C" for s in reps["A"].supports + reps["B"].supports))
+        old = sg._group_spacing_ok
+        sg._group_spacing_ok = lambda *a_, **k_: True
+        try:
+            reps = run([a, b], routes)
+        finally:
+            sg._group_spacing_ok = old
+        self.assertTrue(any(s["form"] == "D" for s in reps["A"].supports))
+
+    def test_spacing_ok(self):
+        from pipe_routing.verifier import support_group as sg
+        from pipe_routing.verifier.core import Context, centerlines_of
+        a = pipe("A", start=[0, 20000, 1000])
+        a["end"] = {"pos": [10000, 20000, 1000], "kind": "nozzle", "dir": [1, 0, 0]}
+        sc = scenario([a])
+        r = PipeRoute("A", [[0, 20000, 1000], [10000, 20000, 1000]])
+        P = sc.pipes[0]
+        ctx = Context(sc, {"A": P}, {"A": r}, {"A": centerlines_of(P, r)}, std=SYN)
+        s_list = [3000.0, 6000.0, 8500.0]
+        self.assertTrue(sg.spacing_ok(ctx, "A", s_list, 1, 5900.0))
+        self.assertFalse(sg.spacing_ok(ctx, "A", s_list, 0, 3100.0))   # 단자(0) → 3.1 m > 3.0
+        self.assertFalse(sg.spacing_ok(ctx, "A", s_list, 1, 6100.0))   # 뒤 8500 까지 2.4 지만 앞 3000 → 3.1
+        self.assertFalse(sg.spacing_ok(ctx, "A", s_list, 1, 9100.0))   # 이웃을 넘음
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -176,12 +176,13 @@ def _support_summary(routes: list) -> dict:
     by_form, by_kg = {}, {}
     for s in sup:
         f = s.get("form", "?")
-        by_form[f] = by_form.get(f, 0) + 1
+        if not s.get("attached"):   # D89 사본은 실물이 아니다 (무게 몫만)
+            by_form[f] = by_form.get(f, 0) + 1
         by_kg[f] = round(by_kg.get(f, 0.0) + s["kg"], 4)
     jt = sum(x["J"]["total"] for x in routed)
     js = sum(x["J"]["support"] for x in routed)
     infeas = [x["pipe_id"] for x in routes if x.get("support_feasibility") and not x["support_feasibility"]["feasible"]]
-    return {"n_supports": len(sup), "by_form": dict(sorted(by_form.items())), "kg_by_form": dict(sorted(by_kg.items())),
+    return {"n_supports": sum(1 for s in sup if not s.get("attached")), "by_form": dict(sorted(by_form.items())), "kg_by_form": dict(sorted(by_kg.items())),
             "support_kg_routed": round(js, 4), "support_share_routed": round(js / jt, 4) if jt else None,
             "support_violation_pipes": sum(1 for x in routed if x["layer0"].get("support") is False),
             "infeasible": infeas, "d_groups": len({s["group"] for s in sup if s.get("group")})}

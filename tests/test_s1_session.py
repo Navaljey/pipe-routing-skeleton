@@ -46,7 +46,7 @@ class SessionTest(unittest.TestCase):
         self.assertAlmostEqual(res["J_total"], round(jt, 4), places=4)
 
     def test_random_sequences_bit_identical(self):
-        grouped = blocked = 0
+        grouped = blocked = together = 0
         for seed in range(2):
             sc, ends, rng = make(seed)
             sess = Session(sc, std=SYN)
@@ -70,8 +70,10 @@ class SessionTest(unittest.TestCase):
                 reps = sess.reports()
                 grouped += sum(1 for r in reps.values() for s in r.supports if s.get("form") == "D")
                 blocked += sum(1 for r in reps.values() if r.layer0.get("support") is False)
+                together += sum(1 for r in reps.values() for s in r.supports if s.get("origin") == "D89")
         self.assertGreater(grouped, 0)      # D 묶음 경로를 실제로 탔는지
         self.assertGreater(blocked, 0)      # 다른 배관에 의한 서포트 막힘도
+        self.assertGreater(together, 0)     # D89 함께 받치기도
 
     def test_far_pipe_not_recomputed(self):
         """영향 범위 밖 배관은 다시 판정하지 않고, 가까운 배관은 영향받는 모듈만 다시 판정한다 (D87 ⑤)."""
