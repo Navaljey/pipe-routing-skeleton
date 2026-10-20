@@ -20,6 +20,7 @@ import jsonschema
 import numpy as np
 
 from .constants import FITTINGS, PIPE_SPECS
+from .blockpair import splits
 from .gravity import feasibility
 from .support_std import load_standard, support_feasibility
 from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
@@ -102,7 +103,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
             "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
-            "support_feasibility": support_feasibility(p, ext, std),   # D80 ⑩
+            "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -279,7 +280,7 @@ def required_pipe_ids(sc_or_routes) -> tuple:
         ext = np.array(sc_or_routes.block.extent, dtype=float)
         for p in sc_or_routes.pipes:
             f = feasibility(p)
-            sf = support_feasibility(p, ext, std)
+            sf = support_feasibility(p, ext, std, splits(sc_or_routes))
             (exc if (f and not f["feasible"]) or not sf["feasible"] else req).append(p.id)
     else:
         for x in sc_or_routes:

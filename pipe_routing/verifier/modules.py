@@ -3,6 +3,7 @@ import math
 
 import numpy as np
 
+from .. import blockpair as bp
 from .. import support_std as ss
 from ..constants import SUPPORT_SPACING, VALVE_FRONT_MM, VALVE_Z_RANGE
 from .core import Context, PipeRoute, Violation, register
@@ -117,6 +118,75 @@ def boundary(ctx: Context, pr: PipeRoute):
         what = "직관" if kind == "straight" else "엘보"
         out.append(Violation("boundary", pipe.id, _pt(q),
                              f"{what}이 블록 경계까지 {gap:.1f} < 유효 반경 {r:.2f} ({'xyz'[ax]}축)", float(gap)))
+    return out
+
+
+# ---------------------------------------------------------------- crossing (S1-7, D76 ④)
+
+@register("crossing")
+def crossing(ctx: Context, pr: PipeRoute):
+    """블록 쌍 공유 격벽 (D76 ④). 블록 쌍이 아니면 해당 없음 (None).
+    모든 배관: 중심선(직관 + 엘보 호)이 격벽(관통 배관은 자기 창을 뺀 격벽)과 유효 반경 r 이상.
+    한 블록 안 배관: 격벽을 지나지 않는다.
+    관통 배관: 격벽을 정확히 1회, 자기 창 안에서, 면에 수직(x 축)인 직관으로 지난다. 그 직관 말고 다른 조각(엘보 호 포함)은
+    창 패치와 r 이상 — 따라서 창을 지나는 직관은 양쪽으로 격벽에서 r + t 이상 (D47 과 같은 규칙)."""
+    sc = ctx.scenario
+    sp = bp.splits(sc)
+    if not sp:
+        return None
+    s = sp[0]
+    pipe = ctx.pipes[pr.pipe_id]
+    r = pipe.radius
+    cross = bp.crossing(sc, pipe)
+    win = pipe.crossing_window if cross else None
+    out = []
+    for cl in ctx.centerlines[pipe.id]:
+        A, B, S, _ = cl.arrays()
+        for lo, hi in bp.wall_boxes(sc, win):
+            d, at = segment_box_distance(A, B, lo, hi)
+            d = d - S
+            k = int(d.argmin())
+            if d[k] < r - EPS:
+                out.append(Violation("crossing", pipe.id, _pt(at[k]),
+                                     f"공유 격벽(x = {s:g}) 까지 {d[k]:.1f} < 유효 반경 {r:.2f}", float(d[k])))
+    main = ctx.centerlines[pipe.id][0]
+    P = main.points
+    side = np.where(P[:, 0] < s - 1e-6, -1, np.where(P[:, 0] > s + 1e-6, 1, 0))
+    on = np.nonzero(side == 0)[0]
+    for i in on:
+        out.append(Violation("crossing", pipe.id, _pt(P[i]), "꺾임점·단자가 공유 격벽 위", 0.0))
+    segs = [i for i in range(len(P) - 1) if side[i] * side[i + 1] < 0]
+    if not cross:
+        for i in segs:
+            out.append(Violation("crossing", pipe.id, _pt((P[i] + P[i + 1]) / 2), "한 블록 안 배관이 공유 격벽을 지남"))
+        return out
+    if len(segs) != 1 or len(on):
+        out.append(Violation("crossing", pipe.id, _pt(P[0]), f"공유 격벽 통과 {len(segs)} 회 (정확히 1회여야 함)",
+                             float(len(segs))))
+        return out
+    i = segs[0]
+    seg = P[i + 1] - P[i]
+    ang = angle_deg(seg, (1.0, 0.0, 0.0) if seg[0] > 0 else (-1.0, 0.0, 0.0))
+    t = (s - P[i][0]) / seg[0]
+    q = P[i] + t * seg
+    if ang > ctx.angle_tol:
+        out.append(Violation("crossing", pipe.id, _pt(q), f"격벽 통과 직관이 면에 수직이 아님 ({ang:.1f}°)", ang))
+    y0, y1, z0, z1 = win
+    if not (y0 + r - EPS <= q[1] <= y1 - r + EPS and z0 + r - EPS <= q[2] <= z1 - r + EPS):
+        out.append(Violation("crossing", pipe.id, _pt(q), "관통점이 창 안(가장자리에서 유효 반경 이상)이 아님"))
+    wlo, whi = bp.window_box(sc, win)
+    A, B, S, pieces = main.arrays()
+    keep = [k for k, pc in enumerate(pieces) if not (pc.kind == "straight" and pc.ref == i)]
+    if keep:
+        d, at = segment_box_distance(A[keep], B[keep], wlo, whi)
+        d = d - S[keep]
+        k = int(d.argmin())
+        if d[k] < r - EPS:
+            pc = pieces[keep[k]]
+            what = "엘보" if pc.kind == "arc" else "직관"
+            out.append(Violation("crossing", pipe.id, _pt(at[k]),
+                                 f"관통 직관 밖의 {what}이 창 면까지 {d[k]:.1f} < 유효 반경 {r:.2f} "
+                                 f"(통과 직관은 양쪽 r + t 이상, D76 ④)", float(d[k])))
     return out
 
 
@@ -298,15 +368,16 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     std = ctx.std
     ext = np.array(ctx.scenario.block.extent, dtype=float)
     oA, oB, oR, oS, _ = ctx.others(pid)
-    box_lo = [o.box.min for o in ctx.scenario.obstacles]
-    box_hi = [o.box.max for o in ctx.scenario.obstacles]
+    holes = bp.hole_boxes(ctx.scenario)   # D76: 관통 창은 부재가 닿을 수 없는 구멍, 공유 격벽은 지지면
+    box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
+    box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
     od = pipe.od
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
         ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True,
-                         trace=ctx.cache.setdefault(("support_trace", pid), []))
+                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario))
         for i in range(len(P)):
             o = int(ev["opt"][i])
             if o < 0:

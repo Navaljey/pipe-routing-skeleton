@@ -219,13 +219,20 @@ OPT_FACE = np.array([FACE_ORDER.index(f) for f, _ in OPTIONS])
 _EPS = 1e-6
 
 
-def face_distances(ext, X: np.ndarray, U: np.ndarray) -> np.ndarray:
-    """(N, 6) 배관 중심 → 면 거리. 배관 축과 평행한 법선의 면은 inf (D46 과 같은 규칙)."""
+def face_distances(ext, X: np.ndarray, U: np.ndarray, sp=()) -> np.ndarray:
+    """(N, 6) 배관 중심 → 면 거리. 배관 축과 평행한 법선의 면은 inf (D46 과 같은 규칙).
+    sp = 블록 쌍 공유 격벽 x 목록 (D76) — 면은 점이 속한 블록의 면 (공유 격벽은 양쪽 블록의 벽)."""
     out = np.full((len(X), 6), np.inf)
+    if sp:
+        from .blockpair import local_bounds
+        lo, hi = local_bounds(ext, X, sp)
     for f, face in enumerate(FACE_ORDER):
         ax, side = FACE_AXIS[face]
         ok = np.abs(U[:, ax]) < 1 - 1e-9
-        out[ok, f] = np.abs(X[ok, ax] - side * ext[ax])
+        if sp:
+            out[ok, f] = (hi[ok, ax] - X[ok, ax]) if side else (X[ok, ax] - lo[ok, ax])
+        else:
+            out[ok, f] = np.abs(X[ok, ax] - side * ext[ax])
     return out
 
 
@@ -265,16 +272,21 @@ def _aabb_gap(A, B, lo, hi):
     return np.sqrt((g * g).sum(-1))
 
 
-def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, exact=True) -> np.ndarray:
+def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, exact=True, bounds=None) -> np.ndarray:
     """부재 (N, M) 중 하나라도 간섭하면 True (D80 ⑧). 장애물: 거리 ≤ 반폭, 블록 밖: 끝점이 블록 밖,
     others = (oA, oB, oR, oS) 얹히지 않은 배관 조각: 거리 − slack < r_o + 반폭.
     exact=False (라우터): 축 정렬이 아닌 부재(B 경사재, 45° 배관의 C 가로대)는 장애물 판정을 AABB 하한으로만 한다 — 
-    `추정:` 라우터 근사 (검증기는 exact=True, 황금분할 정밀 판정)."""
+    `추정:` 라우터 근사 (검증기는 exact=True, 황금분할 정밀 판정).
+    bounds = (lo, hi) (N, 3) — 서포트 점마다 그 블록 범위 (블록 쌍 D76, 부재는 블록 밖으로 못 나간다). 없으면 [0, ext]."""
     from .verifier.geom import segment_box_distance, segment_segment_distance
     N, M = valid.shape
     bad = np.zeros(N, dtype=bool)
     ext = np.asarray(ext, dtype=float)
-    out = ((A < -1).any(-1) | (A > ext + 1).any(-1) | (B < -1).any(-1) | (B > ext + 1).any(-1)) & valid
+    if bounds is None:
+        out = ((A < -1).any(-1) | (A > ext + 1).any(-1) | (B < -1).any(-1) | (B > ext + 1).any(-1)) & valid
+    else:
+        blo, bhi = bounds[0][:, None] - 1, bounds[1][:, None] + 1
+        out = ((A < blo).any(-1) | (A > bhi).any(-1) | (B < blo).any(-1) | (B > bhi).any(-1)) & valid
     bad |= out.any(1)
     Af, Bf = A.reshape(-1, 3), B.reshape(-1, 3)
     vf = valid.reshape(-1)
@@ -310,11 +322,14 @@ def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, 
 
 
 def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarray, U: np.ndarray,
-             others=None, exact=True, prefer_ceiling=True, trace=None) -> dict:
+             others=None, exact=True, prefer_ceiling=True, trace=None, sp=()) -> dict:
     """서포트 후보 점들 → 가장 가벼운 가능한 (면, 형식) (D80 ③). 반환 배열 dict:
     kg (불가 = inf), opt (OPTIONS 번호, 불가 = -1), L, k (앵글 구간), reinf."""
     N = len(X)
-    dist = face_distances(ext, X, U)
+    dist = face_distances(ext, X, U, sp)
+    if sp:   # 블록 쌍 (D76): 면 거리·부재 범위는 점이 속한 블록 기준
+        from .blockpair import local_bounds
+        bnd = local_bounds(ext, X, sp)
     no = len(OPTIONS)
     KG = np.full((N, no), np.inf)
     K = np.full((N, no), -1)
@@ -342,7 +357,8 @@ def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarr
         for hv in np.unique(halves):
             m = halves == hv
             o_sub = others
-            res[m] = members_blocked(A[m], B[m], v[m], float(hv), ext, box_lo, box_hi, o_sub, exact)
+            res[m] = members_blocked(A[m], B[m], v[m], float(hv), ext, box_lo, box_hi, o_sub, exact,
+                                     bounds=(bnd[0][rows][m], bnd[1][rows][m]) if sp else None)
         return res
 
     for r in range(no):
@@ -380,7 +396,7 @@ def band_lmax(std: Standard, nd: str) -> dict:
     return {f: (deck if f in ("floor", "ceiling") else wall) for f in FACE_ORDER}
 
 
-def support_feasibility(pipe, ext, std: Standard) -> dict:
+def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
     """규칙상 서포트 불가 (D80 ⑩, D64 방식의 장애물 무시 하한): 어느 단자에서든 최대 간격(수평·수직 중 큰 값) 안에
     서포트 가능 띠(어느 면에서든 표 범위 안)에 닿을 수 없고 다른 단자도 그 거리 밖이면 불가."""
     from .constants import SUPPORT_SPACING
@@ -390,9 +406,13 @@ def support_feasibility(pipe, ext, std: Standard) -> dict:
     gap = []
     for t in T:
         d = []
+        if sp:
+            from .blockpair import local_bounds
+            lo, hi = (v[0] for v in local_bounds(ext, t[None], sp))
         for f in FACE_ORDER:
             ax, side = FACE_AXIS[f]
-            d.append(max(0.0, abs(t[ax] - side * ext[ax]) - lm[f] + 1.0))
+            dist = (hi[ax] - t[ax] if side else t[ax] - lo[ax]) if sp else abs(t[ax] - side * ext[ax])
+            d.append(max(0.0, dist - lm[f] + 1.0))
         gap.append(min(d))
     span = float(np.linalg.norm(T[0] - T[1]))
     bad = [g > smax and span > smax for g in gap]

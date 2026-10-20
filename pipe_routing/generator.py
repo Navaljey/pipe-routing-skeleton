@@ -38,6 +38,7 @@ class GeneratorConfig:
     min_terminal_dist_mm: int = 5000             # start–end 맨해튼 거리 하한 (v3 min_path_cells 대응)
     max_tries: int = 500                         # 배관 1개 단자 샘플링 시도 횟수
     stair_rule: bool = False                     # D64: 중력관 낙차 ≥ 계단식 하향 규칙(D61) 하한 — 새 세트에만
+    exclude_faces: tuple = ()                    # 경계 단자를 두지 않을 면 [(축, -1|+1)] — 블록 쌍 공유 격벽 (D76)
 
 
 def _snap(v: float) -> int:
@@ -108,6 +109,8 @@ def _sample_boundary(rng, which, size, cfg, gravity) -> Optional[Terminal]:
     else:
         ax = rng.randrange(2)
         side = rng.choice((-1, 1))
+    if (ax, side) in cfg.exclude_faces:
+        return None
     pos = [0.0, 0.0, 0.0]
     for a in range(3):
         if a == ax:
@@ -210,5 +213,137 @@ def main(argv=None) -> int:
     return 0
 
 
+
+
+# ---------------------------------------------------------------- S1-7 블록 쌍 (D69·D76)
+
+@dataclass
+class PairConfig:
+    """`추정:` D76 ⑥ — 블록당 기본 세트 수준 채움 + 블록당 10배관 + 관통 4배관, 창 4 m × 2 m."""
+    seed: int = 20265008
+    n_pipes_per_block: int = 10
+    n_crossing: int = 4
+    window_mm: tuple = (4000, 2000)      # (y 폭, z 높이)
+    stair_rule: bool = True              # 새 세트 → D64 낙차 하한 보장
+
+
+def _shift_terminal(t: Terminal, dx: float) -> Terminal:
+    return Terminal((t.pos[0] + dx, t.pos[1], t.pos[2]), t.kind, t.dir, t.host)
+
+
+def _shift_pipe(p: Pipe, dx: float, pid: str, window=None) -> Pipe:
+    return Pipe(pid, p.type_id, p.nominal_size, p.gravity_pipe, p.min_slope, p.insulation_thickness,
+                _shift_terminal(p.start, dx), _shift_terminal(p.end, dx), crossing_window=window)
+
+
+def _windows_overlap(a, b) -> bool:
+    return a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]
+
+
+def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
+    """블록 A [0, W] · B [W, 2W] (x 방향). 블록마다 기본 생성기(D30)로 장애물·배관, 공유 격벽 면에는 경계 단자를
+    두지 않는다. 관통 배관은 start 를 A, end 를 B 에서 뽑고 배관마다 공유 격벽 위 창(4 m × 2 m)을 둔다 —
+    창끼리는 겹치지 않게 (`추정:`). 도달성은 보장하지 않는다 (D31)."""
+    rng = random.Random(pc.seed)
+    W = BLOCK_WIDTH
+    local = Block(BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
+    cfgA = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule,
+                           exclude_faces=((0, 1),))
+    cfgB = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule,
+                           exclude_faces=((0, -1),))
+    obsA = gen_obstacles(rng, cfgA)
+    obsB = gen_obstacles(rng, cfgB)
+    obstacles = [Obstacle(f"OBS_{i + 1:03d}", "box", o.box) for i, o in enumerate(obsA)]
+    obstacles += [Obstacle(f"OBS_{len(obsA) + i + 1:03d}", "box",
+                           Box((o.box.min[0] + W, *o.box.min[1:]), (o.box.max[0] + W, *o.box.max[1:])))
+                  for i, o in enumerate(obsB)]
+    idB = {o.id: f"OBS_{len(obsA) + i + 1:03d}" for i, o in enumerate(obsB)}
+    pipes: list[Pipe] = []
+    localA: list[Pipe] = []
+    for _ in range(pc.n_pipes_per_block):
+        p = gen_pipe(rng, cfgA, len(localA), local, obsA, localA)
+        if p is not None:
+            localA.append(p)
+    localB: list[Pipe] = []
+    for _ in range(pc.n_pipes_per_block):
+        p = gen_pipe(rng, cfgB, len(localB), local, obsB, localB)
+        if p is not None:
+            localB.append(p)
+    for p in localA:
+        pipes.append(_shift_pipe(p, 0.0, f"P{len(pipes) + 1:03d}"))
+    for p in localB:
+        q = _shift_pipe(p, W, f"P{len(pipes) + 1:03d}")
+        for t in (q.start, q.end):
+            if t.host:
+                t.host = idB[t.host]
+        pipes.append(q)
+    # 관통 배관: start ∈ A, end ∈ B
+    windows = []
+    wy, wz = pc.window_mm
+    for k in range(pc.n_crossing):
+        for _ in range(GeneratorConfig.max_tries):
+            gravity = rng.random() < cfgA.gravity_ratio
+            size = rng.choice(cfgA.sizes)
+            slope = default_drain_slope(size) if gravity else None
+            s_ = _sample_terminal(rng, "start", size, cfgA, obsA, gravity)
+            e_ = _sample_terminal(rng, "end", size, cfgB, obsB, gravity)
+            if s_ is None or e_ is None:
+                continue
+            y0 = _rand_snapped(rng, 0, BLOCK_LENGTH - wy)
+            z0 = _rand_snapped(rng, 0, BLOCK_HEIGHT - wz)
+            win = (float(y0), float(y0 + wy), float(z0), float(z0 + wz))
+            if any(_windows_overlap(win, w) for w in windows):
+                continue
+            pa = Pipe("tmp", "T5" if gravity else "T1", size, gravity, slope, INSULATION_MM, s_, e_)
+            if terminal_errors(pa, "start", local, obsA) or terminal_warnings(pa, "start", local, obsA):
+                continue
+            if terminal_errors(pa, "end", local, obsB) or terminal_warnings(pa, "end", local, obsB):
+                continue
+            e_g = _shift_terminal(e_, W)
+            if e_g.host:
+                e_g.host = idB[e_g.host]
+            pipe = Pipe(f"P{len(pipes) + 1:03d}", pa.type_id, size, gravity, slope, INSULATION_MM, s_, e_g,
+                        crossing_window=win)
+            if gravity:
+                if s_.pos[2] <= e_g.pos[2]:
+                    continue
+                if pc.stair_rule:
+                    from .gravity import feasibility
+                    if not feasibility(pipe)["feasible"]:
+                        continue
+            if _clashes(pipe, pipes):
+                continue
+            windows.append(win)
+            pipes.append(pipe)
+            break
+    meta = {"name": name or f"pair_seed{pc.seed}", "source": "procedural",
+            "generator": "pipe_routing.generator.generate_block_pair", "config": asdict(pc),
+            "n_pipes_requested": 2 * pc.n_pipes_per_block + pc.n_crossing,
+            "n_crossing": sum(1 for p in pipes if p.crossing_window)}
+    sc = Scenario(Block(2 * W, BLOCK_LENGTH, BLOCK_HEIGHT), obstacles, pipes, meta, block_pair={"shared_x": W})
+    errors, warnings = validate(sc)
+    if errors:
+        raise ScenarioError(errors)
+    sc.warnings = warnings
+    return sc
+
+
+def main_pair(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="S1-7 블록 쌍 시나리오 세트 생성 (D76)")
+    ap.add_argument("--out", default="scenarios/pair")
+    ap.add_argument("--n", type=int, default=5)
+    ap.add_argument("--seed", type=int, default=20265008)
+    args = ap.parse_args(argv)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for i in range(args.n):
+        name = f"pair_{i:03d}"
+        sc = generate_block_pair(PairConfig(seed=args.seed + i), name)
+        save(sc, out / f"{name}.json")
+        print(f"{name}: {json.dumps(sc.summary(), ensure_ascii=False)} 관통 {sc.meta['n_crossing']}")
+    return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import sys
+    raise SystemExit(main_pair(sys.argv[2:]) if sys.argv[1:2] == ["pair"] else main())

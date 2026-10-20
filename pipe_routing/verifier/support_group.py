@@ -79,9 +79,13 @@ def _blocked(ctx, mem, half, carried):
             a, b, slack, _ = cl.arrays()
             oA.append(a); oB.append(b); oS.append(slack); oR.append(np.full(len(a), ctx.pipes[pid].radius))
     others = (np.concatenate(oA), np.concatenate(oB), np.concatenate(oR), np.concatenate(oS)) if oA else None
-    box_lo = [o.box.min for o in ctx.scenario.obstacles]
-    box_hi = [o.box.max for o in ctx.scenario.obstacles]
-    return bool(ss.members_blocked(A, B, v, half, ext, box_lo, box_hi, others, exact=True)[0])
+    from .. import blockpair as bp
+    holes = bp.hole_boxes(ctx.scenario)   # D76: 관통 창 = 구멍
+    box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
+    box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
+    sp = bp.splits(ctx.scenario)
+    bounds = bp.local_bounds(ext, np.array([m[0] for m in mem[:1]]), sp) if sp else None
+    return bool(ss.members_blocked(A, B, v, half, ext, box_lo, box_hi, others, exact=True, bounds=bounds)[0])
 
 
 def _try(ctx, grp, face):

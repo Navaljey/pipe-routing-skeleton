@@ -25,6 +25,13 @@
         "unit": {"const": "mm"}
       }
     },
+    "block_pair": {
+      "type": "object",
+      "description": "선택 (D76 ①). 블록 2개를 x 방향으로 이은 합친 맵 — 공유 격벽 x = shared_x",
+      "required": ["shared_x"],
+      "additionalProperties": false,
+      "properties": {"shared_x": {"$ref": "#/$defs/positive_mm"}}
+    },
     "obstacles": {
       "type": "array",
       "items": {
@@ -57,7 +64,17 @@
           "start": {"$ref": "#/$defs/terminal"},
           "end": {"$ref": "#/$defs/terminal"},
           "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
-          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}}
+          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+          "crossing_window": {
+            "type": "object",
+            "description": "관통 배관만 (D76 ②). 공유 격벽 위 창 사각형 — 관통점은 이 안에서 라우터가 고른다",
+            "required": ["y", "z"],
+            "additionalProperties": false,
+            "properties": {
+              "y": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+              "z": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+            }
+          }
         }
       }
     }

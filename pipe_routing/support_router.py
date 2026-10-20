@@ -112,9 +112,11 @@ def _seg_hits_rect(p0, p1, lo, hi):
 class LineSupport:
     """고정 레이어 하나(구경별)의 격자선 서포트 모델. 선 데이터는 처음 쓸 때 계산해 캐시한다."""
 
-    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing):
+    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing, sp=()):
+        """sp = 블록 쌍 공유 격벽 x 목록 (D76) — 면·부재 범위는 선이 속한 블록 기준. box = 장애물 + 관통 창(구멍)."""
         self.std, self.nd, self.od = std, nd, od
         self.ext = np.asarray(ext, dtype=float)
+        self.sp = tuple(sp)
         self.box_lo = np.asarray(box_lo, dtype=float).reshape(-1, 3)
         self.box_hi = np.asarray(box_hi, dtype=float).reshape(-1, 3)
         self.hmax, self.vmax = spacing
@@ -131,7 +133,12 @@ class LineSupport:
         X0[:, o1], X0[:, o2] = keys[:, 0], keys[:, 1]
         U = np.zeros((n, 3))
         U[:, ax] = 1.0
-        dist = ss.face_distances(self.ext, X0, U)
+        dist = ss.face_distances(self.ext, X0, U, self.sp)
+        if self.sp:   # 선 위 점들은 ax 만 다르다 — ax ≠ x 이면 블록이 하나, ax = x 이면 x 방향 부재가 없다
+            from .blockpair import local_bounds
+            blo, bhi = local_bounds(self.ext, X0, self.sp)
+        else:
+            blo, bhi = np.zeros((n, 3)), np.broadcast_to(self.ext, (n, 3))
         res = [[] for _ in range(n)]
         for o, (face, frm) in enumerate(ss.OPTIONS):
             L = dist[:, ss.OPT_FACE[o]]
@@ -149,8 +156,8 @@ class LineSupport:
             other = [q for q in range(3) if q != ax]
             outc = np.zeros(len(live), dtype=bool)
             for q in other:
-                outc |= ((np.minimum(A[..., q], B[..., q]) < -1) | (np.maximum(A[..., q], B[..., q]) > self.ext[q] + 1)
-                         ).any(1)
+                outc |= ((np.minimum(A[..., q], B[..., q]) < blo[live, q][:, None] - 1)
+                         | (np.maximum(A[..., q], B[..., q]) > bhi[live, q][:, None] + 1)).any(1)
             # ax 방향: 부재 끝점 범위 [m0 + t, m1 + t] ⊂ [−1, ext + 1]
             m0 = np.where(V, np.minimum(A[..., ax], B[..., ax]), np.inf).min(1)
             m1 = np.where(V, np.maximum(A[..., ax], B[..., ax]), -np.inf).max(1)
@@ -298,13 +305,13 @@ class LineSupport:
         U = D / L[:, None]
         M = (P0 + P1) / 2
         ev = ss.evaluate(self.std, self.ext, self.box_lo, self.box_hi, self.nd, self.od, M, U, others=None,
-                         exact=True, prefer_ceiling=False)
+                         exact=True, prefer_ceiling=False, sp=self.sp)
         ok = ev["opt"] >= 0
         smax = self.hmax   # 45° = 수평 간격 (검증기와 같음)
         w = np.where(ok, ev["kg"], 0.0)
         if (~ok).any():   # 막힘 무시 표 범위 안 최소 무게
             free = ss.evaluate(self.std, self.ext, np.zeros((0, 3)), np.zeros((0, 3)), self.nd, self.od, M[~ok],
-                               U[~ok], others=None, exact=False, prefer_ceiling=False)
+                               U[~ok], others=None, exact=False, prefer_ceiling=False, sp=self.sp)
             w[~ok] = np.where(free["opt"] >= 0, free["kg"], 0.0)
         half = L / 2
         return L / smax * w, np.where(ok, pack(half, half, np.zeros(n)), pack(np.full(n, NONE), 0, 0))

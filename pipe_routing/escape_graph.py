@@ -90,7 +90,8 @@ class EscapeGraph:
     """SpaceRepresentation 구현 (§4.1). 노드 키 = 격자 인덱스 (i, j, k)."""
 
     def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True,
-                 extra_terminals=(), pipe_grid_lines: bool = True, corner_arc: bool = False, extra_coords=None):
+                 extra_terminals=(), pipe_grid_lines: bool = True, corner_arc: bool = False, extra_coords=None,
+                 walls=(), soft=()):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
@@ -102,6 +103,9 @@ class EscapeGraph:
         (axis_mask·diag_mask, 시작 등급 i × 4 + 끝 등급 j: 양 끝을 그 엘보 접선만큼 깎은 직관이 장애물과 r 이상)로
         판정하고 엘보 호는 D48 로 본다. 마스크를 읽는 LayeredGraph 만 탐색할 수 있다 (이 그래프의 neighbors 는 쓰지 않는다).
         extra_coords: 축별 보조 격자 좌표 [x 목록, y 목록, z 목록] (D66 G1·G2). 영역 안 값만 쓴다.
+        walls: 장애물처럼 보는 추가 박스 [(lo, hi)] — 블록 쌍 공유 격벽 (D76, 두께 0).
+        soft: x 축 엣지만 지나갈 수 있는 박스 [(lo, hi)] — 관통 창 패치 (D76 ④⑤). 노드 유효성·x 축 엣지는 보지 않고,
+              다른 축·45° 엣지·엘보 호·엘보 빠른 통과 판정(clearance)은 장애물로 본다.
         """
         t0 = time.perf_counter()
         self.fast_build = fast_build
@@ -127,8 +131,12 @@ class EscapeGraph:
         # 영역: 블록 안쪽 유효 반경 (10mm 올림). 경계 단자만 예외 (D39)
         self.dom_lo = np.array([m, m, m], dtype=float)
         self.dom_hi = np.array([e - m for e in ext], dtype=float)
-        self.box_lo = np.array([o.box.min for o in scenario.obstacles], dtype=float).reshape(-1, 3)
-        self.box_hi = np.array([o.box.max for o in scenario.obstacles], dtype=float).reshape(-1, 3)
+        self.box_lo = np.array([o.box.min for o in scenario.obstacles] + [w[0] for w in walls] + [w[0] for w in soft],
+                               dtype=float).reshape(-1, 3)
+        self.box_hi = np.array([o.box.max for o in scenario.obstacles] + [w[1] for w in walls] + [w[1] for w in soft],
+                               dtype=float).reshape(-1, 3)
+        self.n_hard = len(self.box_lo) - len(soft)   # 앞쪽 n_hard 개 = 장애물 + 격벽, 뒤쪽 = 창 패치 (soft)
+        self.soft_axis = 0
         self.pipe_groups = self._pipe_groups(others)   # D50②: [(A, B, slack, r_other, lo, hi)]
 
         # 1) 축별 좌표
@@ -162,10 +170,12 @@ class EscapeGraph:
         pts = np.stack([X, Y, Z], -1).reshape(-1, 3)
         self.in_domain = np.all((pts >= self.dom_lo - EPS) & (pts <= self.dom_hi + EPS), 1).reshape(self.shape)
         self.clearance = self._grid_clearance(pts).reshape(self.shape)   # 격자점 ↔ 장애물 최소거리 (D48 거르기용)
-        clear = self.clearance >= self.r - EPS
+        hard = self.clearance if self.n_hard == len(self.box_lo) else \
+            self._grid_clearance(pts, self.n_hard).reshape(self.shape)   # 창 패치 제외 (노드 유효성)
+        clear = hard >= self.r - EPS
         # D65: 꺾임점은 r 미만이어도 된다. 다만 장애물과 r − t₁₃₅ 미만인 점은 엘보 호·깎은 직관(꺾임점에서 t 이내)이
         # 모두 r 안이라 어떤 경우에도 못 쓴다 (필요조건으로 거름 — 결과 같음)
-        self.node_ok = self.in_domain & ((self.clearance >= self.r - self.tangent[135] - EPS) if corner_arc else clear)
+        self.node_ok = self.in_domain & ((hard >= self.r - self.tangent[135] - EPS) if corner_arc else clear)
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
             self.node_ok[n] = clear[n]
         # 놓인 배관까지 여유 (거리 − slack − r_other). 엘보 빠른 통과 판정용으로 r + t_135 범위까지 계산
@@ -203,24 +213,24 @@ class EscapeGraph:
         X, Y, Z = self._axes_f
         return (X[node[0]], Y[node[1]], Z[node[2]])
 
-    def _grid_clearance(self, pts: np.ndarray) -> np.ndarray:
+    def _grid_clearance(self, pts: np.ndarray, nb=None) -> np.ndarray:
         """격자점(pts = 격자 순서) ↔ 장애물 최소거리. fast_build 면 박스에서 r + t_135 + 10mm 보다 먼 격자점은 그 박스를
         계산하지 않는다 (M10). 이 값은 판정(≥ r, ≥ r + t)에만 쓰이고 판정 문턱은 모두 그 거리 이하라 판정 결과는 같다 —
         먼 점의 값만 실제 거리 대신 더 큰 값(다른 박스까지 거리 또는 inf)이 된다."""
         if not self.fast_build:
-            return self._point_clearance(pts)
+            return self._point_clearance(pts, nb)
         best = np.full(self.shape, np.inf)
         P = pts.reshape(self.shape + (3,))
         reach = self.r + self.tangent[135] + 10.0
-        for lo, hi in zip(self.box_lo, self.box_hi):
+        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
             sl = tuple(self._span(k, lo[k], hi[k], reach, reach) for k in range(3))
             g = np.maximum(0.0, np.maximum(lo - P[sl], P[sl] - hi))
             best[sl] = np.minimum(best[sl], np.sqrt((g * g).sum(-1)))
         return best.reshape(-1)
 
-    def _point_clearance(self, pts: np.ndarray) -> np.ndarray:
+    def _point_clearance(self, pts: np.ndarray, nb=None) -> np.ndarray:
         best = np.full(len(pts), np.inf)
-        for lo, hi in zip(self.box_lo, self.box_hi):
+        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
             g = np.maximum(0.0, np.maximum(lo - pts, pts - hi))
             best = np.minimum(best, np.sqrt((g * g).sum(1)))
         return best
@@ -404,7 +414,8 @@ class EscapeGraph:
         nxt = np.meshgrid(*[self.axes[i][1:] if i == ax else self.axes[i] for i in range(3)], indexing="ij")
         hi_pts[..., ax] = nxt[ax]
         best = np.full(lo_pts.shape[:-1], np.inf)
-        for blo, bhi in zip(self.box_lo, self.box_hi):
+        nb = self.n_hard if ax == self.soft_axis else None   # 창 패치는 x 축 엣지가 지나간다 (D76)
+        for blo, bhi in zip(self.box_lo[:nb], self.box_hi[:nb]):
             if self.fast_build:
                 # M10: 박스에서 r 보다 먼 엣지는 판정(≥ r)에 영향이 없다 → 박스 근처 인덱스 범위만 계산 (결과 같음)
                 sl = tuple(self._span(k, blo[k], bhi[k], self.r, self.r) for k in range(3))
@@ -425,7 +436,7 @@ class EscapeGraph:
                 nxt = list(idx)
                 nxt[ax] = idx[ax] + 1
                 P1 = np.stack([self.axes[k][nxt[k]] for k in range(3)], -1)
-                mask[idx] = self.obstacle_trim_mask(P0, P1)
+                mask[idx] = self.obstacle_trim_mask(P0, P1, nb)
             self.axis_mask[ax] = mask
             ok = mask != 0
         return ok
@@ -497,7 +508,7 @@ class EscapeGraph:
         self.diag_ok[d] = ok
         self.diag_ok[rev] = rev_ok
 
-    def obstacle_trim_mask(self, P0: np.ndarray, P1: np.ndarray) -> np.ndarray:
+    def obstacle_trim_mask(self, P0: np.ndarray, P1: np.ndarray, nb=None) -> np.ndarray:
         """D65: 엣지마다 16비트 마스크 — 비트 (i × 4 + j) = 시작을 꺾임 등급 i, 끝을 등급 j 의 엘보 접선만큼 깎은
         직관이 모든 장애물과 r 이상 (D60 _pipes_mask 와 같은 규칙, 장애물 버전). 등급 0/45/90/135.
 
@@ -514,7 +525,7 @@ class EscapeGraph:
         U = D / np.where(L > 0, L, 1)[:, None]
         slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
         E, LO, HI = [], [], []
-        for lo, hi in zip(self.box_lo, self.box_hi):
+        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
             near = np.nonzero(np.all((slo < hi + self.r) & (shi > lo - self.r), 1))[0]
             if len(near):
                 E.append(near)
@@ -542,12 +553,13 @@ class EscapeGraph:
         np.bitwise_and.at(mask, e, ok)
         return mask
 
-    def _segments_clear(self, p0: np.ndarray, p1: np.ndarray, const_axis: int) -> np.ndarray:
-        """선분들이 모든 장애물과 유효 반경 이상 떨어져 있는가. 바운딩박스로 후보를 거른 뒤 정확 판정."""
+    def _segments_clear(self, p0: np.ndarray, p1: np.ndarray, const_axis: int, nb=None) -> np.ndarray:
+        """선분들이 모든 장애물과 유효 반경 이상 떨어져 있는가. 바운딩박스로 후보를 거른 뒤 정확 판정.
+        nb = 앞쪽 nb 개 박스만 (x 축 엣지는 창 패치 제외, D76)."""
         free = np.ones(len(p0), dtype=bool)
         seg_lo = np.minimum(p0, p1) - self.r
         seg_hi = np.maximum(p0, p1) + self.r
-        for blo, bhi in zip(self.box_lo, self.box_hi):
+        for blo, bhi in zip(self.box_lo[:nb], self.box_hi[:nb]):
             cand = np.nonzero(free & np.all((seg_lo < bhi) & (seg_hi > blo), 1))[0]
             if len(cand):
                 dist = planar_segment_box_distance(p0[cand], p1[cand], blo, bhi, const_axis)
