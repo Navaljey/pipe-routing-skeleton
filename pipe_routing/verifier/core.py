@@ -113,8 +113,9 @@ def verify(scenario: Scenario, routes: list, modules=None, std=None) -> dict:
     ctx = Context(scenario, pipes, rmap, cls, std=std or load_standard())
     out = {p.id: pipe_report(ctx, p, modules, timing) for p in scenario.pipes}
     if modules is None or "support" in modules:
-        from .support_group import group_d
+        from .support_group import attach_together, group_d
         t1 = time.perf_counter()
+        attach_together(out)   # D89: 함께 얹힌 배관에 D81 몫 사본
         group_d(ctx, out)   # D80 ⑥: 배치 후 병합만 (위치 불변)
         timing["group_d"] = time.perf_counter() - t1
     return {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info(),

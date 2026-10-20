@@ -176,12 +176,13 @@ def _support_summary(routes: list) -> dict:
     by_form, by_kg = {}, {}
     for s in sup:
         f = s.get("form", "?")
-        by_form[f] = by_form.get(f, 0) + 1
+        if not s.get("attached"):   # D89 사본은 실물이 아니다 (무게 몫만)
+            by_form[f] = by_form.get(f, 0) + 1
         by_kg[f] = round(by_kg.get(f, 0.0) + s["kg"], 4)
     jt = sum(x["J"]["total"] for x in routed)
     js = sum(x["J"]["support"] for x in routed)
     infeas = [x["pipe_id"] for x in routes if x.get("support_feasibility") and not x["support_feasibility"]["feasible"]]
-    return {"n_supports": len(sup), "by_form": dict(sorted(by_form.items())), "kg_by_form": dict(sorted(by_kg.items())),
+    return {"n_supports": sum(1 for s in sup if not s.get("attached")), "by_form": dict(sorted(by_form.items())), "kg_by_form": dict(sorted(by_kg.items())),
             "support_kg_routed": round(js, 4), "support_share_routed": round(js / jt, 4) if jt else None,
             "support_violation_pipes": sum(1 for x in routed if x["layer0"].get("support") is False),
             "infeasible": infeas, "d_groups": len({s["group"] for s in sup if s.get("group")})}
@@ -377,6 +378,8 @@ def main(argv=None) -> int:
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
     ap.add_argument("--no-support-lines", action="store_true",
                     help="D80 ⑨ 서포트 보조 격자선 (띠 경계·단자 첫 꺾임) 을 끈다 (비교용)")
+    ap.add_argument("--no-member-reservation", action="store_true",
+                    help="D90 (a1) 놓인 배관 서포트 부재 예약을 끈다 (비교용)")
     ap.add_argument("--expand-limit", type=int, default=None,
                     help="D72 배관당 탐색 예산 (확장 상태 수). 기본 = layered.EXPAND_BUDGET, 0 = 예전 벽시계 --time-limit (비결정적)")
     ap.add_argument("--full-marking", action="store_true",
@@ -401,6 +404,7 @@ def main(argv=None) -> int:
         router = make_layered_router(local_lines=args.router == "layered-b", support_cost=not args.no_support_cost,
                                      grid=parse_grid(args.grid), incremental=not args.full_marking,
                                      support_lines=not args.no_support_lines,
+                                     member_reserve=not args.no_member_reservation,
                                      expand_limit=("default" if args.expand_limit is None
                                                    else (args.expand_limit or None)))
     out_dir = Path(args.out)

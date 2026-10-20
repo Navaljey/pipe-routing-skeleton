@@ -189,7 +189,7 @@ class Session:
 
     def _group(self) -> dict:
         from .core import PipeReport, fittings_of
-        from .support_group import group_d
+        from .support_group import attach_together, group_d
         ctx = self._ctx()
         out = {}
         for pid in self.order:
@@ -203,6 +203,7 @@ class Session:
                 rep.supports = copy.deepcopy(self.sup[pid][0])
                 rep.support_gaps = self.sup[pid][1]
             out[pid] = rep
+        attach_together(out)
         group_d(ctx, out)
         return out
 

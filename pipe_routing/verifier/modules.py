@@ -326,6 +326,46 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     return res
 
 
+def _together_scan(ctx, pipe, far, locate, seg):
+    """D89 위치 탐색 (먼 쪽부터). 반환 = (s, 점, 방향, 서포트) 또는 None.
+    증분 검증(D85) 영향 범위: 본 수평 축 정렬 직관 구간마다 가로 ±(L1 표 끝 + 최대 OD/2 + 100), 높이 전체를 판정 영역으로
+    남긴다 — 그 안에 다른 배관이 들어오거나 나가면 함께 얹을 배관·D 부재 막힘이 바뀔 수 있다."""
+    from . import support_group as sg
+    trace = ctx.cache.setdefault(("support_trace", pipe.id), [])
+    H = float(ctx.scenario.block.extent[2])
+    lat = sg.l1_max(ctx.std) + max(p.od for p in ctx.pipes.values()) / 2 + ss.C_SIDE_MM
+    half = max(ss.ANGLE_HALF.values())
+    by_seg, cands = {}, {}
+    out = None
+    for s in far:
+        q, i = locate(s)
+        u = unit(seg[i])
+        if abs(u[2]) > 1e-9 or abs(abs(u).max() - 1) > 1e-9:
+            continue
+        by_seg.setdefault(i, [q, q, u])
+        by_seg[i][1] = q
+        if out is not None:
+            continue
+        if i not in cands:
+            cands[i] = sg.together_cands(ctx, pipe.id, q, u)
+        ax = int(np.argmax(np.abs(u)))
+        pcs = [c for c in cands[i] if min(c[2][ax], c[3][ax]) - 1e-6 <= q[ax] <= max(c[2][ax], c[3][ax]) + 1e-6]
+        if pcs:
+            r = sg.together_at(ctx, pipe.id, q, u, float(s), pieces=pcs)
+            if r is not None:
+                out = (float(s), q, u, r)
+    for i, (qa, qb, u) in by_seg.items():
+        ax = int(np.argmax(np.abs(u)))
+        lo, hi = np.minimum(qa, qb).astype(float), np.maximum(qa, qb).astype(float)
+        for k in range(2):
+            if k != ax:
+                lo[k] -= lat
+                hi[k] += lat
+        lo[2], hi[2] = 0.0, H
+        trace.append((lo, hi, float(half)))
+    return out
+
+
 @register("support")
 def support(ctx: Context, pr: PipeRoute):
     """§3.6 최대 간격 안에 설치 가능 위치가 있는가. 단자는 고정점(서포트)으로 본다 (D44).
@@ -376,6 +416,13 @@ def support(ctx: Context, pr: PipeRoute):
                     break
             if found:
                 break
+        # D89 (2026-10-19): A·B·C 가 모두 불가한 위치에서 나란한 배관을 함께 얹는 D. found 보다 먼 위치만 본다
+        # (그 위치들은 A·B·C 불가 — 그리드를 먼 쪽부터 봤으므로). 가장 먼 가능 위치 (D80 ⑤ 탐욕 그대로).
+        far = grid if found is None else grid[grid > found[0] + EPS]
+        if len(far):
+            t = _together_scan(ctx, pipe, far, locate, seg)
+            if t is not None:
+                found = t
         if found is None:
             mid, _ = locate((s_last + s_reach) / 2)
             out.append(Violation("support", pipe.id, _pt(mid),
@@ -386,8 +433,12 @@ def support(ctx: Context, pr: PipeRoute):
             s_last = s_reach
             continue
         s, q, u, c = found
-        c.update({"pos": _pt(q), "axis": _pt(u), "carried": [pipe.id], "basis_nd": pipe.nominal_size,
-                  "angle_length_mm": c["member_length_mm"], "kg_total": c["kg"], "kg_share": c["kg"]})
+        if c.get("origin") == "D89":
+            c.update({"pos": _pt(q), "axis": _pt(u)})
+        else:
+            c.update({"pos": _pt(q), "axis": _pt(u), "carried": [pipe.id], "basis_nd": pipe.nominal_size,
+                      "angle_length_mm": c["member_length_mm"], "kg_total": c["kg"], "kg_share": c["kg"]})
+        c["s_mm"] = round(float(s), 1)   # 호 위치 (D82 보완 간격 재확인)
         supports.append(c)
         s_last = s
     ctx.cache[("supports", pipe.id)] = supports

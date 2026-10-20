@@ -70,6 +70,47 @@ def _arclen(points, q):
     return out
 
 
+def _dir_kind(u) -> str:
+    u = np.asarray(u, float)
+    if abs(u[2]) > 1e-6:
+        return "vertical" if abs(abs(u[2]) - 1) < 1e-6 else "inclined45"
+    return "axis" if abs(np.abs(u).max() - 1) < 1e-6 else "horizontal45"
+
+
+def relation(P, Q, clP, clQ, lo, hi) -> dict:
+    """R7 막힘 유형 (S1-6c): P 의 서포트 불가 구간 [lo, hi] 중점에서 P 방향과, 막는 배관 Q 의 가장 가까운 직관 방향.
+    p_vertical_45 = P 구간이 수직·45° (D89 대상 아님) / q_vertical_45 = Q 가 수직·45° / crossing = 둘 다 축 정렬
+    수평이고 축이 다름 / parallel_* = 같은 축 수평 평행, 지지면 쪽 표면 높이 차(바닥·천장 중 작은 쪽) ≤ 50 · 50~300 · > 300."""
+    pts = clP.points
+    seg = pts[1:] - pts[:-1]
+    lens = np.linalg.norm(seg, axis=1)
+    cum = np.concatenate([[0], np.cumsum(lens)])
+    s = (lo + hi) / 2
+    i = int(min(np.searchsorted(cum, s, side="right") - 1, len(lens) - 1))
+    uP = seg[i] / lens[i]
+    p = pts[i] + (s - cum[i]) * uP
+    A, B, _, _ = clQ.arrays(("straight",))
+    d = B - A
+    L = np.linalg.norm(d, axis=1)
+    t = np.clip(((p - A) * d).sum(1) / np.maximum(L * L, 1e-12), 0, 1)
+    k = int(np.argmin(np.linalg.norm(A + t[:, None] * d - p, axis=1)))
+    q = A[k] + t[k] * d[k]
+    uQ = d[k] / L[k]
+    kp, kq = _dir_kind(uP), _dir_kind(uQ)
+    out = {"p_dir": kp, "q_dir": kq, "dz_mm": round(float(q[2] - p[2]), 1)}
+    if kp != "axis":
+        out["kind"] = "p_vertical_45"
+    elif kq != "axis":
+        out["kind"] = "q_vertical_45"
+    elif int(np.argmax(np.abs(uP))) != int(np.argmax(np.abs(uQ))):
+        out["kind"] = "crossing"
+    else:
+        sd = min(abs((p[2] - P.od / 2) - (q[2] - Q.od / 2)), abs((p[2] + P.od / 2) - (q[2] + Q.od / 2)))
+        out["surface_diff_mm"] = round(float(sd), 1)
+        out["kind"] = "parallel_le50" if sd <= 50 else ("parallel_50_300" if sd <= 300 else "parallel_gt300")
+    return out
+
+
 def diagnose(out_path: str, std) -> list:
     from . import verifier  # noqa: F401  (모듈 등록)
     out = json.loads(Path(out_path).read_text())
@@ -120,6 +161,13 @@ def diagnose(out_path: str, std) -> list:
                     blocked.append({"form": s["form"], "face": s["face"], "variant": s["variant"], "L": s["L"],
                                     "gap_m": [lo / 1000, hi / 1000]})
         blockers = single or reducing
+        rels = []
+        for v in base_v:
+            m = re.match(r"([\d.]+)~([\d.]+) m", v.message)
+            lo, hi = float(m.group(1)) * 1000, float(m.group(2)) * 1000
+            if blockers:
+                Q = min(blockers, key=lambda q: dist[q])
+                rels.append(dict(relation(pipes[P], pipes[Q], cls[P][0], cls[Q][0], lo, hi), blocker=Q))
         rel = sorted({"after" if tpos[Q] > tpos[P] else "before" for Q in blockers})
         rows.append({
             "scenario": stem, "pipe": P, "size": pipes[P].nominal_size, "type": pipes[P].type_id,
@@ -131,6 +179,9 @@ def diagnose(out_path: str, std) -> list:
             "center_clearance_mm": {Q: round(dist[Q], 1) for Q in blockers},
             "surface_gap_mm": {Q: round(dist[Q] - pipes[P].radius - pipes[Q].radius, 1) for Q in blockers},
             "blocked_supports": blocked,
+            "relations": rels,   # R7 막힘 유형 (가장 가까운 막는 배관 기준, 불가 구간마다)
+            "relation": (max(sorted({x["kind"] for x in rels}), key=[x["kind"] for x in rels].count)
+                         if rels else "none"),
         })
     return rows
 

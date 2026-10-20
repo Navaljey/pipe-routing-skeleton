@@ -40,7 +40,11 @@
                 "kg_total": {"type": "number", "minimum": 0},
                 "kg_share": {"type": "number", "minimum": 0},
                 "members": {"type": "array", "items": {"type": "object", "required": ["a", "b", "role"],
-                  "properties": {"a": {"$ref": "#/$defs/vec3"}, "b": {"$ref": "#/$defs/vec3"}, "role": {"type": "string"}}}}
+                  "properties": {"a": {"$ref": "#/$defs/vec3"}, "b": {"$ref": "#/$defs/vec3"}, "role": {"type": "string"}}}},
+                "origin": {"enum": ["D89"], "description": "D89: A·B·C 불가 위치에서 나란한 배관을 함께 얹은 D"},
+                "attached": {"type": "boolean", "description": "D89 D 의 함께 얹힌 배관 쪽 사본 (부재 없음, kg = D81 몫)"},
+                "shares": {"type": "object", "additionalProperties": {"type": "number"}},
+                "s_mm": {"type": "number", "description": "배관 중심선 호 위치 (D82 보완 간격 재확인)"}
               }
             }
           },
