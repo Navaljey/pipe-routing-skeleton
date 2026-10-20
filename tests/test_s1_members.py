@@ -3,10 +3,12 @@ import unittest
 
 import numpy as np
 
-from pipe_routing.layered import SupportMembers, make_layered_router
+from pipe_routing import layered
+from pipe_routing.layered import LayeredGraph, SupportMembers, make_layered_router, terminal_reservations
 from pipe_routing.verifier import PipeRoute, verify
 from pipe_routing.verifier.core import centerlines_of
 from pipe_routing.verifier.geom import segment_segment_distance
+from tests.test_s1_incremental import same_graph
 from tests.test_verifier import pipe, scenario
 
 A_WPS = [[0, 20000, 1500], [40000, 20000, 1500]]
@@ -59,6 +61,31 @@ class MemberReserveTest(unittest.TestCase):
         self.assertEqual(set(sm.routes), {"B"})
         self.assertTrue(all(op.id == "B" for op, _ in only_b))
         self.assertTrue(any(op.id == "A" for op, _ in both))
+
+
+    def test_grouped_items_bit_identical(self):
+        """부재를 배관별 항목 하나로 묶어도 (2026-10-20 시간 단축) 부재 하나씩 항목으로 둔 것·전체 재계산과 비트 동일."""
+        c = pipe("C", start=[0, 24000, 1500], end=[40000, 24000, 1500])
+        b = pipe("B", start=[12000, 0, 300], end=[12000, 40000, 300], sdir=(0, 1, 0), edir=(0, 1, 0))
+        sc = scenario([pipe("A", start=A_WPS[0], end=A_WPS[1]), b, c])
+        P = {p.id: p for p in sc.pipes}
+        placed = [(P["A"], A_WPS), (P["C"], [[0, 24000, 1500], [40000, 24000, 1500]])]
+        members = SupportMembers()(sc, placed)
+        self.assertGreater(len({op.id for op, _ in members}), 1)
+        rv = terminal_reservations(sc, exclude={"B", "A", "C"})
+        layered.clear_cache()
+        grouped = LayeredGraph(sc, P["B"], placed, reserved=rv, members=members)
+        full = LayeredGraph(sc, P["B"], placed, reserved=rv, members=members, incremental=False)
+        per = layered._member_items
+        layered._member_items = lambda ms: [(("S1", op.id, op.radius) + tuple(map(tuple, w)), op, w) for op, w in ms]
+        try:
+            layered.clear_cache()
+            single = LayeredGraph(sc, P["B"], placed, reserved=rv, members=members)
+        finally:
+            layered._member_items = per
+        self.assertEqual(len(grouped._items), len(placed) + len(rv) + 2)
+        self.assertTrue(same_graph(grouped, full))
+        self.assertTrue(same_graph(grouped, single))
 
 
 if __name__ == "__main__":
