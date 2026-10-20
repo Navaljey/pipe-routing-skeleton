@@ -369,8 +369,7 @@ class LayeredGraph:
         self._items = [(("P", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
                        for op, w in others if w] + \
                       [(("R", op.id) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w) for op, w in reserved] + \
-                      [(("S", op.id, op.radius) + tuple(map(tuple, np.asarray(w, dtype=float).tolist())), op, w)
-                       for op, w in members]
+                      _member_items(members)
         self.pipe_margin = self._item_node_margin(F) if self.incremental else self._node_margin(self.pos)
         self.node_valid = ok
         self.n_patch_nodes = int(np.sum(~is_base & ok))
@@ -405,7 +404,7 @@ class LayeredGraph:
         hit = cache.get(ck)
         if hit is not None:
             return hit
-        groups = EscapeGraph._pipe_groups(_Scratch(), [(op, w)])
+        groups = EscapeGraph._pipe_groups(_Scratch(), op.parts if isinstance(op, MemberSet) else [(op, w)])
         if not groups:
             hit = {"margin": (np.zeros(0, np.int64), np.zeros(0)), "axis": [None] * 3, "diag": {}}
             cache[ck] = hit
@@ -897,6 +896,28 @@ class MemberOp:
     id: str
     radius: float
     nominal_size: str = "15A"
+
+
+@dataclass(frozen=True)
+class MemberSet:
+    """D90 부재 예약 항목 묶음 — 한 배관의 서포트 부재 전부를 배치층 항목 하나로 (표시 항목 수 축소, 2026-10-20).
+    표시는 항목별 AND(엣지 마스크)·min(노드 여유) 합성이라 부재를 따로 두든 묶든 결과가 비트 동일하다."""
+    id: str
+    parts: tuple   # ((MemberOp, ((ax, ay, az), (bx, by, bz))), ...)
+
+
+def _member_items(members) -> list:
+    """부재 [(MemberOp, [a, b])] → 배관별 항목 [(키, MemberSet, None)]. 키 = "S"·배관·(반폭, 좌표) 전부 —
+    그 배관의 서포트가 하나라도 바뀌면 새 항목 (D67 캐시 미스), 같으면 캐시 그대로."""
+    by = {}
+    for op, w in members:
+        a, b = (tuple(map(float, v)) for v in w)
+        by.setdefault(op.id, []).append((op, (a, b)))
+    out = []
+    for pid, parts in by.items():
+        key = ("S", pid) + tuple((op.radius,) + a + b for op, (a, b) in parts)
+        out.append((key, MemberSet(pid, tuple(parts)), None))
+    return out
 
 
 class SupportMembers:
