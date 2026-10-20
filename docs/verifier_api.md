@@ -17,7 +17,7 @@ rep = verify(sc, [PipeRoute("P001", waypoints), ...])     # 경로 없는 배관
 rep["pipes"]["P001"].success          # Layer 0 전부 통과 (D44)
 rep["pipes"]["P001"].layer0           # {"collision": True, ..., "gravity_slope": None, "support": False}
 rep["pipes"]["P001"].violations       # [Violation(module, pipe_id, pos, message, value, other)]
-rep["pipes"]["P001"].supports         # D80 ⑦ 부재 묶음, kg_share (D81)
+rep["pipes"]["P001"].supports         # D80 ⑦ 부재 묶음, kg_share (D81). D89 함께 받친 D: origin "D89", 얹힌 쪽은 attached 사본
 rep["pipes"]["P001"].fittings         # 엘보·티·밸브 (J 분해용)
 rep["timing"]                         # 모듈별 시간 (초) — centerline · 7 모듈 · group_d
 rep["support_standard"]               # {"source": "private" | "public_approx", "sha256": ...}
