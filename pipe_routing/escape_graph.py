@@ -91,7 +91,8 @@ class EscapeGraph:
 
     def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True,
                  extra_terminals=(), pipe_grid_lines: bool = True, corner_arc: bool = False, extra_coords=None,
-                 walls=(), soft=()):
+                 walls=(), soft=(), domain=None, obstacles=None, coords=None, own_terminals: bool = True,
+                 node_filter=None):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
@@ -106,6 +107,11 @@ class EscapeGraph:
         walls: 장애물처럼 보는 추가 박스 [(lo, hi)] — 블록 쌍 공유 격벽 (D76, 두께 0).
         soft: x 축 엣지만 지나갈 수 있는 박스 [(lo, hi)] — 관통 창 패치 (D76 ④⑤). 노드 유효성·x 축 엣지는 보지 않고,
               다른 축·45° 엣지·엘보 호·엘보 빠른 통과 판정(clearance)은 장애물로 본다.
+        domain: 영역 (lo, hi) 덮어쓰기 — 블록 쌍의 블록별 층 (D91). 없으면 블록 안쪽 유효 반경.
+        obstacles: 장애물 박스 [(lo, hi)] 덮어쓰기 (D91: 자기 블록 장애물만). 없으면 시나리오 장애물 전부.
+        coords: 축 좌표 [x, y, z] 를 그대로 쓴다 (D91 관통 배관 합성 층). 없으면 위 규칙으로 만든다.
+        own_terminals=False: pipe 의 단자를 좌표·단자 노드에 넣지 않는다 (블록별 층 — 단자는 extra_terminals 로만).
+        node_filter: 격자점 중 노드로 쓸 수 있는 점 (bool 격자, 또는 축 좌표 → bool 격자 함수) — D91 합성 층의 영역별 격자선 (그 밖 점은 노드 아님).
         """
         t0 = time.perf_counter()
         self.fast_build = fast_build
@@ -118,10 +124,12 @@ class EscapeGraph:
         # D47: 경계 단자 쪽 첫·끝 직관 ≥ r + t (엘보가 면의 유효 반경 띠 밖에 놓이도록)
         self.start_boundary = pipe.start.kind == "boundary"
         self.end_boundary = pipe.end.kind == "boundary"
+        from .blockpair import boundary_straight
+        self.r_bnd = boundary_straight(pipe)   # 경계 단자 면 → 엘보 접점 직관 하한 (D47 r, D96 max(3D, r))
         t135 = self.tangent[135]
         self.run_cap = {a: max(self.L, self.tangent[a] + t135,
-                               self.r + self.tangent[a] if self.end_boundary else 0.0,
-                               self.r + t135 if (a == 0 and self.start_boundary) else 0.0)
+                               self.r_bnd + self.tangent[a] if self.end_boundary else 0.0,
+                               self.r_bnd + t135 if (a == 0 and self.start_boundary) else 0.0)
                         for a in self.tangent}
         self._arc_ok: dict[tuple, bool] = {}
         self._arc_tpl: dict[tuple, tuple] = {}   # D48 캐시: (노드, 들어오는 방향, 나가는 방향) → 엘보 호 이격 OK
@@ -131,23 +139,28 @@ class EscapeGraph:
         # 영역: 블록 안쪽 유효 반경 (10mm 올림). 경계 단자만 예외 (D39)
         self.dom_lo = np.array([m, m, m], dtype=float)
         self.dom_hi = np.array([e - m for e in ext], dtype=float)
-        self.box_lo = np.array([o.box.min for o in scenario.obstacles] + [w[0] for w in walls] + [w[0] for w in soft],
+        if domain is not None:
+            self.dom_lo, self.dom_hi = (np.array(v, dtype=float) for v in domain)
+        obs = [(o.box.min, o.box.max) for o in scenario.obstacles] if obstacles is None else list(obstacles)
+        self.box_lo = np.array([b[0] for b in obs] + [w[0] for w in walls] + [w[0] for w in soft],
                                dtype=float).reshape(-1, 3)
-        self.box_hi = np.array([o.box.max for o in scenario.obstacles] + [w[1] for w in walls] + [w[1] for w in soft],
+        self.box_hi = np.array([b[1] for b in obs] + [w[1] for w in walls] + [w[1] for w in soft],
                                dtype=float).reshape(-1, 3)
         self.n_hard = len(self.box_lo) - len(soft)   # 앞쪽 n_hard 개 = 장애물 + 격벽, 뒤쪽 = 창 패치 (soft)
         self.soft_axis = 0
         self.pipe_groups = self._pipe_groups(others)   # D50②: [(A, B, slack, r_other, lo, hi)]
 
         # 1) 축별 좌표
-        coords = [set() for _ in range(3)]
-        for ax in range(3):
+        own = (pipe.start, pipe.end) if own_terminals else ()
+        given = coords
+        coords = [set(map(float, given[ax])) if given is not None else set() for ax in range(3)]
+        for ax in (range(3) if given is None else ()):
             coords[ax].update((self.dom_lo[ax], self.dom_hi[ax]))
             for lo, hi in zip(self.box_lo[:, ax], self.box_hi[:, ax]):
                 for v in (_snap_down(lo - self.r), _snap_up(hi + self.r)):
                     if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
                         coords[ax].add(v)
-            for t in (pipe.start, pipe.end, *extra_terminals):
+            for t in (*own, *extra_terminals):
                 coords[ax].add(float(t.pos[ax]))
             for v in (extra_coords[ax] if extra_coords else ()):   # D66 보조 격자선
                 if self.dom_lo[ax] <= v <= self.dom_hi[ax]:
@@ -161,9 +174,9 @@ class EscapeGraph:
         self._axes_f = [[float(v) for v in a] for a in self.axes]   # position() 용 (numpy 스칼라 변환 비용 회피)
         self.index = [{v: i for i, v in enumerate(a)} for a in self.axes]
 
-        self.start_node = self.node_of(pipe.start.pos)
-        self.end_node = self.node_of(pipe.end.pos)
-        self.terminal_nodes = {self.start_node, self.end_node} | {self.node_of(t.pos) for t in extra_terminals}
+        self.start_node = self.node_of(pipe.start.pos) if own_terminals else None
+        self.end_node = self.node_of(pipe.end.pos) if own_terminals else None
+        self.terminal_nodes = {self.node_of(t.pos) for t in (*own, *extra_terminals)}
 
         # 2) 노드
         X, Y, Z = np.meshgrid(*self.axes, indexing="ij")
@@ -178,6 +191,9 @@ class EscapeGraph:
         self.node_ok = self.in_domain & ((hard >= self.r - self.tangent[135] - EPS) if corner_arc else clear)
         for n in self.terminal_nodes:   # 경계 단자는 영역 밖이지만 노드로 둔다 (D39)
             self.node_ok[n] = clear[n]
+        self.member = node_filter(self.axes) if callable(node_filter) else node_filter
+        if self.member is not None:
+            self.node_ok &= self.member
         # 놓인 배관까지 여유 (거리 − slack − r_other). 엘보 빠른 통과 판정용으로 r + t_135 범위까지 계산
         self.pipe_margin = np.full(self.shape, np.inf)
         if self.pipe_groups:
@@ -592,12 +608,12 @@ class EscapeGraph:
         return State(self.start_node, DIR_INDEX[self.pipe.start.dir], 0.0, 0)
 
     def is_goal(self, state: State, pipe: Pipe = None) -> bool:
-        # D45 ③: 마지막 꺾임 → end 단자 직관 ≥ 그 엘보 접선 길이. D47: 경계 end 면 ≥ r + t
+        # D45 ③: 마지막 꺾임 → end 단자 직관 ≥ 그 엘보 접선 길이. D47·D96: 경계 end 면 ≥ r_bnd + t
         if state.node != self.end_node or DIRS[state.dir] != self.pipe.end.dir:
             return False
         need = self.tangent[state.bend]
         if state.bend and self.end_boundary:
-            need += self.r
+            need += self.r_bnd
         return state.run >= need - EPS
 
     def turn_need(self, state: State, defl: int) -> float:
@@ -605,7 +621,7 @@ class EscapeGraph:
         t_new = self.tangent[defl]
         need = max(self.L, self.tangent[state.bend] + t_new)
         if state.bend == 0 and self.start_boundary:
-            need = max(need, self.r + t_new)
+            need = max(need, self.r_bnd + t_new)
         return need
 
     def elbow_clear(self, node, d_in: int, d_out: int) -> bool:

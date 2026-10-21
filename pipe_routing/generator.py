@@ -224,6 +224,7 @@ class PairConfig:
     n_pipes_per_block: int = 10
     n_crossing: int = 4
     window_mm: tuple = (4000, 2000)      # (y 폭, z 높이)
+    wall_thickness: float = 20.0         # 공유 격벽 두께 mm (D93, `추정:` 생성기 기본값)
     stair_rule: bool = True              # 새 세트 → D64 낙차 하한 보장
 
 
@@ -241,11 +242,13 @@ def _windows_overlap(a, b) -> bool:
 
 
 def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
-    """블록 A [0, W] · B [W, 2W] (x 방향). 블록마다 기본 생성기(D30)로 장애물·배관, 공유 격벽 면에는 경계 단자를
+    """블록 A [0, W] · 공유 격벽 [W, W + T] · B [W + T, 2W + T] (x 방향, T = 격벽 두께 D93). 블록마다 기본 생성기(D30)로 장애물·배관, 공유 격벽 면에는 경계 단자를
     두지 않는다. 관통 배관은 start 를 A, end 를 B 에서 뽑고 배관마다 공유 격벽 위 창(4 m × 2 m)을 둔다 —
     창끼리는 겹치지 않게 (`추정:`). 도달성은 보장하지 않는다 (D31)."""
     rng = random.Random(pc.seed)
     W = BLOCK_WIDTH
+    T = float(pc.wall_thickness)
+    dB = W + T   # B 블록 x 이동
     local = Block(BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
     cfgA = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule,
                            exclude_faces=((0, 1),))
@@ -255,7 +258,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
     obsB = gen_obstacles(rng, cfgB)
     obstacles = [Obstacle(f"OBS_{i + 1:03d}", "box", o.box) for i, o in enumerate(obsA)]
     obstacles += [Obstacle(f"OBS_{len(obsA) + i + 1:03d}", "box",
-                           Box((o.box.min[0] + W, *o.box.min[1:]), (o.box.max[0] + W, *o.box.max[1:])))
+                           Box((o.box.min[0] + dB, *o.box.min[1:]), (o.box.max[0] + dB, *o.box.max[1:])))
                   for i, o in enumerate(obsB)]
     idB = {o.id: f"OBS_{len(obsA) + i + 1:03d}" for i, o in enumerate(obsB)}
     pipes: list[Pipe] = []
@@ -272,7 +275,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
     for p in localA:
         pipes.append(_shift_pipe(p, 0.0, f"P{len(pipes) + 1:03d}"))
     for p in localB:
-        q = _shift_pipe(p, W, f"P{len(pipes) + 1:03d}")
+        q = _shift_pipe(p, dB, f"P{len(pipes) + 1:03d}")
         for t in (q.start, q.end):
             if t.host:
                 t.host = idB[t.host]
@@ -299,7 +302,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
                 continue
             if terminal_errors(pa, "end", local, obsB) or terminal_warnings(pa, "end", local, obsB):
                 continue
-            e_g = _shift_terminal(e_, W)
+            e_g = _shift_terminal(e_, dB)
             if e_g.host:
                 e_g.host = idB[e_g.host]
             pipe = Pipe(f"P{len(pipes) + 1:03d}", pa.type_id, size, gravity, slope, INSULATION_MM, s_, e_g,
@@ -320,7 +323,8 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
             "generator": "pipe_routing.generator.generate_block_pair", "config": asdict(pc),
             "n_pipes_requested": 2 * pc.n_pipes_per_block + pc.n_crossing,
             "n_crossing": sum(1 for p in pipes if p.crossing_window)}
-    sc = Scenario(Block(2 * W, BLOCK_LENGTH, BLOCK_HEIGHT), obstacles, pipes, meta, block_pair={"shared_x": W})
+    sc = Scenario(Block(2 * W + T, BLOCK_LENGTH, BLOCK_HEIGHT), obstacles, pipes, meta,
+                  block_pair={"shared_x": W + T / 2, "wall_thickness": T})
     errors, warnings = validate(sc)
     if errors:
         raise ScenarioError(errors)

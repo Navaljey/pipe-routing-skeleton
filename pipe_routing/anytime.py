@@ -61,7 +61,7 @@ def score(sc, routes: dict):
     for pid, v in rep["pipes"].items():
         if v.success:
             success += 1
-            J += j_breakdown(pipes[pid], routes[pid].waypoints, v.fittings, v.supports)["total"]
+            J += j_breakdown(pipes[pid], routes[pid].waypoints, v.fittings, v.supports, sc)["total"]
     return success, round(J, 6)
 
 

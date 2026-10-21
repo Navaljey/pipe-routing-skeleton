@@ -112,8 +112,11 @@ def _seg_hits_rect(p0, p1, lo, hi):
 class LineSupport:
     """고정 레이어 하나(구경별)의 격자선 서포트 모델. 선 데이터는 처음 쓸 때 계산해 캐시한다."""
 
-    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing, sp=()):
-        """sp = 블록 쌍 공유 격벽 x 목록 (D76) — 면·부재 범위는 선이 속한 블록 기준. box = 장애물 + 관통 창(구멍)."""
+    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing, sp=(), fixed=()):
+        """sp = 블록 쌍 공유 격벽 (a, b) 목록 (D76) — 면·부재 범위는 선이 속한 블록 기준. box = 장애물 + 관통 창(구멍).
+        fixed = 서포트 고정점 [(축, (c1 범위), (c2 범위), 선 좌표 t)] — 그 축 방향 선 중 다른 두 좌표가 범위 안인 선은
+        t 에서 지지된 것으로 본다 (무게 0, D94 관통부). 불가 구간에서 t 를 뺀다."""
+        self.fixed = tuple(fixed)
         self.std, self.nd, self.od = std, nd, od
         self.ext = np.asarray(ext, dtype=float)
         self.sp = tuple(sp)
@@ -219,9 +222,27 @@ class LineSupport:
         key = (ax, round(c1, 3), round(c2, 3))
         hit = self.cache.get(key)
         if hit is None:
-            hit = self._summarize(self._lines(ax, np.array([[c1, c2]]))[0])
+            hit = self._fix(ax, key[1], key[2], self._summarize(self._lines(ax, np.array([[c1, c2]]))[0]))
             self.cache[key] = hit
         return hit
+
+    def _fix(self, ax, c1, c2, summary):
+        """서포트 고정점 (D94): 선이 고정점 범위 안이면 불가 구간에서 고정점을 뺀다 (그 점에서 u = 0)."""
+        un, opts = summary
+        for fa, (l1, h1), (l2, h2), t in self.fixed:
+            if fa != ax or not (l1 - 1e-6 <= c1 <= h1 + 1e-6 and l2 - 1e-6 <= c2 <= h2 + 1e-6):
+                continue
+            cut = []
+            for s_, e_ in un:
+                if s_ < t < e_:
+                    cut += [[s_, t - _EPS], [t + _EPS, e_]]
+                elif not (s_ <= t <= e_):
+                    cut.append([s_, e_])
+                else:   # t 가 구간 끝 — 끝을 조금 줄인다
+                    if e_ - s_ > 2 * _EPS:
+                        cut.append([s_ + _EPS, e_] if t <= s_ else [s_, e_ - _EPS])
+            un = cut
+        return (un, opts)
 
     def prefetch(self, ax: int, keys: np.ndarray):
         keys = np.unique(np.round(keys, 3), axis=0)
@@ -232,7 +253,8 @@ class LineSupport:
         for k0 in range(0, len(new), 4096):
             chunk = new[k0:k0 + 4096]
             for k, data in zip(chunk, self._lines(ax, chunk)):
-                self.cache[(ax, float(k[0]), float(k[1]))] = self._summarize(data)
+                self.cache[(ax, float(k[0]), float(k[1]))] = self._fix(ax, float(k[0]), float(k[1]),
+                                                                       self._summarize(data))
 
     @staticmethod
     def _summarize(opts):

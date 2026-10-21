@@ -76,7 +76,7 @@ def parse_grid(text: str) -> GridSpec:
     return GridSpec(g1, g2)
 
 
-def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec):
+def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec, pipes=None, x0: float = 0.0):
     """D66 보조 격자 좌표 [x, y, z] (영역 밖 값은 EscapeGraph 가 버린다).
 
     G2: 블록 좌표 0 에서 간격 s 의 배수 (x, y, z 모두).
@@ -86,19 +86,23 @@ def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec):
                               낙차 / G1_MAX_LEVELS), 10 mm 올림.
       수평 보조선 = x·y 모두 블록 좌표 0 에서 간격 s_h = L_max / 2 (10 mm 내림)의 배수 — 직진 L_max 안에 하향 기회가
                     두 번 이상 오도록 (꺾임 직관 규칙이 길이를 쓰므로 여유를 둔다).
+    pipes: 높이 보조선을 만들 배관 (기본 = 시나리오 전부; 블록 쌍 블록별 층은 그 블록에서 시작하는 배관, D91).
+    x0: x 방향 블록 원점 (블록 쌍 B 블록, D91).
     """
     xs, ys, zs = [], [], []
     ext = sc.block.extent
     if spec.g2:
         for ax, out in enumerate((xs, ys, zs)):
-            out.extend(k * spec.g2 for k in range(1, int(ext[ax] // spec.g2) + 1))
+            o = x0 if ax == 0 else 0.0
+            out.extend(o + k * spec.g2 for k in range(1, int((ext[ax] - o) // spec.g2) + 1))
     if spec.g1 and gravity_layer:
         from .gravity import gravity_lmax
         sv = _snap_up(max(PIPE_SPECS[size].min_straight, 2 * elbow_tangent(size, 90)))
         sh = _snap_down(gravity_lmax(size) / 2)
         for ax, out in enumerate((xs, ys)):
-            out.extend(k * sh for k in range(1, int(ext[ax] // sh) + 1))
-        for p in sc.pipes:
+            o = x0 if ax == 0 else 0.0
+            out.extend(o + k * sh for k in range(1, int((ext[ax] - o) // sh) + 1))
+        for p in (sc.pipes if pipes is None else pipes):
             if p.nominal_size != size or not p.gravity_pipe:
                 continue
             z0, z1 = float(p.start.pos[2]), float(p.end.pos[2])
@@ -114,21 +118,24 @@ def grid_extra_coords(sc, size: str, gravity_layer: bool, spec: GridSpec):
     return [xs, ys, zs]
 
 
-def support_extra_coords(sc, size: str):
+def support_extra_coords(sc, size: str, block=None):
     """D80 ⑨ 서포트 보조 격자 좌표 [x, y, z] — 배치와 무관, 규칙에서만 정한다. `추정:`
       ① 서포트 띠 경계: 바닥·천장 형식(C) 표 끝 바로 안쪽 높이 (z = L_max − 10, H − L_max + 10), 격벽 형식(A·B) 표 끝
          바로 안쪽 (x·y = L_max − 10, 끝 − L_max + 10) — 띠 안으로 들어갈 노드
       ② 단자 첫 꺾임 선: 그 구경 배관 단자마다 단자 방향 축으로 첫(마지막) 꺾임 최소 직관만큼 떨어진 좌표
-         (max(§3.3, t₁₃₅), 경계 단자는 r + t₁₃₅, 10 mm 올림) — 단자 바로 앞에서 띠 쪽으로 꺾을 수 있게."""
+         (max(§3.3, t₁₃₅), 경계 단자는 max(§3.3, D47 r 또는 D96 max(3D, r) + t₁₃₅), 10 mm 올림) — 단자 바로 앞에서 띠 쪽으로 꺾을 수 있게.
+    block: 블록 쌍의 블록 번호 (D91) — 그 블록의 띠 경계·그 블록 안 단자만. None = 모든 블록."""
     from .support_std import band_lmax, load_standard
+    from .blockpair import block_of, block_ranges, walls
     std = load_standard()
     ext = sc.block.extent
     lm = band_lmax(std, size)
     out = [[], [], []]
-    from .blockpair import block_ranges, splits
     for f, (ax, side) in ss_face_axis().items():
         L = lm[f]
-        ranges = block_ranges(ext, splits(sc)) if ax == 0 else [(0.0, float(ext[ax]))]
+        ranges = block_ranges(ext, walls(sc)) if ax == 0 else [(0.0, float(ext[ax]))]
+        if ax == 0 and block is not None:
+            ranges = [ranges[block]]
         for a0, a1 in ranges:   # 블록 쌍이면 블록마다 (공유 격벽은 양쪽 블록의 벽, D76 ①)
             if math.isfinite(L) and 0 < L < a1 - a0:
                 out[ax].append(a0 + _snap_down(L - 10) if side == 0 else a0 + _snap_up(a1 - a0 - L + 10))
@@ -137,11 +144,21 @@ def support_extra_coords(sc, size: str):
         if p.nominal_size != size:
             continue
         for term, sgn in ((p.start, 1.0), (p.end, -1.0)):
+            if block is not None and block_of(sc, term.pos[0]) != block:
+                continue
             d = np.asarray(term.dir, dtype=float)
             ax = int(np.argmax(np.abs(d)))
-            need = max(p.min_straight, t135) if term.kind != "boundary" else max(p.min_straight, p.radius + t135)
-            out[ax].append(float(term.pos[ax]) + sgn * d[ax] * _snap_up(need))
+            out[ax].append(float(term.pos[ax]) + sgn * d[ax] * _snap_up(terminal_first_bend(p, term, t135)))
     return out
+
+
+def terminal_first_bend(p, term, t: float) -> float:
+    """단자에서 첫(마지막) 꺾임점까지 최소 직관 (꺾임 접선 t): 노즐 = max(§3.3, t), 경계 = max(§3.3, d + t),
+    d = blockpair.boundary_straight (D47 r, D96 max(3D, r))."""
+    if term.kind != "boundary":
+        return max(p.min_straight, t)
+    from .blockpair import boundary_straight
+    return max(p.min_straight, boundary_straight(p) + t)
 
 
 def ss_face_axis():
@@ -151,38 +168,115 @@ def ss_face_axis():
 
 def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True):
     """구경별 고정 레이어 (캐시). 반환: (그래프, 이번 호출에서 쓴 구성 시간).
-    D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다. support_lines = D80 ⑨ 서포트 보조 격자선."""
-    from .blockpair import crossing, splits, wall_boxes, window_box
+    D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다. support_lines = D80 ⑨ 서포트 보조 격자선.
+    블록 쌍 (D91): 한 블록 안 배관 = 그 블록만의 층 (단일 블록과 같은 정의), 관통 배관 = 양쪽 블록 층을 창에서 잇는 합성 층."""
+    from .blockpair import block_of, crossing, walls
+    if walls(sc):
+        if crossing(sc, pipe):
+            return _crossing_layer(sc, pipe, grid, support_lines)
+        return _block_layer(sc, pipe, grid, support_lines, block_of(sc, pipe.start.pos[0]))
     gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
-    # D76: 블록 쌍이면 층 종류 = 관통 배관의 창 (그 창만 뚫린 벽) 또는 "wall" (막힌 벽, 한 블록 안 배관)
-    pair = None
-    if splits(sc):
-        pair = tuple(pipe.crossing_window) if crossing(sc, pipe) else "wall"
-    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2, support_lines) + ((pair,) if pair else ())
+    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2, support_lines)
     hit = _FIXED.get(key)
     if hit is not None and hit[0] is sc:
-        _FIXED.move_to_end(key)
         return hit[1], 0.0
     same = [p for p in sc.pipes if p.nominal_size == pipe.nominal_size]
     extra = grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid)
     if support_lines:
         sl = support_extra_coords(sc, pipe.nominal_size)
         extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], sl)]
-    walls = wall_boxes(sc, None if pair in (None, "wall") else pair) if pair else ()
-    soft = [window_box(sc, pair)] if pair not in (None, "wall") else ()
-    if soft:   # 관통 직관 첫 꺾임 선: 격벽에서 r + t₁₃₅ (단자 첫 꺾임 선 D80 구현 ① 과 같은 규칙, `추정:` D76)
-        s_ = splits(sc)[0]
-        d_ = _snap_up(pipe.radius + elbow_tangent(pipe.nominal_size, 135))
-        extra = [list(a) for a in (extra or [[], [], []])]
-        extra[0] += [s_ - d_, s_ + d_]
     g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
-                    extra_coords=extra, walls=walls, soft=soft)
+                    extra_coords=extra)
     _FIXED[key] = (sc, g)
-    if pair:   # 블록 쌍: 층이 (구경 × 창) 으로 많고 크다 — 최근 쓴 PAIR_MAX_LAYERS 개만 둔다 (다시 만들면 같은 층, 결과 불변)
-        mine = [k for k, v in _FIXED.items() if v[0] is sc]
-        for k in mine[:max(0, len(mine) - PAIR_MAX_LAYERS)]:
-            del _FIXED[k]
     return g, g.build_sec
+
+
+def _block_layer(sc, pipe, grid: GridSpec, support_lines: bool, k: int):
+    """D91 블록 쌍의 블록 k 층 — 그 블록 장애물·그 블록 안 단자·그 블록 서포트 보조선만, 영역 = 블록 안쪽 r.
+    공유 격벽은 영역 밖이라 막힌 벽이다 (단일 블록의 블록 경계와 같다)."""
+    from .blockpair import block_of, block_ranges, walls
+    gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
+    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2, support_lines, ("block", k))
+    hit = _FIXED.get(key)
+    if hit is not None and hit[0] is sc:
+        return hit[1], 0.0
+    ext = sc.block.extent
+    x0, x1 = block_ranges(ext, walls(sc))[k]
+    m = _snap_up(pipe.radius)
+    domain = ([x0 + m, m, m], [x1 - m, ext[1] - m, ext[2] - m])
+    obstacles = [(o.box.min, o.box.max) for o in sc.obstacles if o.box.min[0] < x1 and o.box.max[0] > x0]
+    same = [p for p in sc.pipes if p.nominal_size == pipe.nominal_size]
+    terms = [t for p in same for t in (p.start, p.end) if block_of(sc, t.pos[0]) == k]
+    starters = [p for p in sc.pipes if block_of(sc, p.start.pos[0]) == k]
+    extra = grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid, pipes=starters, x0=x0)
+    if support_lines:
+        sl = support_extra_coords(sc, pipe.nominal_size, block=k)
+        extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], sl)]
+    g = EscapeGraph(sc, pipe, extra_terminals=terms, corner_arc=True, extra_coords=extra, domain=domain,
+                    obstacles=obstacles, own_terminals=False)
+    g.pair_layer = ("block", k)
+    _FIXED[key] = (sc, g)
+    return g, g.build_sec
+
+
+def _crossing_layer(sc, pipe, grid: GridSpec, support_lines: bool):
+    """D91 관통 배관 합성 층. `추정:` 세부 규칙 —
+      격자 좌표 = 양쪽 블록 층(_block_layer) 좌표의 합 + 관통 첫 꺾임 x 선 (격벽 면에서 crossing_straight + t₁₃₅ — D76 r, D94 max(3D, r) — 10 mm 올림)
+                  + 창 경계 y·z (창 가장자리에서 r 안쪽, 10 mm 안쪽으로 맞춤).
+      노드가 될 수 있는 격자점 (node_filter):
+        블록 k 영역 = 블록 k 층의 격자점 (x·y·z 가 모두 그 층 좌표),
+        관통 띠 (블록 k 의 첫 꺾임 x 선 ~ 격벽 면, x 는 그 층 좌표 + 첫 꺾임 선) = (그 층 y ∪ 창 y) × (그 층 z ∪ 창 z),
+          창 y = 창 경계 + 양쪽 블록 층 y 중 창 범위 안 값 (z 같음) — 창을 지나는 직관이 양쪽에서 같은 (y, z) 로
+          이어지고, 첫 꺾임 선 평면에서 그 블록 격자로 들어간다.
+      엣지 = 같은 격자선 위 연속한 노드 후보 사이 (중간 점이 노드 후보가 아니면 건너뛴다 — 판정은 같은 함수),
+             45° 는 대각선 위 가장 가까운 노드 후보. 공유 격벽 = 창만 뚫린 벽, 관통 구역 (D94) = x 축 직관만."""
+    from .blockpair import crossing_straight, crossing_zone, wall_boxes, walls
+    gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
+    window = tuple(pipe.crossing_window)
+    key = (id(sc), pipe.nominal_size, gravity_layer, grid.g2, support_lines, ("window",) + window)
+    hit = _FIXED.get(key)
+    if hit is not None and hit[0] is sc:
+        _FIXED.move_to_end(key)
+        return hit[1], 0.0
+    t0 = time.perf_counter()
+    GA, sa = _block_layer(sc, pipe, grid, support_lines, 0)
+    GB, sb = _block_layer(sc, pipe, grid, support_lines, 1)
+    (a, b), = walls(sc)
+    d = _snap_up(crossing_straight(pipe) + elbow_tangent(pipe.nominal_size, 135))
+    xA1, xB1 = a - d, b + d
+    y0, y1, z0, z1 = window
+    r = pipe.radius
+    wy = (_snap_up(y0 + r), _snap_down(y1 - r))
+    wz = (_snap_up(z0 + r), _snap_down(z1 - r))
+    ys = set(map(float, GA.axes[1])) | set(map(float, GB.axes[1]))
+    zs = set(map(float, GA.axes[2])) | set(map(float, GB.axes[2]))
+    yw = {v for v in ys if wy[0] <= v <= wy[1]} | set(wy)
+    zw = {v for v in zs if wz[0] <= v <= wz[1]} | set(wz)
+    coords = [set(map(float, GA.axes[0])) | set(map(float, GB.axes[0])) | {xA1, xB1}, ys | yw, zs | zw]
+    sets = {k: [set(map(float, G.axes[q])) for q in range(3)] for k, G in ((0, GA), (1, GB))}
+
+    def member(axes):
+        X, Y, Z = axes
+        ywm, zwm = np.isin(Y, list(yw)), np.isin(Z, list(zw))
+        out = np.zeros((len(X), len(Y), len(Z)), dtype=bool)
+        for k, (lo_x, hi_x) in ((0, (xA1, a)), (1, (b, xB1))):
+            xs_, ys_, zs_ = sets[k]
+            xm, ym, zm = np.isin(X, list(xs_)), np.isin(Y, list(ys_)), np.isin(Z, list(zs_))
+            slab = (X >= lo_x - EPS) & (X <= hi_x + EPS)
+            out |= xm[:, None, None] & ym[None, :, None] & zm[None, None, :]
+            out |= slab[:, None, None] & (ym | ywm)[None, :, None] & (zm | zwm)[None, None, :]
+        return out
+
+    same = [p for p in sc.pipes if p.nominal_size == pipe.nominal_size]
+    g = EscapeGraph(sc, pipe, extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
+                    coords=coords, walls=wall_boxes(sc, window), soft=[crossing_zone(sc, pipe)], node_filter=member)
+    g.pair_layer = ("window",) + window
+    g.build_sec = time.perf_counter() - t0 - sa - sb   # 블록 층 시간은 그 층에 (처음 만들 때 한 번)
+    _FIXED[key] = (sc, g)
+    mine = [k for k, v in _FIXED.items() if v[0] is sc and len(k) > 5 and k[5][0] == "window"]
+    for k in mine[:max(0, len(mine) - PAIR_MAX_LAYERS)]:   # 합성 층은 크다 — 최근 PAIR_MAX_LAYERS 개만 (결과 불변)
+        del _FIXED[k]
+    return g, time.perf_counter() - t0
 
 
 def clear_cache():
@@ -195,25 +289,34 @@ def fixed_layer_stats(sc) -> list:
     for (sid, size, grav, g2, slines, *pair), (s, F) in _FIXED.items():
         if s is not sc:
             continue
-        edges = int(sum(int(m.sum()) for m in F.axis_ok) + sum(int(m.sum()) for m in F.diag_ok.values()) // 2)
-        out.append({"size": size, "gravity_layer": grav, "g2": g2, "support_lines": slines, "grid": list(F.shape),
-                    "nodes": int(F.node_ok.sum()), "edges": edges, "build_sec": round(F.build_sec, 3)})
+        if F.member is not None:   # D91 합성 층: 엣지 = 이웃 표 (템플릿)
+            t = next(iter(F.__dict__.get("_tmpl_cache", {}).values()), None)
+            edges = None if t is None else int(sum(len(e["a"]) for e in t["axis"])
+                                                + sum(len(e["a"]) for e in t["diag"].values()) // 2)
+        else:
+            edges = int(sum(int(m.sum()) for m in F.axis_ok) + sum(int(m.sum()) for m in F.diag_ok.values()) // 2)
+        row = {"size": size, "gravity_layer": grav, "g2": g2, "support_lines": slines, "grid": list(F.shape),
+               "nodes": int(F.node_ok.sum()), "edges": edges, "build_sec": round(F.build_sec, 3)}
+        if pair:
+            row["pair_layer"] = list(pair[0])
+        out.append(row)
     return sorted(out, key=lambda x: (int(x["size"][:-1]), x["gravity_layer"]))
 
 
 def terminal_reservations(sc, exclude=()) -> list:
     """D59 단자 예약 구역: [(배관, [단자 위치, 직진 구간 끝])]. exclude = 예약하지 않을 배관 id (놓인 배관·자기 자신).
 
-    구간 길이: 노즐 = max(§3.3, t₉₀), 경계 = r + t₉₀ (D47). 방향: start 는 dir 쪽, end 는 dir 반대쪽(배관이 들어오는 쪽).
+    구간 길이: 노즐 = max(§3.3, t₉₀), 경계 = r_bnd + t₉₀ (D47 r, D96 max(3D, r)). 방향: start 는 dir 쪽, end 는 dir 반대쪽(배관이 들어오는 쪽).
     t₉₀ = 그 배관 90° 엘보 접선 길이 (D45). 엘보 각도 90° 기준 — 확정 (D59 보완, 가장 큰 접선 기준).
     """
+    from .blockpair import boundary_straight
     out = []
     for p in sc.pipes:
         if p.id in exclude:
             continue
         t90 = elbow_tangent(p.nominal_size, 90)
         for term, sgn in ((p.start, 1.0), (p.end, -1.0)):
-            L = (p.radius + t90) if term.kind == "boundary" else max(p.min_straight, t90)
+            L = (boundary_straight(p) + t90) if term.kind == "boundary" else max(p.min_straight, t90)
             a = np.array(term.pos, dtype=float)
             b = a + sgn * L * np.array(term.dir, dtype=float)
             out.append((p, [a.tolist(), b.tolist()]))
@@ -221,18 +324,25 @@ def terminal_reservations(sc, exclude=()) -> list:
 
 
 def line_support(F, sc, pipe) -> LineSupport:
-    """D80 ⑨ 라우터 서포트 모델 (구경·표준별 1회, 고정 레이어에 캐시)."""
-    from .blockpair import hole_boxes, splits
+    """D80 ⑨ 라우터 서포트 모델 (구경·표준별 1회, 고정 레이어에 캐시).
+    D94: 관통 배관 합성 층이면 창을 지나는 x 축 선은 격벽 중심에서 서포트 고정점 (무게 0, u = 0)."""
+    from . import blockpair as bp
     std = load_standard()
     key = (pipe.nominal_size, std.sha256)
     cache = F.__dict__.setdefault("_line_support", {})
     if key not in cache:
         # 장애물 = 시나리오 장애물 + 관통 창 구멍 (공유 격벽은 장애물이 아니라 지지면, D76 ①)
-        holes = hole_boxes(sc)
+        holes = bp.hole_boxes(sc)
         blo = [o.box.min for o in sc.obstacles] + [h[0] for h in holes]
         bhi = [o.box.max for o in sc.obstacles] + [h[1] for h in holes]
+        fixed = []
+        layer = getattr(F, "pair_layer", None)
+        if bp.D94 and layer and layer[0] == "window":
+            y0, y1, z0, z1 = layer[1:]
+            r = pipe.radius
+            fixed.append((0, (y0 + r, y1 - r), (z0 + r, z1 - r), bp.center(sc)))
         cache[key] = LineSupport(std, sc.block.extent, blo, bhi, pipe.nominal_size, pipe.od,
-                                 SUPPORT_SPACING[pipe.nominal_size], sp=splits(sc))
+                                 SUPPORT_SPACING[pipe.nominal_size], sp=bp.walls(sc), fixed=fixed)
     return cache[key]
 
 
@@ -258,6 +368,8 @@ def support_edge_model(LS: LineSupport, P0: np.ndarray, P1: np.ndarray):
 def _fixed_support(F, sc, pipe):
     """고정 레이어 엣지의 (비용, pack) — 구경·표준별 1회 캐시. axis[ax] = (cost, pack) 배열 (F.shape), diag[d] 도 같다."""
     LS = line_support(F, sc, pipe)
+    if F.member is not None:   # D91 합성 층: 엣지 서포트는 템플릿에서 엣지마다 계산 (격자 전체 표를 만들지 않음)
+        return (None, None)
     key = (pipe.nominal_size, LS.std.sha256)
     cache = F.__dict__.setdefault("_support_cache", {})
     if key in cache:
@@ -328,10 +440,12 @@ class LayeredGraph:
         self.tangent = {a: elbow_tangent(pipe.nominal_size, a) for a in (0, 45, 90, 135)}
         self.start_boundary = pipe.start.kind == "boundary"
         self.end_boundary = pipe.end.kind == "boundary"
+        from .blockpair import boundary_straight
+        self.r_bnd = boundary_straight(pipe)   # D47 r, D96 max(3D, r)
         t135 = self.tangent[135]
         self.run_cap = {a: max(self.L, self.tangent[a] + t135,
-                               self.r + self.tangent[a] if self.end_boundary else 0.0,
-                               self.r + t135 if (a == 0 and self.start_boundary) else 0.0)
+                               self.r_bnd + self.tangent[a] if self.end_boundary else 0.0,
+                               self.r_bnd + t135 if (a == 0 and self.start_boundary) else 0.0)
                         for a in self.tangent}
         self._arc_ok, self._arc_tpl = {}, {}
         self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
@@ -386,6 +500,7 @@ class LayeredGraph:
         # pipe_margin 은 엘보 빠른 통과 판정(이격 ≥ r + t)에만 쓴다
         self.use_support_cost = support_cost
         self._ext = np.array(sc.block.extent, dtype=float)
+        self._sc = sc
         self._sup = _fixed_support(F, sc, pipe) if support_cost else None
         self._ls = line_support(F, sc, pipe) if support_cost else None
         hm, vm = SUPPORT_SPACING[pipe.nominal_size]
@@ -410,6 +525,7 @@ class LayeredGraph:
         self.scost = np.zeros((N, 18))
         self.spack = np.zeros((N, 18), dtype=np.int64)   # D80 ⑨ 서포트 가능 구간 요약 (0 = 제약 없음)
         self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
+        self._pen = {}   # D95 관통 엣지 (노드, 방향) → 관통 피스 kg (scost 에 더해 둔다)
         if self.incremental:
             self.n_edges = self._incremental_edges(F, is_base, bi, first)
         else:
@@ -427,10 +543,10 @@ class LayeredGraph:
         관통점이 놓일 수 있는 사각형 W')을 지나야 하므로 경로 길이 ≥ dist(n, W') + dist(W', g). 두 항 모두 엣지마다
         감소량 ≤ 엣지 길이 (dist(·, W') 는 1-립시츠, 창을 지나는 x 직관은 W' 위 점을 지나므로 삼각부등식) → 최대값도
         허용·일관 (D40 ①, 최적성 보존 가속). 꺾임 항(D41)은 그대로."""
-        from .blockpair import crossing, splits
-        if not splits(sc) or not crossing(sc, pipe):
+        from .blockpair import center, crossing
+        if not crossing(sc, pipe):
             return
-        s = splits(sc)[0]
+        s = center(sc)
         y0, y1, z0, z1 = pipe.crossing_window
         r = pipe.radius
         lo = np.array([s, y0 + r, z0 + r])
@@ -499,6 +615,9 @@ class LayeredGraph:
         hit = cache.get(key)
         if hit is not None:
             return hit
+        if F.member is not None:
+            cache[key] = self._composite_template(F)
+            return cache[key]
         bi = np.nonzero(F.node_ok)
         Fidx = np.stack(bi, -1)   # 변형 A: 노드 = 고정 레이어 노드 (같은 순서)
         axis = []
@@ -554,6 +673,98 @@ class LayeredGraph:
         cache[key] = {"axis": axis, "diag": diag}
         return cache[key]
 
+    def _composite_template(self, F) -> dict:
+        """D91 합성 층의 엣지 목록 — _edge_template 와 같은 형식. 노드 후보(F.member) 격자선 위 연속한 후보 사이가
+        엣지이고 양 끝이 노드여야 한다. 격자에서 인접하면 고정 레이어 판정(axis_mask·diag_mask), 아니면 같은 함수
+        (obstacle_trim_mask, _segments_clear) 로 그 선분을 판정한다. 서포트 = support_edge_model (같은 모델)."""
+        shape = F.shape
+        nid = np.full(shape, -1, dtype=np.int64)
+        nid[np.nonzero(F.node_ok)] = np.arange(int(F.node_ok.sum()))
+        M = np.stack(np.nonzero(F.member), -1)
+        axis = []
+        for ax in range(3):
+            o1, o2 = [k for k in range(3) if k != ax]
+            order = np.lexsort((M[:, ax], M[:, o2], M[:, o1]))
+            A, B = M[order[:-1]], M[order[1:]]
+            same = (A[:, o1] == B[:, o1]) & (A[:, o2] == B[:, o2])
+            A, B = A[same], B[same]
+            a, b = nid[tuple(A.T)], nid[tuple(B.T)]
+            keep = (a >= 0) & (b >= 0)
+            A, B, a, b = A[keep], B[keep], a[keep], b[keep]
+            adj = B[:, ax] == A[:, ax] + 1
+            obs = np.zeros(len(a), dtype=np.int64)
+            obs[adj] = F.axis_mask[ax][tuple(A[adj].T)]
+            rest = np.nonzero(~adj)[0]
+            if len(rest):
+                obs[rest] = F.obstacle_trim_mask(self.pos[a[rest]], self.pos[b[rest]],
+                                                 self.n_hard if ax == self.soft_axis else None)
+            sel = np.nonzero(obs != 0)[0]
+            a, b = a[sel], b[sel]
+            P0, P1 = self.pos[a], self.pos[b]
+            sc_, sp_ = (support_edge_model(self._ls, P0, P1) if self._ls is not None
+                        else (np.zeros(len(a)), np.zeros(len(a), dtype=np.int64)))
+            e = {"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16),
+                 "L": np.abs(P1[:, ax] - P0[:, ax]), "sc": sc_, "sp": sp_}
+            if ax == 0:   # D95: 공유 격벽을 지나는 x 축 엣지 = 관통 피스 무게 (라우터 비용에도 같은 값)
+                from .blockpair import center, penetration_kg
+                c = center(self._sc)
+                pen = np.where((P0[:, 0] < c) & (P1[:, 0] > c), penetration_kg(self._sc, self.pipe), 0.0)
+                if pen.any():
+                    e["sc"] = sc_ + pen
+                    e["pen"] = pen
+            axis.append(e)
+        diag = {}
+        ok_src = F.node_ok & F.in_domain
+        for d in range(6, 18):
+            vec = DIRS[d]
+            pa, pb = [ax for ax in range(3) if vec[ax] != 0]
+            to_a, to_b = F.diag_to[d]
+            src = np.stack(np.nonzero(ok_src), -1)
+            cur = src.copy()
+            hops = np.zeros(len(src), dtype=np.int64)
+            live = np.ones(len(src), dtype=bool)
+            found = np.zeros(len(src), dtype=bool)
+            while live.any():   # 대각선 위 다음 격자점으로 — 노드 후보에 닿을 때까지
+                i = np.nonzero(live)[0]
+                na, nb_ = to_a[cur[i, pa], cur[i, pb]], to_b[cur[i, pa], cur[i, pb]]
+                ex = na >= 0
+                live[i[~ex]] = False
+                i, na, nb_ = i[ex], na[ex], nb_[ex]
+                cur[i, pa], cur[i, pb] = na, nb_
+                hops[i] += 1
+                hit = F.member[tuple(cur[i].T)]
+                found[i[hit]] = True
+                live[i[hit]] = False
+            sel = np.nonzero(found)[0]
+            S, D = src[sel], cur[sel]
+            okd = ok_src[tuple(D.T)]
+            S, D, hops = S[okd], D[okd], hops[sel][okd]
+            if not len(S):
+                continue
+            s_id, d_id = nid[tuple(S.T)], nid[tuple(D.T)]
+            P0, P1 = self.pos[s_id], self.pos[d_id]
+            one = hops == 1
+            m = np.zeros(len(S), dtype=np.int64)
+            if d in F.diag_mask:
+                m[one] = F.diag_mask[d][tuple(S[one].T)]
+            many = np.nonzero(~one)[0]
+            if len(many):   # EscapeGraph._diag_edges 와 같은 판정
+                c = 3 - pa - pb
+                free = F._segments_clear(P0[many], P1[many], c)
+                mm = np.where(free, 0xFFFF, 0).astype(np.int64)
+                part = np.nonzero(~free)[0]
+                if len(part):
+                    mm[part] = F.obstacle_trim_mask(P0[many][part], P1[many][part])
+                m[many] = mm
+            keep = m != 0
+            s_id, d_id, m = s_id[keep], d_id[keep], m[keep]
+            P0, P1 = self.pos[s_id], self.pos[d_id]
+            sc_, sp_ = (support_edge_model(self._ls, P0, P1) if self._ls is not None
+                        else (np.zeros(len(s_id)), np.zeros(len(s_id), dtype=np.int64)))
+            diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": m.astype(np.uint16),
+                       "L": np.linalg.norm(P1 - P0, axis=1), "sc": sc_, "sp": sp_}
+        return {"axis": axis, "diag": diag}
+
     def _incremental_edges(self, F, is_base, bi, first) -> int:
         """D67: 엣지 마스크 = 고정 레이어 마스크 AND (지금 항목들의 캐시된 마스크). _axis_edges·_diag_edges 와 같은 결과."""
         tmpl = self._edge_template(F)
@@ -576,6 +787,10 @@ class LayeredGraph:
                 self.scost[b, dm] = e["sc"][keep]
                 self.spack[a, dp] = e["sp"][keep]
                 self.spack[b, dm] = reverse_support(e["sp"][keep])
+            if "pen" in e:   # D95 (관통 엣지 — scost 에 이미 더함)
+                pen = e["pen"][keep]
+                for i in np.nonzero(pen)[0]:
+                    self._pen[(int(a[i]), dp)] = self._pen[(int(b[i]), dm)] = float(pen[i])
             n += len(a)
         nd = 0
         for d, e in tmpl["diag"].items():
@@ -877,13 +1092,17 @@ class LayeredGraph:
         return bool(state.ends & 1) and EscapeGraph.is_goal(self, state, pipe)
 
     def support_cost(self, a, b) -> float:
-        """D57 추정 서포트 (a → b 엣지)."""
-        return float(self.scost[a.node, b.dir])
+        """D57 추정 서포트 (a → b 엣지). 관통 비용(D95)은 같은 배열에 들어 있어 뺀다."""
+        return float(self.scost[a.node, b.dir]) - self.penetration_cost(a, b)
+
+    def penetration_cost(self, a, b) -> float:
+        """D95 관통 피스 무게 (관통 엣지만, 그 밖 0)."""
+        return self._pen.get((int(a.node), int(b.dir)), 0.0)
 
     def cost(self, a, b, pipe=None) -> float:
-        """ΔJ_router = 직관 + 엘보 + 추정 서포트 (D57). 컴파일 탐색과 같은 연산 순서."""
+        """ΔJ_router = 직관 + 엘보 + 추정 서포트 (D57) + 관통 (D95). 컴파일 탐색과 같은 연산 순서."""
         return (self.edge_length(a.node, b.node) / 1000 * self.kg_per_m
-                + elbow_kg(self.pipe.nominal_size, DEFLECTION[a.dir][b.dir]) + self.support_cost(a, b))
+                + elbow_kg(self.pipe.nominal_size, DEFLECTION[a.dir][b.dir]) + float(self.scost[a.node, b.dir]))
 
     def neighbors(self, state, pipe=None):
         """파이썬 구현 (시험·Dijkstra 대조용). EscapeGraph.neighbors 와 같은 규칙, 이웃 표 위에서."""

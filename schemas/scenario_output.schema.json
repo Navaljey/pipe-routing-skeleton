@@ -62,7 +62,8 @@
                 "required": ["total", "pipe", "elbow", "tee", "valve", "support"],
                 "properties": {
                   "total": {"type": "number"}, "pipe": {"type": "number"}, "elbow": {"type": "number"},
-                  "tee": {"type": "number"}, "valve": {"type": "number"}, "support": {"type": "number"}
+                  "tee": {"type": "number"}, "valve": {"type": "number"}, "support": {"type": "number"},
+                  "penetration": {"type": "number", "description": "D95 관통 피스 (블록 쌍만)"}
                 }
               }
             ]

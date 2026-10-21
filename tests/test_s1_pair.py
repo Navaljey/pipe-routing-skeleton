@@ -149,5 +149,97 @@ class PairRouterTest(unittest.TestCase):
                 self.assertLessEqual(max(m["a"][0], m["b"][0]), S + 1e-6)
 
 
+T = 20   # 두꺼운 격벽 (D93)
+WIN_LOW = [18000, 22000, 200, 2200]
+
+
+def thick_pair(pipes, obstacles=()):
+    """블록 A [0, S] · 격벽 [S, S + T] · B [S + T, 2S + T]."""
+    return from_dict({"block": {"width": 2 * S + T, "length": 40000, "height": 10000, "unit": "mm"},
+                      "block_pair": {"shared_x": S + T / 2, "wall_thickness": T},
+                      "obstacles": [{"id": f"B{i}", "type": "box", "min": lo, "max": hi}
+                                    for i, (lo, hi) in enumerate(obstacles)],
+                      "pipes": pipes})
+
+
+class D93LoaderTest(unittest.TestCase):
+    def test_obstacle_attributes(self):
+        base = {"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"}, "pipes": []}
+        sc = from_dict({**base, "obstacles": [{"id": "O", "type": "plate", "min": [0, 0, 0], "max": [5000, 20, 3000]}]})
+        o = sc.obstacles[0]
+        self.assertFalse(o.supportable or o.penetrable)
+        self.assertEqual(o.pen_axis(), 1)   # 가장 짧은 변 축 (y)
+        for attr in ("supportable", "penetrable"):   # S2 예정 — 미지원 (M27)
+            with self.assertRaises(ScenarioError) as cm:
+                from_dict({**base, "obstacles": [{"id": "O", "type": "plate", "min": [0, 0, 0], "max": [5000, 20, 3000],
+                                                  attr: True}]})
+            self.assertIn("S2", str(cm.exception))
+
+    def test_wall_thickness(self):
+        sc = thick_pair([pdict("X", [0, 20000, 5000], [2 * S + T, 20000, 5000], [1, 0, 0], [1, 0, 0], win=WIN)])
+        self.assertEqual(bp.walls(sc), ((S, S + T),))
+        self.assertTrue(bp.crossing(sc, sc.pipes[0]))
+        self.assertEqual(to_dict(from_dict(to_dict(sc))), to_dict(sc))
+        with self.assertRaises(ScenarioError):   # 장애물이 격벽과 겹침
+            thick_pair([], [([S - 100, 0, 0], [S + 5, 1000, 1000])])
+
+    def test_generator_thickness(self):
+        sc = generate_block_pair(PairConfig(seed=20265008), "t")
+        (a, b), = bp.walls(sc)
+        self.assertEqual((a, b), (S, S + PairConfig.wall_thickness))
+        self.assertEqual(sc.block.width, 2 * S + PairConfig.wall_thickness)
+
+
+@unittest.skipUnless(astar_fast.HAVE_NUMBA, "numba 없음")
+class D94RouterTest(unittest.TestCase):
+    """D94 관통 규칙 (두꺼운 격벽): 면에서 엘보 접점까지 직관 ≥ max(3D, r), 관통부 = 서포트 고정점, D95 관통 비용."""
+
+    def setUp(self):
+        clear_cache()
+
+    def test_dijkstra_and_rules(self):
+        x = pdict("X", [0, 20000, 1000], [2 * S + T, 19000, 1200], [1, 0, 0], [1, 0, 0], win=WIN_LOW)
+        sc = thick_pair([x], [([S - 3000, 15000, 0], [S - 1500, 19700, 3000])])
+        p = sc.pipes[0]
+        g = LayeredGraph(sc, p)
+        fast = _route(g, p, 60)
+        self.assertEqual(fast.status, "ok")
+        dij = astar_route(g, p, 600, heuristic=lambda s: 0.0)
+        self.assertEqual(dij.status, "ok")
+        self.assertTrue(math.isclose(fast.J, dij.J, rel_tol=1e-9, abs_tol=1e-6), (fast.J, dij.J))
+        pen = bp.penetration_kg(sc, p)
+        self.assertGreater(pen, 0)
+        self.assertTrue(math.isclose(fast.J_penetration, pen, rel_tol=1e-9))
+        rep = verify(sc, [PipeRoute("X", fast.waypoints)])["pipes"]["X"]
+        self.assertTrue(rep.success, [v.message for v in rep.violations])
+        # 관통 직관 양쪽 꺾임점은 격벽 면에서 max(3D, r) + t 이상
+        W = np.array(fast.waypoints)
+        i = int(np.nonzero((W[:-1, 0] < S) & (W[1:, 0] > S + T))[0][0])
+        from pipe_routing.constants import elbow_tangent
+        need = bp.straight_min(p) + elbow_tangent(p.nominal_size, 45) - 1e-6
+        if i > 0:
+            self.assertGreaterEqual(S - W[i, 0], need)
+        if i + 1 < len(W) - 1:
+            self.assertGreaterEqual(W[i + 1, 0] - (S + T), need)
+
+    def test_crossing_is_support_fixed_point(self):
+        """바닥 가까이 창을 지나는 직선 — 창 구멍 근처는 부재를 둘 수 없지만 관통부가 고정점이라 support 통과."""
+        x = pdict("X", [0, 20000, 1000], [2 * S + T, 20000, 1000], [1, 0, 0], [1, 0, 0], win=WIN_LOW)
+        sc = thick_pair([x])
+        wps = [[0, 20000, 1000], [2 * S + T, 20000, 1000]]
+        rep = verify(sc, [PipeRoute("X", wps)])
+        r = rep["pipes"]["X"]
+        self.assertTrue(r.layer0["support"], [v.message for v in r.violations])
+        self.assertTrue(r.layer0["crossing"], [v.message for v in r.violations])
+        s_mm = sorted(s["s_mm"] for s in r.supports)
+        fixed = S + T / 2
+        self.assertNotIn(round(fixed, 1), s_mm)   # 관통부에는 서포트를 두지 않는다 (무게 0 고정점)
+        gaps = np.diff([0.0] + [v for v in s_mm if v < fixed] + [fixed])
+        self.assertTrue(np.all(gaps <= 3000 + 1e-6))
+        g = LayeredGraph(sc, sc.pipes[0])
+        res = _route(g, sc.pipes[0], 60)
+        self.assertEqual(res.status, "ok")
+
+
 if __name__ == "__main__":
     unittest.main()

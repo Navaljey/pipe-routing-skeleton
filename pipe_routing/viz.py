@@ -43,21 +43,26 @@ def add_block(fig: go.Figure, sc: Scenario) -> None:
     xs, ys, zs = _edge_lines([Box((0.0, 0.0, 0.0), sc.block.extent)])
     fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", name="블록",
                                line=dict(color="black", width=3), hoverinfo="skip"))
-    if sc.block_pair:   # D76: 공유 격벽 (반투명 면) + 관통 창 (배관 색 테두리)
-        s = float(sc.block_pair["shared_x"])
+    if sc.block_pair:   # D76·D93: 공유 격벽 (두께 t 의 양쪽 면, 반투명) + 관통 창 (배관 색 테두리)
+        from .blockpair import walls
+        (a, b), = walls(sc)
         L, H = sc.block.length, sc.block.height
-        fig.add_trace(go.Mesh3d(x=[s, s, s, s], y=[0, L, L, 0], z=[0, 0, H, H], i=[0, 0], j=[1, 2], k=[2, 3],
-                                color="#c9a227", opacity=0.12, name=f"공유 격벽 x = {s:g}", hoverinfo="name",
-                                showlegend=True))
+        faces = sorted({a, b})
+        for n_f, s in enumerate(faces):
+            fig.add_trace(go.Mesh3d(x=[s, s, s, s], y=[0, L, L, 0], z=[0, 0, H, H], i=[0, 0], j=[1, 2], k=[2, 3],
+                                    color="#c9a227", opacity=0.12, legendgroup="wall",
+                                    name=f"공유 격벽 x = {a:g}~{b:g} (두께 {b - a:g})", hoverinfo="name",
+                                    showlegend=n_f == 0))
         for n, p in enumerate(sc.pipes):
             if not p.crossing_window:
                 continue
             y0, y1, z0, z1 = p.crossing_window
-            fig.add_trace(go.Scatter3d(x=[s] * 5, y=[y0, y1, y1, y0, y0], z=[z0, z0, z1, z1, z0], mode="lines",
-                                       name=f"{p.id} 창", legendgroup=p.id,
-                                       line=dict(color=_PALETTE[n % len(_PALETTE)], width=5, dash="dash"),
-                                       hovertext=f"{p.id} 관통 창 y {y0:g}~{y1:g} · z {z0:g}~{z1:g}",
-                                       hoverinfo="text"))
+            for n_f, s in enumerate(faces):
+                fig.add_trace(go.Scatter3d(x=[s] * 5, y=[y0, y1, y1, y0, y0], z=[z0, z0, z1, z1, z0], mode="lines",
+                                           name=f"{p.id} 창", legendgroup=p.id, showlegend=n_f == 0,
+                                           line=dict(color=_PALETTE[n % len(_PALETTE)], width=5, dash="dash"),
+                                           hovertext=f"{p.id} 관통 창 y {y0:g}~{y1:g} · z {z0:g}~{z1:g}",
+                                           hoverinfo="text"))
 
 
 def add_obstacles(fig: go.Figure, sc: Scenario) -> None:

@@ -37,10 +37,11 @@ def polyline_length_mm(wps) -> float:
     return sum(math.dist(a, b) for a, b in zip(wps, wps[1:]))
 
 
-def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list) -> dict:
+def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) -> dict:
     """§5 J 분해 (kg). 직관 = 꺾임점 사이 중심선 길이 합 × kg/m — 라우터 비용(D37·D41)과 같은 정의 (D49).
 
     엘보·티·밸브 = 검증기가 보고한 관이음 목록 × §3.2 중량 (135° = 90° + 45°, D25), 서포트 = 검증기 서포트 kg 합 (D46).
+    블록 쌍 (sc 가 block_pair): 관통 = 공유 격벽 통과 수 × 관통 피스 무게 (D95, 직관과 별도) — 블록 쌍에서만 항목이 있다.
     """
     f = FITTINGS[pipe.nominal_size]
     unit = {"elbow_90": f.elbow90, "elbow_45": f.elbow45, "tee": f.tee, "gate_valve": f.gate_valve}
@@ -52,6 +53,9 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list) -> dict:
         "valve": by["gate_valve"],
         "support": sum(s["kg"] for s in supports),
     }
+    if sc is not None and getattr(sc, "block_pair", None):
+        from .blockpair import crossing_points, penetration_kg
+        J["penetration"] = len(crossing_points(sc, pipe, waypoints)) * penetration_kg(sc, pipe) if waypoints else 0.0
     J["total"] = sum(J.values())
     return {k: round(v, 4) for k, v in J.items()}
 
@@ -64,7 +68,8 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
     cl = build_centerline(waypoints, elbow_radius(pipe.nominal_size), ANGLE_TOL_DEG)
     straight = polyline_length_mm(waypoints) - sum(2 * b.tangent for b in cl.bends if math.isfinite(b.tangent))
     out = {"pipe": straight / 1000 * PIPE_SPECS[pipe.nominal_size].kg_per_m,
-           "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"]}
+           "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"],
+           **({"penetration": J["penetration"]} if "penetration" in J else {})}
     out["total"] = sum(out.values())
     return {k: round(v, 4) for k, v in out.items()}
 
@@ -85,7 +90,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
     routes = []
     for p in sc.pipes:
         r, v = results[p.id], rep["pipes"][p.id]
-        J = j_breakdown(p, r.waypoints, v.fittings, v.supports) if v.routed else None
+        J = j_breakdown(p, r.waypoints, v.fittings, v.supports, sc) if v.routed else None
         tries = plan.attempts.get(p.id, [])
         entry = {
             "pipe_id": p.id,
@@ -257,7 +262,8 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
         "success_rate": round(len(ok) / len(routes), 4) if routes else None,
         "success_rate_routed": round(len(ok) / len(routed), 4) if routed else None,   # D34 기준선 도달 가능 부분집합
         "J_total": jsum(ok, "total"),                                                 # §6.3 성공 배관 합
-        "J_breakdown_success": {k: jsum(ok, k) for k in ("pipe", "elbow", "tee", "valve", "support")},
+        "J_breakdown_success": {k: jsum(ok, k) for k in ("pipe", "elbow", "tee", "valve", "support")
+                                + (("penetration",) if any("penetration" in x["J"] for x in routed) else ())},
         "J_total_routed": jsum(routed, "total"),
         "real_weight_total": round(sum(x["real_weight"]["total"] for x in ok), 4),          # D49 보완, 성공 배관 합
         "real_weight_total_routed": round(sum(x["real_weight"]["total"] for x in routed), 4),

@@ -433,7 +433,7 @@ def _consts(space, pipe, goal):
     for bi, b in enumerate(ANG):
         need = space.tangent[b]
         if b and space.end_boundary:
-            need += space.r
+            need += getattr(space, "r_bnd", space.r)   # D47 r, D96 max(3D, r)
         goal_need_m[bi] = need - EPS
     thr = np.array([space.r + space.tangent[a] + EPS for a in ANG])
     ekg = np.array([elbow_kg(pipe.nominal_size, a) for a in ANG])

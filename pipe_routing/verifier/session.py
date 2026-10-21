@@ -98,7 +98,7 @@ class Session:
         recomputed = recomputed or {}
         out, jt = {}, 0.0
         for pid, rep in self.reports().items():
-            J = j_breakdown(self.pipes[pid], self.routes[pid].waypoints, rep.fittings, rep.supports) \
+            J = j_breakdown(self.pipes[pid], self.routes[pid].waypoints, rep.fittings, rep.supports, self.scenario) \
                 if rep.routed else None
             out[pid] = {"routed": rep.routed, "success": rep.success, "layer0": dict(rep.layer0), "J": J,
                         "supports": rep.supports, "violations": len(rep.violations)}

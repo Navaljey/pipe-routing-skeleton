@@ -44,6 +44,16 @@ class Obstacle:
     id: str
     type: str
     box: Box
+    supportable: bool = False      # D93: 면을 서포트 지지면으로 (기본 false = D21)
+    penetrable: bool = False       # D93: 관통 가능
+    penetration_axis: Optional[int] = None   # D93: 관통 축 0·1·2 (없으면 가장 짧은 변 축 — penetration_axis())
+
+    def pen_axis(self) -> int:
+        """D93 관통 축: 지정값, 없으면 박스의 가장 짧은 변 축 (`추정:`, 동률이면 앞 축)."""
+        if self.penetration_axis is not None:
+            return self.penetration_axis
+        size = [hi - lo for lo, hi in zip(self.box.min, self.box.max)]
+        return int(min(range(3), key=lambda k: size[k]))
 
 
 @dataclass
@@ -116,9 +126,14 @@ def terminal_stub(pipe: Pipe, which: str, length: Optional[float] = None) -> Box
     """단자에서 접속 방향으로 뻗는 직진 구간 (퇴화 박스).
 
     start: pos → pos + dir·L (출발 방향), end: pos − dir·L → pos (도착 방향). D29.
+    L 기본값 = §3.3 최소 직진, D96 이면 경계 단자는 max(§3.3, max(3D, r)) (생성기 D31 도 이 함수).
     """
     t = pipe.start if which == "start" else pipe.end
     L = pipe.min_straight if length is None else length
+    if length is None and t.kind == "boundary":   # D96: 경계 단자 직관 ≥ max(3D, r) (D47 이면 §3.3 그대로)
+        from .blockpair import D96, straight_min
+        if D96:
+            L = max(L, straight_min(pipe))
     sign = 1 if which == "start" else -1
     far = tuple(p + sign * d * L for p, d in zip(t.pos, t.dir))
     return Box.of_points(t.pos, far)
@@ -230,7 +245,9 @@ def from_dict(data: dict) -> Scenario:
     b = data["block"]
     sc = Scenario(
         block=Block(float(b["width"]), float(b["length"]), float(b["height"])),
-        obstacles=[Obstacle(o["id"], o["type"], Box(_vec(o["min"]), _vec(o["max"])))
+        obstacles=[Obstacle(o["id"], o["type"], Box(_vec(o["min"]), _vec(o["max"])), bool(o.get("supportable", False)),
+                            bool(o.get("penetrable", False)),
+                            "xyz".index(o["penetration_axis"]) if "penetration_axis" in o else None)
                    for o in data["obstacles"]],
         pipes=[Pipe(p["id"], p["type_id"], p["nominal_size"], p["gravity_pipe"], p["min_slope"],
                     float(p["insulation_thickness"]), _terminal(p["start"]), _terminal(p["end"]),
@@ -291,6 +308,9 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             snapped(f"{p.id}.branch[{i}]", v)
         if p.start.pos == p.end.pos:
             errors.append(f"{p.id}: start 와 end 가 같은 위치")
+    for o in sc.obstacles:   # D93: 블록 안 supportable·penetrable 장애물은 S2 (M27)
+        if o.supportable or o.penetrable:
+            errors.append(f"{o.id}: supportable·penetrable 장애물 — S2 예정 — 미지원 (D93, M27)")
     errors += _pair_errors(sc)
     if errors:
         return errors, warnings
@@ -327,11 +347,13 @@ def _pair_errors(sc: Scenario) -> list[str]:
                 errs.append(f"{p.id}: crossing_window 는 블록 쌍(block_pair) 시나리오에서만")
         return errs
     s = float(sc.block_pair["shared_x"])
-    if not (0 < s < sc.block.width) or abs(s / SNAP_MM - round(s / SNAP_MM)) > EPS:
-        return [f"block_pair.shared_x {s} 가 블록 안 10mm 격자 위가 아님"]
+    t = float(sc.block_pair.get("wall_thickness", 0.0))
+    wa, wb = s - t / 2, s + t / 2
+    if not (0 < wa and wb < sc.block.width) or any(abs(v / SNAP_MM - round(v / SNAP_MM)) > EPS for v in (wa, wb)):
+        return [f"block_pair: 공유 격벽 면 x = {wa:g}, {wb:g} 가 블록 안 10mm 격자 위가 아님 (shared_x ± wall_thickness/2)"]
     for o in sc.obstacles:
-        if o.box.min[0] < s - EPS and o.box.max[0] > s + EPS:
-            errs.append(f"{o.id}: 공유 격벽 x = {s:g} 을 가로지름")
+        if o.box.min[0] < wb - EPS and o.box.max[0] > wa + EPS:
+            errs.append(f"{o.id}: 공유 격벽 x = {wa:g}~{wb:g} 와 겹침")
     for p in sc.pipes:
         cross = side(p.start.pos[0], s) != side(p.end.pos[0], s)
         w = p.crossing_window
@@ -349,7 +371,7 @@ def _pair_errors(sc: Scenario) -> list[str]:
                 errs.append(f"{p.id}: crossing_window 가 배관(유효 반경 {p.radius:.2f})보다 작음")
         for which in ("start", "end"):
             t = getattr(p, which)
-            if abs(t.pos[0] - s) < p.radius - EPS:
+            if min(abs(t.pos[0] - wa), abs(t.pos[0] - wb)) < p.radius - EPS or wa - EPS < t.pos[0] < wb + EPS:
                 errs.append(f"{p.id}.{which}: 공유 격벽과 유효 반경 {p.radius:.2f} 이내")
     return errs
 
@@ -374,7 +396,10 @@ def to_dict(sc: Scenario) -> dict:
                     "height": num(sc.block.height), "unit": "mm"}
     if sc.block_pair:
         out["block_pair"] = {k: num(v) for k, v in sc.block_pair.items()}
-    out["obstacles"] = [{"id": o.id, "type": o.type, "min": vec(o.box.min), "max": vec(o.box.max)}
+    out["obstacles"] = [{"id": o.id, "type": o.type, "min": vec(o.box.min), "max": vec(o.box.max),
+                         **({"supportable": True} if o.supportable else {}),
+                         **({"penetrable": True} if o.penetrable else {}),
+                         **({"penetration_axis": "xyz"[o.penetration_axis]} if o.penetration_axis is not None else {})}
                         for o in sc.obstacles]
     out["pipes"] = [{
         "id": p.id, "type_id": p.type_id, "nominal_size": p.nominal_size,
