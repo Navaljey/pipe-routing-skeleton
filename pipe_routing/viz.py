@@ -6,6 +6,7 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import plotly.graph_objects as go
 
 from .constants import PIPE_SPECS
@@ -206,6 +207,27 @@ def add_graph(fig: go.Figure, g, axis: int = 2, value: float = None) -> dict:
                                legendgroup="graph", visible="legendonly",
                                line=dict(color="#e45756", width=1, dash="dash"), hoverinfo="skip"))
     return {"axis": "xyz"[axis], "value": float(plane), "nodes": len(ia), "edges_axis": n_axis, "edges_45": n_diag}
+
+
+def add_penetrations(fig: go.Figure, sc: Scenario, waypoints: dict) -> None:
+    """D94·D95 관통부: 공유 격벽 통과점 (서포트 고정점, 관통 피스 무게 hover)."""
+    from .blockpair import crossing_points, penetration_kg, thickness
+    pts, txt = [], []
+    for p in sc.pipes:
+        w = waypoints.get(p.id)
+        if not w:
+            continue
+        for _, q in crossing_points(sc, p, w):
+            pts.append(q)
+            txt.append(f"<b>{p.id}</b> 관통 ({p.nominal_size})<br>격벽 두께 {thickness(sc):g} mm · 관통 피스 "
+                       f"{penetration_kg(sc, p):.2f} kg (D95)<br>서포트 고정점 (D94)<br>"
+                       f"y {q[1]:.0f} · z {q[2]:.0f}")
+    if pts:
+        P = np.array(pts)
+        fig.add_trace(go.Scatter3d(x=P[:, 0], y=P[:, 1], z=P[:, 2], mode="markers", name="관통부 (D94·D95)",
+                                   marker=dict(size=6, color="#c9a227", symbol="diamond",
+                                               line=dict(color="black", width=1)),
+                                   hovertext=txt, hoverinfo="text"))
 
 
 def add_routes(fig: go.Figure, sc: Scenario, results, line_width: int = 7) -> None:

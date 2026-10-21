@@ -344,9 +344,11 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           + " |",
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
+    pen = any("penetration" in (x["J"] or {}) for x in out["routes"])   # D95 블록 쌍
     L += ["## 배관별", "",
-          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | 실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | "
+          + ("관통 | " if pen else "") + "실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if pen else "") + "---|---|---|---|"]
     for x in out["routes"]:
         J, m = x["J"] or {}, x["metrics"]
         fmt = lambda k: f"{J[k]:,.2f}" if J else "-"
@@ -356,7 +358,7 @@ def report_md(out: dict, scenario_path: str = "") -> str:
         L.append(f"| {x['pipe_id']} | {x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
                  f"{x['router']['search_sec']:.2f} | {x['router']['graph_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "
                  f"{', '.join(x['fail_causes']) or '-'} | {cls} | {fmt('total')} | {fmt('pipe')} | {fmt('elbow')} | "
-                 f"{fmt('support')} | {rw_s} | {m.get('length_m', '-')} | "
+                 f"{fmt('support')} | " + (f"{fmt('penetration')} | " if pen else "") + f"{rw_s} | {m.get('length_m', '-')} | "
                  f"{m.get('n_elbow_90', '-')}/{m.get('n_elbow_45', '-')} | {m.get('n_supports', '-')} |")
     L += ["", "## 위반 상세", ""]
     any_v = False
@@ -446,6 +448,9 @@ def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> N
     add_routes(fig, sc, [RouteResult(x["pipe_id"], "ok" if x["waypoints"] else x["router"]["status"],
                                      J=(x["J"] or {}).get("total"), waypoints=x["waypoints"]) for x in out["routes"]],
                line_width=2)   # 중심선은 가늘게 — 관(실제 굵기)이 보이도록
+    if sc.block_pair:   # D95 관통 피스 (hover: kg·격벽 두께)
+        from .viz import add_penetrations
+        add_penetrations(fig, sc, {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]})
     reps = {x["pipe_id"]: PipeReport(x["pipe_id"], bool(x["waypoints"]),
                                      violations=[Violation(v["module"], x["pipe_id"], v["pos"], v["message"])
                                                  for v in x["violations"]],
