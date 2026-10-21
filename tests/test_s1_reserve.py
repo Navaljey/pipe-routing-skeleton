@@ -49,11 +49,12 @@ class ReservationTest(unittest.TestCase):
         self.A, self.B = self.sc.pipes
 
     def test_reservation_geometry(self):
-        """D59: 노즐 = max(§3.3, t₉₀), 경계 = r + t₉₀, start 는 dir 쪽, end 는 dir 반대쪽."""
+        """D59: 노즐 = max(§3.3, t₉₀), 경계 = max(3D, r) + t₉₀ (D96, 이전 D47 r + t₉₀), start 는 dir 쪽, end 는 dir 반대쪽."""
+        from pipe_routing.blockpair import straight_min
         from pipe_routing.constants import elbow_tangent
         res = {(p.id, tuple(w[0])): w for p, w in terminal_reservations(self.sc)}
         w = res[("B", (20000.0, 20000.0, 0.0))]
-        L = self.B.radius + elbow_tangent("50A", 90)
+        L = straight_min(self.B) + elbow_tangent("50A", 90)
         self.assertTrue(np.allclose(w[1], [20000, 20000, L]))
         w = res[("B", (20000.0, 20000.0, 10000.0))]
         self.assertTrue(np.allclose(w[1], [20000, 20000, 10000 - L]))
