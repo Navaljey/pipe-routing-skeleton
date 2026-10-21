@@ -64,7 +64,7 @@ def straight_min(pipe) -> float:
 
 
 D94 = True    # 관통 직관 규칙 (D94: max(3D, r) + t, 관통부 서포트 고정점). False = 이전 D76 ④ (r + t) — 비교용
-D96 = False   # 경계 단자 직관 규칙: False = D47 (r + t), True = D96 (max(3D, r) + t). 영향 측정 뒤 기본값 True
+D96 = True    # 경계 단자 직관 규칙 (D96: max(3D, r) + t, 소유자 결정). False = 이전 D47 (r + t) — 영향 측정·비교용
 
 
 def boundary_straight(pipe) -> float:
