@@ -36,6 +36,12 @@ from .support_std import ANGLE_HALF, load_standard
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
 EXPAND_BUDGET = 4_194_304   # = 2²² (D73 — 기준선의 정의, 머신 속도 환산값 아님. D72 의 1,660,928 대체)
+EXPAND_BUDGET_PAIR = 8_388_608   # = 2²³ (D92 ③ — 블록 쌍 세트만, 맵 부피 2배 비례. 단일 블록 세트는 2²² 그대로)
+
+
+def default_budget(sc) -> int:
+    """세트별 배관당 확장 상한 (D73·D92 ③): 블록 쌍 = 2²³, 그 밖 = 2²²."""
+    return EXPAND_BUDGET_PAIR if getattr(sc, "block_pair", None) else EXPAND_BUDGET
 DIAG_FACTOR = 4             # D74: 실패 분류용 진단 단독 재라우팅 예산 = 라우팅 예산 × 4 (16,777,216)
 
 _FIXED: "OrderedDict" = OrderedDict()   # (id(scenario), 구경, 중력관 층 여부, 격자 변형[, 블록 쌍 층]) → (scenario, 고정 레이어)
@@ -1229,15 +1235,19 @@ class SupportMembers:
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
                         diagnostic: bool = True, support_lines: bool = True, member_reserve: bool = True,
-                        _members: "SupportMembers | None" = None):
+                        _members: "SupportMembers | None" = None, _factor: int = 1):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
     expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
     diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
-    member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다."""
-    if expand_limit == "default":
-        expand_limit = EXPAND_BUDGET
+    member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다.
+    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²) × _factor (진단 4)."""
+    auto = expand_limit == "default"
+
+    def limit_for(sc):
+        return default_budget(sc) * _factor if auto else expand_limit
+
     if member_reserve and _members is None:
         _members = SupportMembers()
 
@@ -1246,7 +1256,7 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
         members = _members(sc, placed) if member_reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
                          grid=grid, incremental=incremental, support_lines=support_lines, members=members)
-        r = _route(g, pipe, time_limit, expand_limit)
+        r = _route(g, pipe, time_limit, limit_for(sc))
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
@@ -1256,19 +1266,39 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                        f"{'' if member_reserve else '_nomembers'}")
     router.grid = grid
     router.support_lines = support_lines
-    router.search_budget = ({"kind": "expansions", "limit": expand_limit} if expand_limit is not None
-                            else {"kind": "wall_clock_sec", "limit": None})
+    with_diag = diagnostic and expand_limit is not None
+
+    def budget_for(sc):
+        """이 시나리오에 쓰는 예산 (출력 global.search_budget, D92 ③ 세트별 값)."""
+        lim = limit_for(sc)
+        if lim is None:
+            return {"kind": "wall_clock_sec", "limit": None}
+        out = {"kind": "expansions", "limit": lim}
+        if auto:
+            out["set"] = "block_pair" if getattr(sc, "block_pair", None) else "single_block"
+        if with_diag:
+            out["diagnosis_limit"] = lim * DIAG_FACTOR
+        return out
+
+    router.budget_for = budget_for
+    router.search_budget = ({"kind": "expansions", "limit": EXPAND_BUDGET if auto else expand_limit}
+                            if expand_limit is not None else {"kind": "wall_clock_sec", "limit": None})
+    if auto:
+        router.search_budget["by_set"] = {"single_block": EXPAND_BUDGET, "block_pair": EXPAND_BUDGET_PAIR}
     if reserve:   # 실패 분류에서 "예약끼리 충돌" 을 가려내는 데 쓴다 (multi)
         router.without_reservations = make_layered_router(local_lines, support_cost, reserve=False, grid=grid,
                                                           incremental=incremental, expand_limit=expand_limit,
                                                           diagnostic=False, support_lines=support_lines,
-                                                          member_reserve=member_reserve, _members=_members)
-    if diagnostic and expand_limit is not None:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
+                                                          member_reserve=member_reserve, _members=_members,
+                                                          _factor=_factor)
+    if with_diag:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
-                                                incremental=incremental, expand_limit=expand_limit * DIAG_FACTOR,
+                                                incremental=incremental,
+                                                expand_limit="default" if auto else expand_limit * DIAG_FACTOR,
                                                 diagnostic=False, support_lines=support_lines,
-                                                member_reserve=member_reserve, _members=_members)
-        router.search_budget["diagnosis_limit"] = expand_limit * DIAG_FACTOR
+                                                member_reserve=member_reserve, _members=_members,
+                                                _factor=_factor * DIAG_FACTOR if auto else 1)
+        router.search_budget["diagnosis_limit"] = router.search_budget["limit"] * DIAG_FACTOR
     return router
 
 

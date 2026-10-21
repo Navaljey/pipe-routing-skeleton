@@ -303,7 +303,8 @@ def main(argv=None) -> int:
         out = run(sc, router=router, planner=lambda sc_, r_, tl: plan)
         validate_output(out)
         curve = {"scenario": stem, "n_pipes": len(sc.pipes), "required_pipes": len(required_pipe_ids(sc)[0]),
-                 "grid_variant": args.grid, "seed": args.seed, "search_budget": router.search_budget,
+                 "grid_variant": args.grid, "seed": args.seed,
+                 "search_budget": router.budget_for(sc) if hasattr(router, "budget_for") else router.search_budget,
                  "stop": tr.stop, "max_sec": args.max_sec, "max_expanded": args.max_expanded,
                  "acceptance": "D75", "verified": tr.verified, "rejected": tr.rejected,
                  "t0_sec": round(tr.t0_sec, 3), "e0": tr.e0, "moves": tr.moves, "total_expanded": tr.total_expanded,

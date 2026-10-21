@@ -162,6 +162,22 @@ def thick_pair(pipes, obstacles=()):
                       "pipes": pipes})
 
 
+class D92BudgetTest(unittest.TestCase):
+    def test_per_set_budget(self):
+        """D92 ③: 블록 쌍 세트만 2²³ (진단 4배), 단일 블록은 2²² 그대로 (D73)."""
+        from pipe_routing.layered import EXPAND_BUDGET, EXPAND_BUDGET_PAIR
+        r = make_layered_router()
+        sc = pair([X])
+        self.assertEqual(EXPAND_BUDGET_PAIR, 2 ** 23)
+        self.assertEqual(r.budget_for(sc), {"kind": "expansions", "limit": 2 ** 23, "set": "block_pair",
+                                            "diagnosis_limit": 2 ** 25})
+        single = from_dict({"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"}, "obstacles": [],
+                            "pipes": [pdict("A", [0, 30000, 5000], [0, 35000, 5000], [1, 0, 0], [-1, 0, 0])]})
+        self.assertEqual(r.budget_for(single)["limit"], EXPAND_BUDGET)
+        self.assertEqual(r.diagnostic.budget_for(sc)["limit"], 2 ** 25)
+        self.assertEqual(r.diagnostic.budget_for(single)["limit"], 4 * EXPAND_BUDGET)
+
+
 class D93LoaderTest(unittest.TestCase):
     def test_obstacle_attributes(self):
         base = {"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"},

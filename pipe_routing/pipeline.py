@@ -33,6 +33,11 @@ OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_o
 
 # ---------------------------------------------------------------- J (§5, D49)
 
+def _terminal_rules() -> dict:
+    from . import blockpair as bp
+    return {"boundary": "D96" if bp.D96 else "D47", "crossing": "D94" if bp.D94 else "D76"}
+
+
 def polyline_length_mm(wps) -> float:
     return sum(math.dist(a, b) for a, b in zip(wps, wps[1:]))
 
@@ -144,8 +149,10 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         **_shared_support(routes),                     # D81 공유 서포트 귀속 규칙·총무게
         **full_success_summary(routes),        # D77 ①
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
-        "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
+        "search_budget": (router.budget_for(sc) if hasattr(router, "budget_for")   # D72·D92 ③ 세트별 예산
+                          else getattr(router, "search_budget", None)),
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
+        "terminal_rules": _terminal_rules(),     # D94·D96 관통·경계 단자 직관 규칙
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
 
@@ -396,10 +403,15 @@ def main(argv=None) -> int:
     ap.add_argument("--grid", default="g0",
                     help="D66 고정층 격자 보강 변형 (layered 라우터): g0 = 기본, g1 = 중력관 높이·수평 보조선, "
                          "g2:<mm> = 전 배관 일정 간격 보조선, g1+g2:<mm> = 조합")
+    ap.add_argument("--boundary-rule", choices=("d47", "d96"), default=None,
+                    help="경계 단자 직관 규칙 (D96 영향 측정용 — 기본 = blockpair.D96)")
     ap.add_argument("--html-only", action="store_true",
                     help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
                          "(plotly.js 포함 — 보고 첨부용, §0)")
     args = ap.parse_args(argv)
+    if args.boundary_rule:   # D96 영향 측정용 (기본 = blockpair.D96)
+        from . import blockpair
+        blockpair.D96 = args.boundary_rule == "d96"
     if args.html_only:
         for path in args.paths:
             stem = Path(path).stem
