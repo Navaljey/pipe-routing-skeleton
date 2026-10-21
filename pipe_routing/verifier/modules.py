@@ -446,7 +446,6 @@ def _together_scan(ctx, pipe, far, locate, seg):
     return out
 
 
-@register("support")
 def support_fixed_points(ctx: Context, pid: str) -> list:
     """서포트 고정점의 호 위치 (주 중심선 꺾임점 사이 길이 기준) — D94 관통부 (격벽 중심면 통과점). 단자는 따로 (양 끝)."""
     key = ("support_fixed", pid)
@@ -462,6 +461,7 @@ def support_fixed_points(ctx: Context, pid: str) -> list:
     return ctx.cache[key]
 
 
+@register("support")
 def support(ctx: Context, pr: PipeRoute):
     """§3.6 최대 간격 안에 설치 가능 위치가 있는가. 단자는 고정점(서포트)으로 본다 (D44).
 

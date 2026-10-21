@@ -164,7 +164,8 @@ def thick_pair(pipes, obstacles=()):
 
 class D93LoaderTest(unittest.TestCase):
     def test_obstacle_attributes(self):
-        base = {"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"}, "pipes": []}
+        base = {"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"},
+                "pipes": [pdict("A", [0, 30000, 5000], [0, 35000, 5000], [1, 0, 0], [-1, 0, 0])]}
         sc = from_dict({**base, "obstacles": [{"id": "O", "type": "plate", "min": [0, 0, 0], "max": [5000, 20, 3000]}]})
         o = sc.obstacles[0]
         self.assertFalse(o.supportable or o.penetrable)
@@ -181,7 +182,8 @@ class D93LoaderTest(unittest.TestCase):
         self.assertTrue(bp.crossing(sc, sc.pipes[0]))
         self.assertEqual(to_dict(from_dict(to_dict(sc))), to_dict(sc))
         with self.assertRaises(ScenarioError):   # 장애물이 격벽과 겹침
-            thick_pair([], [([S - 100, 0, 0], [S + 5, 1000, 1000])])
+            thick_pair([pdict("A", [0, 30000, 5000], [0, 35000, 5000], [1, 0, 0], [-1, 0, 0])],
+                       [([S - 100, 0, 0], [S + 5, 1000, 1000])])
 
     def test_generator_thickness(self):
         sc = generate_block_pair(PairConfig(seed=20265008), "t")
@@ -195,6 +197,12 @@ class D94RouterTest(unittest.TestCase):
     """D94 관통 규칙 (두꺼운 격벽): 면에서 엘보 접점까지 직관 ≥ max(3D, r), 관통부 = 서포트 고정점, D95 관통 비용."""
 
     def setUp(self):
+        self._d94 = bp.D94
+        bp.D94 = True
+        clear_cache()
+
+    def tearDown(self):
+        bp.D94 = self._d94
         clear_cache()
 
     def test_dijkstra_and_rules(self):
