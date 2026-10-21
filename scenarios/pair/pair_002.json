@@ -12,7 +12,8 @@
         2000
       ],
       "wall_thickness": 20.0,
-      "stair_rule": true
+      "stair_rule": true,
+      "d94_rule": true
     },
     "n_pipes_requested": 24,
     "n_crossing": 4

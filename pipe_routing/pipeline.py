@@ -25,7 +25,7 @@ from .gravity import feasibility
 from .support_std import load_standard, support_feasibility
 from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
-from .scenario import Pipe, Scenario, load
+from .scenario import Pipe, Scenario, load, terminal_straight_blocked
 from .verifier import MODULE_ORDER, PipeRoute, verify
 
 OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_output.schema.json"
@@ -35,7 +35,9 @@ OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_o
 
 def _terminal_rules() -> dict:
     from . import blockpair as bp
-    return {"boundary": "D96" if bp.D96 else "D47", "crossing": "D94" if bp.D94 else "D76"}
+    from .layered import FIRST_BEND_ANGLES
+    return {"boundary": "D96" if bp.D96 else "D47", "crossing": "D94" if bp.D94 else "D76",
+            "first_bend_angles": list(FIRST_BEND_ANGLES)}   # D105
 
 
 def polyline_length_mm(wps) -> float:
@@ -113,7 +115,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
             "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
-            "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩
+            "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩ (D106 (a))
+            "terminal_feasibility": terminal_straight_blocked(p, sc.obstacles),   # D106 (b) 단자 직관 막힘
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -144,6 +147,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
+        "terminal_blocked": [x["pipe_id"] for x in routes                       # D106 (b) 단자 직관 막힘
+                             if x.get("terminal_feasibility") and not x["terminal_feasibility"]["feasible"]],
         "support_standard": rep["support_standard"],   # D78·D80 ⑪ 비공개 데이터 사용 여부·해시
         "support": _support_summary(routes),           # D80 ⑬
         **_shared_support(routes),                     # D81 공유 서포트 귀속 규칙·총무게
@@ -284,7 +289,8 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
 
 
 def required_pipe_ids(sc_or_routes) -> tuple:
-    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관과 D80 ⑩ 규칙상 서포트 불가 배관을 뺀 전부.
+    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관 · D80 ⑩ 규칙상 서포트 불가 · D106 (b) 단자 직관 막힘
+    배관을 뺀 전부.
     "단독 도달 불가" 는 증명된 불가능이 아니므로 분모에 남는다 (D34). 반환 (필수 배관 id 목록, 제외 id 목록).
     시나리오 또는 출력 routes[] 를 받는다. `추정:` D80 ⑩ 을 D64 와 같이 분모에서 뺀다 (D80 ⑩ "D64 방식")."""
     req, exc = [], []
@@ -294,12 +300,15 @@ def required_pipe_ids(sc_or_routes) -> tuple:
         for p in sc_or_routes.pipes:
             f = feasibility(p)
             sf = support_feasibility(p, ext, std, splits(sc_or_routes))
-            (exc if (f and not f["feasible"]) or not sf["feasible"] else req).append(p.id)
+            tf = terminal_straight_blocked(p, sc_or_routes.obstacles)
+            (exc if (f and not f["feasible"]) or not sf["feasible"] or not tf["feasible"] else req).append(p.id)
     else:
         for x in sc_or_routes:
             f = x.get("gravity_feasibility")
             sf = x.get("support_feasibility")
-            (exc if (f and not f["feasible"]) or (sf and not sf["feasible"]) else req).append(x["pipe_id"])
+            tf = x.get("terminal_feasibility")
+            (exc if (f and not f["feasible"]) or (sf and not sf["feasible"]) or (tf and not tf["feasible"])
+             else req).append(x["pipe_id"])
     return req, exc
 
 
@@ -405,10 +414,15 @@ def main(argv=None) -> int:
                          "g2:<mm> = 전 배관 일정 간격 보조선, g1+g2:<mm> = 조합")
     ap.add_argument("--boundary-rule", choices=("d47", "d96"), default=None,
                     help="경계 단자 직관 규칙 (D96 영향 측정용 — 기본 = blockpair.D96)")
+    ap.add_argument("--first-bend", choices=("d105", "d87"), default="d105",
+                    help="첫 꺾임 격자선: d105 = 45·90·135° 각각 (기본), d87 = t₁₃₅ 한 줄 (비교용)")
     ap.add_argument("--html-only", action="store_true",
                     help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
                          "(plotly.js 포함 — 보고 첨부용, §0)")
     args = ap.parse_args(argv)
+    if args.first_bend == "d87":   # D105 영향 비교용 (이전 t₁₃₅ 한 줄)
+        from . import layered
+        layered.FIRST_BEND_ANGLES = (135,)
     if args.boundary_rule:   # D96 영향 측정용 (기본 = blockpair.D96)
         from . import blockpair
         blockpair.D96 = args.boundary_rule == "d96"

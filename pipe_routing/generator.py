@@ -38,6 +38,7 @@ class GeneratorConfig:
     min_terminal_dist_mm: int = 5000             # start–end 맨해튼 거리 하한 (v3 min_path_cells 대응)
     max_tries: int = 500                         # 배관 1개 단자 샘플링 시도 횟수
     stair_rule: bool = False                     # D64: 중력관 낙차 ≥ 계단식 하향 규칙(D61) 하한 — 새 세트에만
+    d94_rule: bool = False                       # D107: 경계 단자 직진 구간 ≥ max(3D, r) + t₁₃₅ (D94·D96) — 새 세트에만
     exclude_faces: tuple = ()                    # 경계 단자를 두지 않을 면 [(축, -1|+1)] — 블록 쌍 공유 격벽 (D76)
 
 
@@ -152,10 +153,35 @@ def gen_pipe(rng: random.Random, cfg: GeneratorConfig, idx: int, block: Block,
             from .gravity import feasibility
             if not feasibility(pipe)["feasible"]:
                 continue   # D64: 새 규칙의 낙차 하한 (상향 단자 포함 배제)
+        if cfg.d94_rule and not d94_stub_ok(pipe, block, obstacles):
+            continue   # D107
         if _clashes(pipe, placed):
             continue
         return pipe
     return None
+
+
+def d94_stub_len(pipe: Pipe) -> float:
+    """D107: 경계 단자 직진 구간 보장 길이 = max(3D, r) + t₁₃₅ (D94·D96, 10 mm 올림)."""
+    from .blockpair import straight_min
+    from .constants import elbow_tangent
+    return math.ceil((straight_min(pipe) + elbow_tangent(pipe.nominal_size, 135)) / 10) * 10
+
+
+def d94_stub_ok(pipe: Pipe, block: Block, obstacles) -> bool:
+    """D107: 경계 단자의 D94 직진 구간이 블록 안(면 가장자리 r)·장애물과 r 이상 (노즐은 기존 D31 그대로)."""
+    from .scenario import boundary_face, inside_block_with_margin, obstacle_clearance
+    for w in ("start", "end"):
+        t = getattr(pipe, w)
+        if t.kind != "boundary":
+            continue
+        stub = terminal_stub(pipe, w, d94_stub_len(pipe))
+        if not inside_block_with_margin(stub, block.extent, pipe.radius,
+                                        skip_axis=boundary_face(t.pos, block.extent)[0][0]):
+            return False
+        if obstacle_clearance(stub, obstacles)[0] < pipe.radius - 1e-6:
+            return False
+    return True
 
 
 def _clashes(pipe: Pipe, placed: list[Pipe]) -> bool:
@@ -226,6 +252,7 @@ class PairConfig:
     window_mm: tuple = (4000, 2000)      # (y 폭, z 높이)
     wall_thickness: float = 20.0         # 공유 격벽 두께 mm (D93, `추정:` 생성기 기본값)
     stair_rule: bool = True              # 새 세트 → D64 낙차 하한 보장
+    d94_rule: bool = True                # 새 세트 → D107 경계 단자·관통 창 직진 구간 보장
 
 
 def _shift_terminal(t: Terminal, dx: float) -> Terminal:
@@ -241,6 +268,28 @@ def _windows_overlap(a, b) -> bool:
     return a[0] < b[1] and b[0] < a[1] and a[2] < b[3] and b[2] < a[3]
 
 
+def _end_only(p: Pipe) -> Pipe:
+    """start 를 end 와 같은 노즐로 바꾼 사본 (d94_stub_ok 를 end 쪽만 보게)."""
+    return Pipe(p.id, p.type_id, p.nominal_size, p.gravity_pipe, p.min_slope, p.insulation_thickness,
+                Terminal(p.end.pos, "nozzle", p.end.dir), p.end)
+
+
+def _window_zone_ok(p: Pipe, win, local: Block, obsA, obsB) -> bool:
+    """D107 `추정:` 관통 창 주변 직진 구간 보장 — 창(가장자리에서 r 안쪽) × 격벽 면에서 max(3D, r) + t₁₃₅ 까지의
+    상자가 각 블록 장애물과 r 이상 (블록 지역 좌표: A 는 x ∈ [W − L, W], B 는 [0, L])."""
+    from .scenario import obstacle_clearance
+    y0, y1, z0, z1 = win
+    r = p.radius
+    L = d94_stub_len(p)
+    W = local.width
+    lo_y, hi_y, lo_z, hi_z = y0 + r, y1 - r, z0 + r, z1 - r
+    if lo_y > hi_y or lo_z > hi_z:
+        return False
+    boxA = Box((W - L, lo_y, lo_z), (W, hi_y, hi_z))
+    boxB = Box((0.0, lo_y, lo_z), (L, hi_y, hi_z))
+    return obstacle_clearance(boxA, obsA)[0] >= r - 1e-6 and obstacle_clearance(boxB, obsB)[0] >= r - 1e-6
+
+
 def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
     """블록 A [0, W] · 공유 격벽 [W, W + T] · B [W + T, 2W + T] (x 방향, T = 격벽 두께 D93). 블록마다 기본 생성기(D30)로 장애물·배관, 공유 격벽 면에는 경계 단자를
     두지 않는다. 관통 배관은 start 를 A, end 를 B 에서 뽑고 배관마다 공유 격벽 위 창(4 m × 2 m)을 둔다 —
@@ -250,9 +299,9 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
     T = float(pc.wall_thickness)
     dB = W + T   # B 블록 x 이동
     local = Block(BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
-    cfgA = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule,
+    cfgA = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule, d94_rule=pc.d94_rule,
                            exclude_faces=((0, 1),))
-    cfgB = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule,
+    cfgB = GeneratorConfig(seed=pc.seed, n_pipes=pc.n_pipes_per_block, stair_rule=pc.stair_rule, d94_rule=pc.d94_rule,
                            exclude_faces=((0, -1),))
     obsA = gen_obstacles(rng, cfgA)
     obsB = gen_obstacles(rng, cfgB)
@@ -302,6 +351,10 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
                 continue
             if terminal_errors(pa, "end", local, obsB) or terminal_warnings(pa, "end", local, obsB):
                 continue
+            if pc.d94_rule and not (d94_stub_ok(pa, local, obsA) and d94_stub_ok(_end_only(pa), local, obsB)):
+                continue   # D107 (start 는 A, end 는 B 의 지역 좌표)
+            if pc.d94_rule and not _window_zone_ok(pa, win, local, obsA, obsB):
+                continue   # D107: 관통 창 양쪽 직진 구간
             e_g = _shift_terminal(e_, dB)
             if e_g.host:
                 e_g.host = idB[e_g.host]

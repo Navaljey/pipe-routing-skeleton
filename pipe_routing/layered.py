@@ -36,6 +36,7 @@ from .support_std import ANGLE_HALF, load_standard
 # D72 결정적 탐색 예산 = 배관당 A* 확장 상태 수 상한 (벽시계 60초 대체). 값·근거는 CLAUDE.md D72 (`추정:`).
 # CHECK_EVERY(2048) 의 배수라 정확히 이 수에서 멈춘다.
 EXPAND_BUDGET = 4_194_304   # = 2²² (D73 — 기준선의 정의, 머신 속도 환산값 아님. D72 의 1,660,928 대체)
+FIRST_BEND_ANGLES = (45, 90, 135)   # D105 첫 꺾임 격자선 편향각 (이전 D87 ① = (135,) — 비교용)
 EXPAND_BUDGET_PAIR = 8_388_608   # = 2²³ (D92 ③ — 블록 쌍 세트만, 맵 부피 2배 비례. 단일 블록 세트는 2²² 그대로)
 
 
@@ -128,8 +129,9 @@ def support_extra_coords(sc, size: str, block=None):
     """D80 ⑨ 서포트 보조 격자 좌표 [x, y, z] — 배치와 무관, 규칙에서만 정한다. `추정:`
       ① 서포트 띠 경계: 바닥·천장 형식(C) 표 끝 바로 안쪽 높이 (z = L_max − 10, H − L_max + 10), 격벽 형식(A·B) 표 끝
          바로 안쪽 (x·y = L_max − 10, 끝 − L_max + 10) — 띠 안으로 들어갈 노드
-      ② 단자 첫 꺾임 선: 그 구경 배관 단자마다 단자 방향 축으로 첫(마지막) 꺾임 최소 직관만큼 떨어진 좌표
-         (max(§3.3, t₁₃₅), 경계 단자는 max(§3.3, D47 r 또는 D96 max(3D, r) + t₁₃₅), 10 mm 올림) — 단자 바로 앞에서 띠 쪽으로 꺾을 수 있게.
+      ② 단자 첫 꺾임 선: 그 구경 배관 단자마다 단자 방향 축으로 첫(마지막) 꺾임 최소 직관만큼 떨어진 좌표, 편향각
+         45°·90°·135° 각각 (D105: 노즐 max(§3.3, t_θ), 경계 단자 max(§3.3, D96 max(3D, r) + t_θ), 10 mm 올림)
+         — 단자 바로 앞에서 띠 쪽으로 꺾을 수 있게.
     block: 블록 쌍의 블록 번호 (D91) — 그 블록의 띠 경계·그 블록 안 단자만. None = 모든 블록."""
     from .support_std import band_lmax, load_standard
     from .blockpair import block_of, block_ranges, walls
@@ -145,7 +147,7 @@ def support_extra_coords(sc, size: str, block=None):
         for a0, a1 in ranges:   # 블록 쌍이면 블록마다 (공유 격벽은 양쪽 블록의 벽, D76 ①)
             if math.isfinite(L) and 0 < L < a1 - a0:
                 out[ax].append(a0 + _snap_down(L - 10) if side == 0 else a0 + _snap_up(a1 - a0 - L + 10))
-    t135 = elbow_tangent(size, 135)
+    tangents = [elbow_tangent(size, a) for a in FIRST_BEND_ANGLES]   # D105: 편향각별 첫 꺾임 선
     for p in sc.pipes:
         if p.nominal_size != size:
             continue
@@ -154,7 +156,8 @@ def support_extra_coords(sc, size: str, block=None):
                 continue
             d = np.asarray(term.dir, dtype=float)
             ax = int(np.argmax(np.abs(d)))
-            out[ax].append(float(term.pos[ax]) + sgn * d[ax] * _snap_up(terminal_first_bend(p, term, t135)))
+            for t in tangents:
+                out[ax].append(float(term.pos[ax]) + sgn * d[ax] * _snap_up(terminal_first_bend(p, term, t)))
     return out
 
 
@@ -227,7 +230,7 @@ def _block_layer(sc, pipe, grid: GridSpec, support_lines: bool, k: int):
 
 def _crossing_layer(sc, pipe, grid: GridSpec, support_lines: bool):
     """D91 관통 배관 합성 층. `추정:` 세부 규칙 —
-      격자 좌표 = 양쪽 블록 층(_block_layer) 좌표의 합 + 관통 첫 꺾임 x 선 (격벽 면에서 crossing_straight + t₁₃₅ — D76 r, D94 max(3D, r) — 10 mm 올림)
+      격자 좌표 = 양쪽 블록 층(_block_layer) 좌표의 합 + 관통 첫 꺾임 x 선 (격벽 면에서 crossing_straight + t_θ, θ = 45·90·135 (D105) — D76 r, D94 max(3D, r) — 10 mm 올림, 관통 띠는 가장 먼 t₁₃₅ 선까지)
                   + 창 경계 y·z (창 가장자리에서 r 안쪽, 10 mm 안쪽으로 맞춤).
       노드가 될 수 있는 격자점 (node_filter):
         블록 k 영역 = 블록 k 층의 격자점 (x·y·z 가 모두 그 층 좌표),
@@ -248,7 +251,8 @@ def _crossing_layer(sc, pipe, grid: GridSpec, support_lines: bool):
     GA, sa = _block_layer(sc, pipe, grid, support_lines, 0)
     GB, sb = _block_layer(sc, pipe, grid, support_lines, 1)
     (a, b), = walls(sc)
-    d = _snap_up(crossing_straight(pipe) + elbow_tangent(pipe.nominal_size, 135))
+    ds = [_snap_up(crossing_straight(pipe) + elbow_tangent(pipe.nominal_size, ang)) for ang in FIRST_BEND_ANGLES]
+    d = max(ds)
     xA1, xB1 = a - d, b + d
     y0, y1, z0, z1 = window
     r = pipe.radius
@@ -258,7 +262,8 @@ def _crossing_layer(sc, pipe, grid: GridSpec, support_lines: bool):
     zs = set(map(float, GA.axes[2])) | set(map(float, GB.axes[2]))
     yw = {v for v in ys if wy[0] <= v <= wy[1]} | set(wy)
     zw = {v for v in zs if wz[0] <= v <= wz[1]} | set(wz)
-    coords = [set(map(float, GA.axes[0])) | set(map(float, GB.axes[0])) | {xA1, xB1}, ys | yw, zs | zw]
+    coords = [set(map(float, GA.axes[0])) | set(map(float, GB.axes[0])) | {a - v for v in ds} | {b + v for v in ds},
+              ys | yw, zs | zw]
     sets = {k: [set(map(float, G.axes[q])) for q in range(3)] for k, G in ((0, GA), (1, GB))}
 
     def member(axes):

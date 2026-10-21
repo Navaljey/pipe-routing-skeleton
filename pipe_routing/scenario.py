@@ -204,6 +204,30 @@ def terminal_errors(pipe: Pipe, which: str, block: Block, obstacles: list[Obstac
     return errs
 
 
+def terminal_straight_length(pipe: Pipe, which: str) -> float:
+    """D106 (b) 단자 강제 직관 (가장 짧은 허용 길이, 90° 꺾임 기준): 노즐 = max(§3.3, t₉₀),
+    경계 = max(3D, r) + t₉₀ (D96 — D47 이면 r + t₉₀)."""
+    from .constants import elbow_tangent
+    t90 = elbow_tangent(pipe.nominal_size, 90)
+    t = pipe.start if which == "start" else pipe.end
+    if t.kind == "boundary":
+        from .blockpair import boundary_straight
+        return boundary_straight(pipe) + t90
+    return max(pipe.min_straight, t90)
+
+
+def terminal_straight_blocked(pipe: Pipe, obstacles: list[Obstacle]) -> dict:
+    """D106 (b) "규칙상 불가능 — 단자 직관 막힘": 단자 강제 직관 구간이 고정 장애물과 r 미만인 단자 목록.
+    D33 로더 경고(terminal_warnings)와 같은 판정 함수 (terminal_stub + obstacle_clearance)."""
+    blocked = []
+    for which in ("start", "end"):
+        L = terminal_straight_length(pipe, which)
+        d, who = obstacle_clearance(terminal_stub(pipe, which, L), obstacles)
+        if d < pipe.radius - EPS:
+            blocked.append({"terminal": which, "length_mm": round(L, 1), "obstacle": who, "clearance_mm": round(d, 1)})
+    return {"feasible": not blocked, "blocked": blocked}
+
+
 def terminal_warnings(pipe: Pipe, which: str, block: Block, obstacles: list[Obstacle]) -> list[str]:
     """단자 직진 구간(§3.3 최소 직진)이 막혀 있으면 경고."""
     t = pipe.start if which == "start" else pipe.end
