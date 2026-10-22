@@ -1424,53 +1424,6 @@
     },
     {
       "id": "P021",
-      "type_id": "T5",
-      "nominal_size": "500A",
-      "gravity_pipe": true,
-      "min_slope": 0.005,
-      "insulation_thickness": 50,
-      "start": {
-        "pos": [
-          27530,
-          3250,
-          3270
-        ],
-        "kind": "nozzle",
-        "dir": [
-          0,
-          -1,
-          0
-        ],
-        "host": "OBS_017"
-      },
-      "end": {
-        "pos": [
-          46320,
-          28760,
-          0
-        ],
-        "kind": "boundary",
-        "dir": [
-          0,
-          0,
-          -1
-        ]
-      },
-      "valve_positions": [],
-      "branch_points": [],
-      "crossing_window": {
-        "y": [
-          2600,
-          6600
-        ],
-        "z": [
-          5770,
-          7770
-        ]
-      }
-    },
-    {
-      "id": "P022",
       "type_id": "T1",
       "nominal_size": "65A",
       "gravity_pipe": false,
@@ -1517,7 +1470,7 @@
       }
     },
     {
-      "id": "P023",
+      "id": "P022",
       "type_id": "T1",
       "nominal_size": "100A",
       "gravity_pipe": false,
@@ -1560,6 +1513,54 @@
         "z": [
           2040,
           4040
+        ]
+      }
+    },
+    {
+      "id": "P023",
+      "type_id": "T1",
+      "nominal_size": "100A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          8630,
+          18360,
+          7060
+        ],
+        "kind": "nozzle",
+        "dir": [
+          0,
+          0,
+          -1
+        ],
+        "host": "OBS_012"
+      },
+      "end": {
+        "pos": [
+          77370,
+          27060,
+          8540
+        ],
+        "kind": "nozzle",
+        "dir": [
+          -1,
+          0,
+          0
+        ],
+        "host": "OBS_045"
+      },
+      "valve_positions": [],
+      "branch_points": [],
+      "crossing_window": {
+        "y": [
+          4310,
+          8310
+        ],
+        "z": [
+          7420,
+          9420
         ]
       }
     },

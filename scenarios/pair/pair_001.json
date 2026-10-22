@@ -1543,52 +1543,6 @@
     },
     {
       "id": "P023",
-      "type_id": "T5",
-      "nominal_size": "300A",
-      "gravity_pipe": true,
-      "min_slope": 0.005,
-      "insulation_thickness": 50,
-      "start": {
-        "pos": [
-          21610,
-          6210,
-          10000
-        ],
-        "kind": "boundary",
-        "dir": [
-          0,
-          0,
-          -1
-        ]
-      },
-      "end": {
-        "pos": [
-          59870,
-          0,
-          5800
-        ],
-        "kind": "boundary",
-        "dir": [
-          0,
-          -1,
-          0
-        ]
-      },
-      "valve_positions": [],
-      "branch_points": [],
-      "crossing_window": {
-        "y": [
-          35490,
-          39490
-        ],
-        "z": [
-          3000,
-          5000
-        ]
-      }
-    },
-    {
-      "id": "P024",
       "type_id": "T1",
       "nominal_size": "50A",
       "gravity_pipe": false,
@@ -1631,6 +1585,52 @@
         "z": [
           2750,
           4750
+        ]
+      }
+    },
+    {
+      "id": "P024",
+      "type_id": "T1",
+      "nominal_size": "500A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          32790,
+          0,
+          8470
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          1,
+          0
+        ]
+      },
+      "end": {
+        "pos": [
+          47900,
+          7250,
+          10000
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          1
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": [],
+      "crossing_window": {
+        "y": [
+          1210,
+          5210
+        ],
+        "z": [
+          2390,
+          4390
         ]
       }
     }

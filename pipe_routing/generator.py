@@ -365,8 +365,8 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
                     continue
                 if pc.stair_rule:
                     from .gravity import feasibility
-                    if not feasibility(pipe)["feasible"]:
-                        continue
+                    if not feasibility(pipe, (W, W + T))["feasible"]:
+                        continue   # D64 + 관통 창 높이 (start → 창 → end, S1-7 보완)
             if _clashes(pipe, pipes):
                 continue
             windows.append(win)

@@ -64,6 +64,47 @@ class D107Test(unittest.TestCase):
         self.assertGreaterEqual(d94_stub_len(sc.pipes[0]), bp.straight_min(sc.pipes[0]))
 
 
+    def test_pair_generator_crossing_gravity(self):
+        """S1-7 D64 보완: 생성기가 만든 관통 중력관은 창을 지나는 하한까지 규칙상 가능."""
+        from pipe_routing.gravity import feasibility
+        for seed in (20265009, 20265011):
+            sc = generate_block_pair(PairConfig(seed=seed), "t")
+            w = bp.walls(sc)[0]
+            for p in sc.pipes:
+                if p.gravity_pipe:
+                    self.assertTrue(feasibility(p, w)["feasible"], (seed, p.id))
+
+
+class CrossingDropTest(unittest.TestCase):
+    """S1-7 D64 보완: 관통 중력관 하한 = start → 창 → end, 창 높이 범위 안."""
+
+    def pipe(self, window):
+        from pipe_routing.scenario import Pipe, Terminal
+        s = Terminal((30000.0, 20000.0, 8000.0), "nozzle", (0, 0, -1))
+        e = Terminal((50020.0, 20000.0, 1000.0), "nozzle", (0, 0, -1))
+        return Pipe("P1", "T5", "100A", True, 0.01, 50, s, e, crossing_window=window)
+
+    def test_window_height(self):
+        from pipe_routing.gravity import crossing_drop, feasibility
+        wall = (40000.0, 40020.0)
+        ok = self.pipe((18000.0, 22000.0, 4000.0, 6000.0))
+        c = crossing_drop(ok, wall)
+        self.assertTrue(c["feasible"])
+        lo, hi = c["window_z_feasible_mm"]
+        self.assertGreaterEqual(lo, 4000.0 + ok.radius - 0.1)   # 출력은 0.1 mm 반올림
+        self.assertLessEqual(hi, 8000.0 - c["req_start_window_mm"] + 0.1)
+        self.assertTrue(feasibility(ok, wall)["feasible"])
+        # 창이 start 보다 높으면 위로 올라가야 한다 → 규칙상 불가능 (창 없이 보는 D64 는 가능)
+        high = self.pipe((18000.0, 22000.0, 8000.0, 10000.0))
+        self.assertTrue(feasibility(high)["feasible"])
+        f = feasibility(high, wall)
+        self.assertFalse(f["feasible"])
+        self.assertIn("관통 창", f["basis"])
+        # 압력관은 None
+        self.assertIsNone(feasibility(self.pipe(None).__class__("P2", "T1", "100A", False, None, 50,
+                                                                 ok.start, ok.end), wall))
+
+
 if __name__ == "__main__":
     unittest.main()
 

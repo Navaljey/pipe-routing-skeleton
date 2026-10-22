@@ -20,7 +20,7 @@ import jsonschema
 import numpy as np
 
 from .constants import FITTINGS, PIPE_SPECS
-from .blockpair import splits
+from .blockpair import splits, walls
 from .gravity import feasibility
 from .support_std import load_standard, support_feasibility
 from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
@@ -114,7 +114,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_causes": fail_causes(r.status, v),
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
-            "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
+            "gravity_feasibility": feasibility(p, _wall(sc)),   # D64 (중력관만, 압력관 null, 관통이면 창 포함)
             "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩ (D106 (a))
             "terminal_feasibility": terminal_straight_blocked(p, sc.obstacles),   # D106 (b) 단자 직관 막힘
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
@@ -170,6 +170,12 @@ def deterministic_view(out):
     if isinstance(out, list):
         return [deterministic_view(v) for v in out]
     return out
+
+
+def _wall(sc):
+    """블록 쌍 공유 격벽 (a, b) — 관통 중력관 D64 하한 (창 포함) 용. 단일 블록은 None."""
+    w = walls(sc)
+    return w[0] if w else None
 
 
 def _gravity_summary(routes: list) -> dict:
@@ -298,7 +304,7 @@ def required_pipe_ids(sc_or_routes) -> tuple:
         std = load_standard()
         ext = np.array(sc_or_routes.block.extent, dtype=float)
         for p in sc_or_routes.pipes:
-            f = feasibility(p)
+            f = feasibility(p, _wall(sc_or_routes))
             sf = support_feasibility(p, ext, std, splits(sc_or_routes))
             tf = terminal_straight_blocked(p, sc_or_routes.obstacles)
             (exc if (f and not f["feasible"]) or not sf["feasible"] or not tf["feasible"] else req).append(p.id)
