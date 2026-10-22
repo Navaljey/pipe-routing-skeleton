@@ -66,3 +66,12 @@ class D107Test(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_d109_support_scan_runs(capsys, monkeypatch):
+    """D109 진단 도구: 경계 단자 배관에서 끝까지 실행 (공개 임시 표, 결과 불변 — 읽기만)."""
+    from pipe_routing import support_scan
+    monkeypatch.delenv("PIPE_SUPPORT_STANDARD", raising=False)
+    support_scan.main(["scenarios/procedural/proc_000.json", "P002"])
+    out = capsys.readouterr().out
+    assert "public_approx" in out and "[start]" in out and "꺾은 뒤" in out
