@@ -6,6 +6,7 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import plotly.graph_objects as go
 
 from .constants import PIPE_SPECS
@@ -43,6 +44,26 @@ def add_block(fig: go.Figure, sc: Scenario) -> None:
     xs, ys, zs = _edge_lines([Box((0.0, 0.0, 0.0), sc.block.extent)])
     fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", name="블록",
                                line=dict(color="black", width=3), hoverinfo="skip"))
+    if sc.block_pair:   # D76·D93: 공유 격벽 (두께 t 의 양쪽 면, 반투명) + 관통 창 (배관 색 테두리)
+        from .blockpair import walls
+        (a, b), = walls(sc)
+        L, H = sc.block.length, sc.block.height
+        faces = sorted({a, b})
+        for n_f, s in enumerate(faces):
+            fig.add_trace(go.Mesh3d(x=[s, s, s, s], y=[0, L, L, 0], z=[0, 0, H, H], i=[0, 0], j=[1, 2], k=[2, 3],
+                                    color="#c9a227", opacity=0.12, legendgroup="wall",
+                                    name=f"공유 격벽 x = {a:g}~{b:g} (두께 {b - a:g})", hoverinfo="name",
+                                    showlegend=n_f == 0))
+        for n, p in enumerate(sc.pipes):
+            if not p.crossing_window:
+                continue
+            y0, y1, z0, z1 = p.crossing_window
+            for n_f, s in enumerate(faces):
+                fig.add_trace(go.Scatter3d(x=[s] * 5, y=[y0, y1, y1, y0, y0], z=[z0, z0, z1, z1, z0], mode="lines",
+                                           name=f"{p.id} 창", legendgroup=p.id, showlegend=n_f == 0,
+                                           line=dict(color=_PALETTE[n % len(_PALETTE)], width=5, dash="dash"),
+                                           hovertext=f"{p.id} 관통 창 y {y0:g}~{y1:g} · z {z0:g}~{z1:g}",
+                                           hoverinfo="text"))
 
 
 def add_obstacles(fig: go.Figure, sc: Scenario) -> None:
@@ -186,6 +207,27 @@ def add_graph(fig: go.Figure, g, axis: int = 2, value: float = None) -> dict:
                                legendgroup="graph", visible="legendonly",
                                line=dict(color="#e45756", width=1, dash="dash"), hoverinfo="skip"))
     return {"axis": "xyz"[axis], "value": float(plane), "nodes": len(ia), "edges_axis": n_axis, "edges_45": n_diag}
+
+
+def add_penetrations(fig: go.Figure, sc: Scenario, waypoints: dict) -> None:
+    """D94·D95 관통부: 공유 격벽 통과점 (서포트 고정점, 관통 피스 무게 hover)."""
+    from .blockpair import crossing_points, penetration_kg, thickness
+    pts, txt = [], []
+    for p in sc.pipes:
+        w = waypoints.get(p.id)
+        if not w:
+            continue
+        for _, q in crossing_points(sc, p, w):
+            pts.append(q)
+            txt.append(f"<b>{p.id}</b> 관통 ({p.nominal_size})<br>격벽 두께 {thickness(sc):g} mm · 관통 피스 "
+                       f"{penetration_kg(sc, p):.2f} kg (D95)<br>서포트 고정점 (D94)<br>"
+                       f"y {q[1]:.0f} · z {q[2]:.0f}")
+    if pts:
+        P = np.array(pts)
+        fig.add_trace(go.Scatter3d(x=P[:, 0], y=P[:, 1], z=P[:, 2], mode="markers", name="관통부 (D94·D95)",
+                                   marker=dict(size=6, color="#c9a227", symbol="diamond",
+                                               line=dict(color="black", width=1)),
+                                   hovertext=txt, hoverinfo="text"))
 
 
 def add_routes(fig: go.Figure, sc: Scenario, results, line_width: int = 7) -> None:

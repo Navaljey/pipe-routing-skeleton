@@ -49,10 +49,13 @@ def astar_router(sc: Scenario, pipe: Pipe, time_limit: float, placed=()):
 
 
 def default_order(sc: Scenario) -> list:
-    """D50①: 호칭경 내림차순, 같으면 start–end 맨해튼 거리 내림차순."""
+    """D50①: 호칭경 내림차순, 같으면 start–end 맨해튼 거리 내림차순.
+    블록 쌍(D76 ⑤): 관통 배관을 먼저 (그 안에서 같은 규칙), 나머지는 D50 순서."""
+    from .blockpair import crossing
+
     def key(p: Pipe):
         man = sum(abs(a - b) for a, b in zip(p.start.pos, p.end.pos))
-        return (-int(p.nominal_size[:-1]), -man)
+        return (0 if crossing(sc, p) else 1, -int(p.nominal_size[:-1]), -man)
     return sorted(sc.pipes, key=key)
 
 

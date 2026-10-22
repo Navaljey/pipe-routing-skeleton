@@ -25,6 +25,16 @@
         "unit": {"const": "mm"}
       }
     },
+    "block_pair": {
+      "type": "object",
+      "description": "선택 (D76 ①, D93). 블록 2개를 x 방향으로 이은 합친 맵 — 공유 격벽 = 중심 x = shared_x, 두께 wall_thickness (x 범위 [shared_x − t/2, shared_x + t/2]) 인 supportable·penetrable 박스, 관통은 관통 배관의 crossing_window 로만",
+      "required": ["shared_x"],
+      "additionalProperties": false,
+      "properties": {
+        "shared_x": {"$ref": "#/$defs/positive_mm"},
+        "wall_thickness": {"type": "number", "minimum": 0, "description": "공유 격벽 두께 mm (D93, 없으면 0). 양쪽 면이 10mm 격자 위"}
+      }
+    },
     "obstacles": {
       "type": "array",
       "items": {
@@ -35,7 +45,10 @@
           "id": {"type": "string", "minLength": 1},
           "type": {"type": "string"},
           "min": {"$ref": "#/$defs/vec3"},
-          "max": {"$ref": "#/$defs/vec3"}
+          "max": {"$ref": "#/$defs/vec3"},
+          "supportable": {"type": "boolean", "description": "D93: 면을 서포트 지지면으로 쓸 수 있음 (기본 false = D21). S1-7: true 는 미지원 오류 (S2 예정, M27)"},
+          "penetrable": {"type": "boolean", "description": "D93: 배관 관통 가능 (기본 false). S1-7: true 는 미지원 오류 (S2 예정, M27)"},
+          "penetration_axis": {"enum": ["x", "y", "z"], "description": "D93: 관통 축 (선택, 없으면 박스의 가장 짧은 변 축 — 추정)"}
         }
       }
     },
@@ -57,7 +70,17 @@
           "start": {"$ref": "#/$defs/terminal"},
           "end": {"$ref": "#/$defs/terminal"},
           "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
-          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}}
+          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+          "crossing_window": {
+            "type": "object",
+            "description": "관통 배관만 (D76 ②). 공유 격벽 위 창 사각형 — 관통점은 이 안에서 라우터가 고른다",
+            "required": ["y", "z"],
+            "additionalProperties": false,
+            "properties": {
+              "y": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+              "z": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+            }
+          }
         }
       }
     }

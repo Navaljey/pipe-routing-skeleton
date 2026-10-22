@@ -149,10 +149,10 @@ class VerifierFixtureTest(unittest.TestCase):
             if not want:
                 self.assertTrue(any("마지막 꺾임→end 직관 100mm < 필요 150mm" in v.message for v in rep.violations))
 
-    def test_d47_deck_penetration_turn(self):
-        """하부 데크(z=0) 관통 start 직후 90° 꺾임 (100A: r 117.15 + t 150 = 267.15).
-        260 이면 엘보 호가 데크 쪽 유효 반경 띠 안 → boundary 위반, 270 이면 통과 (검증기 예외는 넓히지 않음, D47)."""
-        for h, want in ((260, False), (270, True)):
+    def test_d96_deck_penetration_turn(self):
+        """하부 데크(z=0) 관통 start 직후 90° 꺾임 (100A, D96: 면 → 엘보 접점 직관 ≥ max(3D, r) = 300, 꺾임점 300 + t 150).
+        440 이면 boundary 위반, 450 이면 통과 (이전 D47 은 r + t = 267.15)."""
+        for h, want in ((440, False), (450, True)):
             p = pipe(start=[20000, 5000, 0], sdir=(0, 0, 1), end=[40000, 5000, h])
             rep = run([p], [("P", [[20000, 5000, 0], [20000, 5000, h], [40000, 5000, h]])])
             self.assertLayer0(rep, boundary=want)

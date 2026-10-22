@@ -219,13 +219,20 @@ OPT_FACE = np.array([FACE_ORDER.index(f) for f, _ in OPTIONS])
 _EPS = 1e-6
 
 
-def face_distances(ext, X: np.ndarray, U: np.ndarray) -> np.ndarray:
-    """(N, 6) 배관 중심 → 면 거리. 배관 축과 평행한 법선의 면은 inf (D46 과 같은 규칙)."""
+def face_distances(ext, X: np.ndarray, U: np.ndarray, sp=()) -> np.ndarray:
+    """(N, 6) 배관 중심 → 면 거리. 배관 축과 평행한 법선의 면은 inf (D46 과 같은 규칙).
+    sp = 블록 쌍 공유 격벽 x 목록 (D76) — 면은 점이 속한 블록의 면 (공유 격벽은 양쪽 블록의 벽)."""
     out = np.full((len(X), 6), np.inf)
+    if sp:
+        from .blockpair import local_bounds
+        lo, hi = local_bounds(ext, X, sp)
     for f, face in enumerate(FACE_ORDER):
         ax, side = FACE_AXIS[face]
         ok = np.abs(U[:, ax]) < 1 - 1e-9
-        out[ok, f] = np.abs(X[ok, ax] - side * ext[ax])
+        if sp:
+            out[ok, f] = (hi[ok, ax] - X[ok, ax]) if side else (X[ok, ax] - lo[ok, ax])
+        else:
+            out[ok, f] = np.abs(X[ok, ax] - side * ext[ax])
     return out
 
 
@@ -265,16 +272,21 @@ def _aabb_gap(A, B, lo, hi):
     return np.sqrt((g * g).sum(-1))
 
 
-def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, exact=True) -> np.ndarray:
+def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, exact=True, bounds=None) -> np.ndarray:
     """부재 (N, M) 중 하나라도 간섭하면 True (D80 ⑧). 장애물: 거리 ≤ 반폭, 블록 밖: 끝점이 블록 밖,
     others = (oA, oB, oR, oS) 얹히지 않은 배관 조각: 거리 − slack < r_o + 반폭.
     exact=False (라우터): 축 정렬이 아닌 부재(B 경사재, 45° 배관의 C 가로대)는 장애물 판정을 AABB 하한으로만 한다 — 
-    `추정:` 라우터 근사 (검증기는 exact=True, 황금분할 정밀 판정)."""
+    `추정:` 라우터 근사 (검증기는 exact=True, 황금분할 정밀 판정).
+    bounds = (lo, hi) (N, 3) — 서포트 점마다 그 블록 범위 (블록 쌍 D76, 부재는 블록 밖으로 못 나간다). 없으면 [0, ext]."""
     from .verifier.geom import segment_box_distance, segment_segment_distance
     N, M = valid.shape
     bad = np.zeros(N, dtype=bool)
     ext = np.asarray(ext, dtype=float)
-    out = ((A < -1).any(-1) | (A > ext + 1).any(-1) | (B < -1).any(-1) | (B > ext + 1).any(-1)) & valid
+    if bounds is None:
+        out = ((A < -1).any(-1) | (A > ext + 1).any(-1) | (B < -1).any(-1) | (B > ext + 1).any(-1)) & valid
+    else:
+        blo, bhi = bounds[0][:, None] - 1, bounds[1][:, None] + 1
+        out = ((A < blo).any(-1) | (A > bhi).any(-1) | (B < blo).any(-1) | (B > bhi).any(-1)) & valid
     bad |= out.any(1)
     Af, Bf = A.reshape(-1, 3), B.reshape(-1, 3)
     vf = valid.reshape(-1)
@@ -310,11 +322,14 @@ def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, 
 
 
 def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarray, U: np.ndarray,
-             others=None, exact=True, prefer_ceiling=True, trace=None) -> dict:
+             others=None, exact=True, prefer_ceiling=True, trace=None, sp=()) -> dict:
     """서포트 후보 점들 → 가장 가벼운 가능한 (면, 형식) (D80 ③). 반환 배열 dict:
     kg (불가 = inf), opt (OPTIONS 번호, 불가 = -1), L, k (앵글 구간), reinf."""
     N = len(X)
-    dist = face_distances(ext, X, U)
+    dist = face_distances(ext, X, U, sp)
+    if sp:   # 블록 쌍 (D76): 면 거리·부재 범위는 점이 속한 블록 기준
+        from .blockpair import local_bounds
+        bnd = local_bounds(ext, X, sp)
     no = len(OPTIONS)
     KG = np.full((N, no), np.inf)
     K = np.full((N, no), -1)
@@ -342,7 +357,8 @@ def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarr
         for hv in np.unique(halves):
             m = halves == hv
             o_sub = others
-            res[m] = members_blocked(A[m], B[m], v[m], float(hv), ext, box_lo, box_hi, o_sub, exact)
+            res[m] = members_blocked(A[m], B[m], v[m], float(hv), ext, box_lo, box_hi, o_sub, exact,
+                                     bounds=(bnd[0][rows][m], bnd[1][rows][m]) if sp else None)
         return res
 
     for r in range(no):
@@ -380,21 +396,70 @@ def band_lmax(std: Standard, nd: str) -> dict:
     return {f: (deck if f in ("floor", "ceiling") else wall) for f in FACE_ORDER}
 
 
-def support_feasibility(pipe, ext, std: Standard) -> dict:
-    """규칙상 서포트 불가 (D80 ⑩, D64 방식의 장애물 무시 하한): 어느 단자에서든 최대 간격(수평·수직 중 큰 값) 안에
-    서포트 가능 띠(어느 면에서든 표 범위 안)에 닿을 수 없고 다른 단자도 그 거리 밖이면 불가."""
-    from .constants import SUPPORT_SPACING
-    smax = float(max(SUPPORT_SPACING[pipe.nominal_size]))
+def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
+    """규칙상 서포트 불가 (D80 ⑩, D64 방식의 장애물 무시 하한): 어느 단자에서든 최대 간격 안에 서포트 가능 띠(어느 면에서든
+    표 범위 안)에 닿을 수 없고 다른 단자도 그 거리 밖이면 불가.
+
+    단자에서 띠까지 필요한 정규화 길이 하한 u (> 1 이면 불가):
+      노즐 (D80 ⑩ 그대로) — u = 띠까지 거리 / max(수평·수직 간격).
+      경계 단자 (D106 (a), D96 강제 직관) — 단자에서 단자 방향 직선 위가 이미 띠 안(그 방향과 평행하지 않은 법선의
+        면 기준 — 직선을 따라 거리가 일정)이면 0, 아니면 첫 꺾임 각 θ (45·90·135) 중 최소의
+        강제 직관 max(3D, r) / 그 방향 간격 + 첫 꺾임 구역 2·t_θ / 수평 간격 (D87 ②)
+        + 엘보 호 끝에서 띠까지 거리 / max(간격) (호 끝 = 꺾임점에서 t_θ 만큼 새 방향, 옆 방향은 가장 유리하게).
+        단자 면 자체는 배관 축과 평행한 법선이라 강제 직관 위에서는 지지면이 아니다. 장애물은 무시 (하한)."""
+    from .constants import SUPPORT_SPACING, elbow_tangent
+    from . import blockpair as bp
+    hmax, vmax = (float(v) for v in SUPPORT_SPACING[pipe.nominal_size])
+    smax = max(hmax, vmax)
     lm = band_lmax(std, pipe.nominal_size)
-    T = [np.array(pipe.start.pos, float), np.array(pipe.end.pos, float)]
-    gap = []
-    for t in T:
-        d = []
+
+    def face_dist(t):
+        if sp:
+            from .blockpair import local_bounds
+            lo, hi = (v[0] for v in local_bounds(ext, t[None], sp))
+        out = {}
         for f in FACE_ORDER:
             ax, side = FACE_AXIS[f]
-            d.append(max(0.0, abs(t[ax] - side * ext[ax]) - lm[f] + 1.0))
-        gap.append(min(d))
+            out[f] = (hi[ax] - t[ax] if side else t[ax] - lo[ax]) if sp else abs(t[ax] - side * ext[ax])
+        return out
+
+    def gap_of(t):
+        return min(max(0.0, d - lm[f] + 1.0) for f, d in face_dist(t).items())
+
+    T = [np.array(pipe.start.pos, float), np.array(pipe.end.pos, float)]
+    gap, ulb = [], []
+    for t, term, sgn in ((T[0], pipe.start, 1.0), (T[1], pipe.end, -1.0)):
+        g0 = gap_of(t)
+        gap.append(g0)
+        u = g0 / smax
+        if term.kind == "boundary" and bp.D96:
+            d = sgn * np.asarray(term.dir, dtype=float)
+            ax = int(np.argmax(np.abs(d)))
+            fd = face_dist(t)
+            on_line = min((max(0.0, fd[f] - lm[f] + 1.0) for f in FACE_ORDER if FACE_AXIS[f][0] != ax), default=np.inf)
+            if on_line > 0:
+                s0 = bp.straight_min(pipe)
+                s_d = vmax if ax == 2 else hmax
+                u = np.inf
+                for th in (45, 90, 135):   # 첫 꺾임: 접점 (s0) → 꺾임점 (s0 + t) → 호 끝 (꺾임점 + t·e, e 와 d 사이 각 θ)
+                    tt = elbow_tangent(pipe.nominal_size, th)
+                    along = s0 + tt + tt * math.cos(math.radians(th))   # d 방향 이동
+                    lateral = tt * math.sin(math.radians(th))           # d 에 수직 이동 (방향은 가장 유리하게)
+                    g = np.inf
+                    for f in FACE_ORDER:
+                        fa, side = FACE_AXIS[f]
+                        if fa == ax:   # d 와 같은 축의 면: d 방향 이동만큼 거리 변화
+                            toward = (d[ax] > 0) == bool(side)
+                            dist = fd[f] - along if toward else fd[f] + along
+                        else:
+                            dist = fd[f] - lateral
+                        g = min(g, max(0.0, dist - lm[f] + 1.0))
+                    u = min(u, s0 / s_d + 2 * tt / hmax + g / smax)
+            else:
+                u = 0.0
+        ulb.append(u)
     span = float(np.linalg.norm(T[0] - T[1]))
-    bad = [g > smax and span > smax for g in gap]
+    bad = [u > 1 + 1e-9 and span > smax for u in ulb]
     return {"feasible": not any(bad), "band_gap_mm": [round(g, 1) for g in gap], "smax_mm": smax,
+            "u_lower_bound": [round(u, 3) for u in ulb],
             "blocked_terminal": [n for n, b in zip(("start", "end"), bad) if b]}

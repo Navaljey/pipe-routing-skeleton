@@ -31,7 +31,8 @@ class PipelineTest(unittest.TestCase):
                 self.assertIsNone(x["J"])
                 continue
             self.assertEqual(set(x["layer0"]), {"collision", "boundary", "bend", "gravity_slope", "valve",
-                                                "branch", "support"})
+                                                "branch", "support", "crossing"})
+            self.assertIsNone(x["layer0"]["crossing"])   # 단일 블록 = 해당 없음 (D76 ④)
             self.assertAlmostEqual(x["J"]["total"], sum(x["J"][k] for k in ("pipe", "elbow", "tee", "valve", "support")),
                                    places=3)
         # D61·D63: 라우터가 계단식 하향 규칙을 지키므로 경로가 있는 중력관은 구배 위반이 없다

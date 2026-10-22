@@ -15,7 +15,13 @@ class VizTest(unittest.TestCase):
                 sc = load(path)
                 fig = scenario_figure(sc)
                 # 블록 1 + 장애물 면 n + 장애물 모서리 1 + 배관당 (단자·직진·화살표)×2 + 연결선 1
-                self.assertEqual(len(fig.data), 2 + len(sc.obstacles) + 7 * len(sc.pipes))
+                # 블록 쌍 (D76·D93): 격벽 면 수 × (1 + 관통 창 수)
+                extra = 0
+                if sc.block_pair:
+                    from pipe_routing.blockpair import walls
+                    (a, b), = walls(sc)
+                    extra = len({a, b}) * (1 + sum(1 for p in sc.pipes if p.crossing_window))
+                self.assertEqual(len(fig.data), 2 + len(sc.obstacles) + 7 * len(sc.pipes) + extra)
 
     def test_write_html(self):
         sc = load(ROOT / "scenarios" / "manual" / "manual_01.json")

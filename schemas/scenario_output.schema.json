@@ -51,7 +51,7 @@
           "layer0": {
             "type": "object",
             "description": "모듈 → true(통과) / false(위반) / null(해당 없음). 경로가 없으면 빈 객체",
-            "propertyNames": {"enum": ["collision", "boundary", "bend", "gravity_slope", "valve", "branch", "support"]},
+            "propertyNames": {"enum": ["collision", "boundary", "bend", "gravity_slope", "valve", "branch", "support", "crossing"]},
             "additionalProperties": {"type": ["boolean", "null"]}
           },
           "J": {
@@ -62,7 +62,8 @@
                 "required": ["total", "pipe", "elbow", "tee", "valve", "support"],
                 "properties": {
                   "total": {"type": "number"}, "pipe": {"type": "number"}, "elbow": {"type": "number"},
-                  "tee": {"type": "number"}, "valve": {"type": "number"}, "support": {"type": "number"}
+                  "tee": {"type": "number"}, "valve": {"type": "number"}, "support": {"type": "number"},
+                  "penetration": {"type": "number", "description": "D95 관통 피스 (블록 쌍만)"}
                 }
               }
             ]

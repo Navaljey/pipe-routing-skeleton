@@ -14,7 +14,8 @@ from ..scenario import Pipe, Scenario
 from .geom import Centerline, build_centerline
 
 Vec3 = tuple[float, float, float]
-MODULE_ORDER = ["collision", "boundary", "bend", "gravity_slope", "valve", "branch", "support"]   # §6.1
+MODULE_ORDER = ["collision", "boundary", "bend", "gravity_slope", "valve", "branch", "support",
+                "crossing"]   # §6.1 + D76 ④ (블록 쌍만, 그 밖은 None)
 MODULES: dict[str, Callable] = {}
 
 

@@ -79,9 +79,13 @@ def _blocked(ctx, mem, half, carried):
             a, b, slack, _ = cl.arrays()
             oA.append(a); oB.append(b); oS.append(slack); oR.append(np.full(len(a), ctx.pipes[pid].radius))
     others = (np.concatenate(oA), np.concatenate(oB), np.concatenate(oR), np.concatenate(oS)) if oA else None
-    box_lo = [o.box.min for o in ctx.scenario.obstacles]
-    box_hi = [o.box.max for o in ctx.scenario.obstacles]
-    return bool(ss.members_blocked(A, B, v, half, ext, box_lo, box_hi, others, exact=True)[0])
+    from .. import blockpair as bp
+    holes = bp.hole_boxes(ctx.scenario)   # D76: 관통 창 = 구멍
+    box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
+    box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
+    sp = bp.splits(ctx.scenario)
+    bounds = bp.local_bounds(ext, np.array([m[0] for m in mem[:1]]), sp) if sp else None
+    return bool(ss.members_blocked(A, B, v, half, ext, box_lo, box_hi, others, exact=True, bounds=bounds)[0])
 
 
 def _try(ctx, grp, face):
@@ -123,8 +127,12 @@ def spacing_ok(ctx, pid, s_list, k, s_new) -> bool:
     total = float(tbl[0][-1])
     if not (0.0 < s_new < total):
         return False
-    prev = max([x for j, x in enumerate(s_list) if j != k and x < s_list[k]], default=0.0)
-    nxt = min([x for j, x in enumerate(s_list) if j != k and x > s_list[k]], default=total)
+    from .modules import support_fixed_points
+    fx = support_fixed_points(ctx, pid)   # D94 관통부 고정점
+    prev = max([x for j, x in enumerate(s_list) if j != k and x < s_list[k]] + [f for f in fx if f < s_list[k]],
+               default=0.0)
+    nxt = min([x for j, x in enumerate(s_list) if j != k and x > s_list[k]] + [f for f in fx if f > s_list[k]],
+              default=total)
     if not (prev < s_new < nxt):
         return False
     return (_u_at(tbl, s_new) - _u_at(tbl, prev) <= 1 + 1e-9) and (_u_at(tbl, nxt) - _u_at(tbl, s_new) <= 1 + 1e-9)

@@ -3,6 +3,7 @@ import math
 
 import numpy as np
 
+from .. import blockpair as bp
 from .. import support_std as ss
 from ..constants import SUPPORT_SPACING, VALVE_FRONT_MM, VALVE_Z_RANGE
 from .core import Context, PipeRoute, Violation, register
@@ -117,6 +118,84 @@ def boundary(ctx: Context, pr: PipeRoute):
         what = "직관" if kind == "straight" else "엘보"
         out.append(Violation("boundary", pipe.id, _pt(q),
                              f"{what}이 블록 경계까지 {gap:.1f} < 유효 반경 {r:.2f} ({'xyz'[ax]}축)", float(gap)))
+    if bp.D96 and n_seg > 1:   # D96: 경계 단자 면 → 인접 엘보 접점 직관 ≥ max(3D, r) (라우터 r_bnd 와 같은 값)
+        need = bp.boundary_straight(pipe)
+        for seg_i in exempt:
+            pc = next(pc for pc in main.pieces if pc.kind == "straight" and pc.ref == seg_i)
+            L = float(np.linalg.norm(np.asarray(pc.b) - np.asarray(pc.a)))
+            if L < need - EPS:
+                out.append(Violation("boundary", pipe.id, _pt(pc.b if seg_i == 0 else pc.a),
+                                     f"경계 단자 직관 {L:.1f} < {need:.0f} (D96 max(3D, r))", L))
+    return out
+
+
+# ---------------------------------------------------------------- crossing (S1-7, D76 ④)
+
+@register("crossing")
+def crossing(ctx: Context, pr: PipeRoute):
+    """블록 쌍 공유 격벽 (D76 ④, D94). 블록 쌍이 아니면 해당 없음 (None).
+    모든 배관: 중심선(직관 + 엘보 호)이 격벽(관통 배관은 자기 창을 뺀 격벽)과 유효 반경 r 이상.
+    한 블록 안 배관: 격벽을 지나지 않는다.
+    관통 배관: 격벽을 정확히 1회, 자기 창 안에서(가장자리에서 r 이상), 면에 수직(x 축)인 직관으로 지난다. 그 직관 말고
+    다른 조각(엘보 호 포함)은 관통 구역(blockpair.crossing_zone)과 r 이상 — 따라서 격벽 면에서 인접 엘보 접점까지 직관
+    ≥ crossing_straight (D76 ④ r, D94 max(3D, r)). 라우터와 같은 판정 기하 (crossing_zone)."""
+    sc = ctx.scenario
+    if not bp.walls(sc):
+        return None
+    (wa, wb), = bp.walls(sc)
+    s = bp.center(sc)
+    pipe = ctx.pipes[pr.pipe_id]
+    r = pipe.radius
+    cross = bp.crossing(sc, pipe)
+    win = pipe.crossing_window if cross else None
+    out = []
+    for cl in ctx.centerlines[pipe.id]:
+        A, B, S, _ = cl.arrays()
+        for lo, hi in bp.wall_boxes(sc, win):
+            d, at = segment_box_distance(A, B, lo, hi)
+            d = d - S
+            k = int(d.argmin())
+            if d[k] < r - EPS:
+                out.append(Violation("crossing", pipe.id, _pt(at[k]),
+                                     f"공유 격벽(x = {wa:g}~{wb:g}) 까지 {d[k]:.1f} < 유효 반경 {r:.2f}", float(d[k])))
+    main = ctx.centerlines[pipe.id][0]
+    P = main.points
+    side = np.where(P[:, 0] < wa - 1e-6, -1, np.where(P[:, 0] > wb + 1e-6, 1, 0))
+    on = np.nonzero(side == 0)[0]
+    for i in on:
+        out.append(Violation("crossing", pipe.id, _pt(P[i]), "꺾임점·단자가 공유 격벽 안", 0.0))
+    segs = [i for i in range(len(P) - 1) if side[i] * side[i + 1] < 0]
+    if not cross:
+        for i in segs:
+            out.append(Violation("crossing", pipe.id, _pt((P[i] + P[i + 1]) / 2), "한 블록 안 배관이 공유 격벽을 지남"))
+        return out
+    if len(segs) != 1 or len(on):
+        out.append(Violation("crossing", pipe.id, _pt(P[0]), f"공유 격벽 통과 {len(segs)} 회 (정확히 1회여야 함)",
+                             float(len(segs))))
+        return out
+    i = segs[0]
+    seg = P[i + 1] - P[i]
+    ang = angle_deg(seg, (1.0, 0.0, 0.0) if seg[0] > 0 else (-1.0, 0.0, 0.0))
+    t = (s - P[i][0]) / seg[0]
+    q = P[i] + t * seg
+    if ang > ctx.angle_tol:
+        out.append(Violation("crossing", pipe.id, _pt(q), f"격벽 통과 직관이 면에 수직이 아님 ({ang:.1f}°)", ang))
+    y0, y1, z0, z1 = win
+    if not (y0 + r - EPS <= q[1] <= y1 - r + EPS and z0 + r - EPS <= q[2] <= z1 - r + EPS):
+        out.append(Violation("crossing", pipe.id, _pt(q), "관통점이 창 안(가장자리에서 유효 반경 이상)이 아님"))
+    zlo, zhi = bp.crossing_zone(sc, pipe)
+    A, B, S, pieces = main.arrays()
+    keep = [k for k, pc in enumerate(pieces) if not (pc.kind == "straight" and pc.ref == i)]
+    if keep:
+        d, at = segment_box_distance(A[keep], B[keep], zlo, zhi)
+        d = d - S[keep]
+        k = int(d.argmin())
+        if d[k] < r - EPS:
+            pc = pieces[keep[k]]
+            what = "엘보" if pc.kind == "arc" else "직관"
+            out.append(Violation("crossing", pipe.id, _pt(at[k]),
+                                 f"관통 직관 밖의 {what}이 관통 구역까지 {d[k]:.1f} < 유효 반경 {r:.2f} "
+                                 f"(격벽 면에서 접점까지 직관 ≥ {bp.crossing_straight(pipe):.0f}, D94)", float(d[k])))
     return out
 
 
@@ -298,15 +377,16 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     std = ctx.std
     ext = np.array(ctx.scenario.block.extent, dtype=float)
     oA, oB, oR, oS, _ = ctx.others(pid)
-    box_lo = [o.box.min for o in ctx.scenario.obstacles]
-    box_hi = [o.box.max for o in ctx.scenario.obstacles]
+    holes = bp.hole_boxes(ctx.scenario)   # D76: 관통 창은 부재가 닿을 수 없는 구멍, 공유 격벽은 지지면
+    box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
+    box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
     od = pipe.od
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
         ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True,
-                         trace=ctx.cache.setdefault(("support_trace", pid), []))
+                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario))
         for i in range(len(P)):
             o = int(ev["opt"][i])
             if o < 0:
@@ -366,6 +446,21 @@ def _together_scan(ctx, pipe, far, locate, seg):
     return out
 
 
+def support_fixed_points(ctx: Context, pid: str) -> list:
+    """서포트 고정점의 호 위치 (주 중심선 꺾임점 사이 길이 기준) — D94 관통부 (격벽 중심면 통과점). 단자는 따로 (양 끝)."""
+    key = ("support_fixed", pid)
+    if key not in ctx.cache:
+        sc = ctx.scenario
+        pipe = ctx.pipes[pid]
+        out = []
+        if bp.D94 and bp.crossing(sc, pipe):
+            P = ctx.centerlines[pid][0].points
+            cum = np.concatenate([[0], np.cumsum(np.linalg.norm(P[1:] - P[:-1], axis=1))])
+            out = [float(cum[i] + np.linalg.norm(q - P[i])) for i, q in bp.crossing_points(sc, pipe, P)]
+        ctx.cache[key] = sorted(out)
+    return ctx.cache[key]
+
+
 @register("support")
 def support(ctx: Context, pr: PipeRoute):
     """§3.6 최대 간격 안에 설치 가능 위치가 있는가. 단자는 고정점(서포트)으로 본다 (D44).
@@ -399,8 +494,15 @@ def support(ctx: Context, pr: PipeRoute):
 
     supports, out, gaps = [], [], []
     ctx.cache[("support_trace", pipe.id)] = []   # 판정한 부재 영역 (증분 검증 D85 영향 범위)
+    fixed = support_fixed_points(ctx, pipe.id)   # D94 관통부 = 고정점 (무게 0)
     s_last = 0.0
-    while u_at(total) - u_at(s_last) > 1 + 1e-9:
+    while True:
+        nxt = min([f for f in fixed if f > s_last + EPS], default=total)
+        if u_at(nxt) - u_at(s_last) <= 1 + 1e-9:
+            if nxt >= total - EPS:
+                break
+            s_last = nxt
+            continue
         s_reach = s_at_u(u_at(s_last) + 1)
         grid = np.arange(math.floor(s_reach / CANDIDATE_STEP_MM) * CANDIDATE_STEP_MM, s_last, -CANDIDATE_STEP_MM)
         grid = grid[grid > s_last + EPS]

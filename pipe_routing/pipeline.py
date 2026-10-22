@@ -20,11 +20,12 @@ import jsonschema
 import numpy as np
 
 from .constants import FITTINGS, PIPE_SPECS
+from .blockpair import splits, walls
 from .gravity import feasibility
 from .support_std import load_standard, support_feasibility
 from .layered import fixed_layer_stats, layered_router_a, make_layered_router, parse_grid
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
-from .scenario import Pipe, Scenario, load
+from .scenario import Pipe, Scenario, load, terminal_straight_blocked
 from .verifier import MODULE_ORDER, PipeRoute, verify
 
 OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_output.schema.json"
@@ -32,14 +33,22 @@ OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_o
 
 # ---------------------------------------------------------------- J (§5, D49)
 
+def _terminal_rules() -> dict:
+    from . import blockpair as bp
+    from .layered import FIRST_BEND_ANGLES
+    return {"boundary": "D96" if bp.D96 else "D47", "crossing": "D94" if bp.D94 else "D76",
+            "first_bend_angles": list(FIRST_BEND_ANGLES)}   # D105
+
+
 def polyline_length_mm(wps) -> float:
     return sum(math.dist(a, b) for a, b in zip(wps, wps[1:]))
 
 
-def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list) -> dict:
+def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) -> dict:
     """§5 J 분해 (kg). 직관 = 꺾임점 사이 중심선 길이 합 × kg/m — 라우터 비용(D37·D41)과 같은 정의 (D49).
 
     엘보·티·밸브 = 검증기가 보고한 관이음 목록 × §3.2 중량 (135° = 90° + 45°, D25), 서포트 = 검증기 서포트 kg 합 (D46).
+    블록 쌍 (sc 가 block_pair): 관통 = 공유 격벽 통과 수 × 관통 피스 무게 (D95, 직관과 별도) — 블록 쌍에서만 항목이 있다.
     """
     f = FITTINGS[pipe.nominal_size]
     unit = {"elbow_90": f.elbow90, "elbow_45": f.elbow45, "tee": f.tee, "gate_valve": f.gate_valve}
@@ -51,6 +60,9 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list) -> dict:
         "valve": by["gate_valve"],
         "support": sum(s["kg"] for s in supports),
     }
+    if sc is not None and getattr(sc, "block_pair", None):
+        from .blockpair import crossing_points, penetration_kg
+        J["penetration"] = len(crossing_points(sc, pipe, waypoints)) * penetration_kg(sc, pipe) if waypoints else 0.0
     J["total"] = sum(J.values())
     return {k: round(v, 4) for k, v in J.items()}
 
@@ -63,7 +75,8 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
     cl = build_centerline(waypoints, elbow_radius(pipe.nominal_size), ANGLE_TOL_DEG)
     straight = polyline_length_mm(waypoints) - sum(2 * b.tangent for b in cl.bends if math.isfinite(b.tangent))
     out = {"pipe": straight / 1000 * PIPE_SPECS[pipe.nominal_size].kg_per_m,
-           "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"]}
+           "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"],
+           **({"penetration": J["penetration"]} if "penetration" in J else {})}
     out["total"] = sum(out.values())
     return {k: round(v, 4) for k, v in out.items()}
 
@@ -84,7 +97,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
     routes = []
     for p in sc.pipes:
         r, v = results[p.id], rep["pipes"][p.id]
-        J = j_breakdown(p, r.waypoints, v.fittings, v.supports) if v.routed else None
+        J = j_breakdown(p, r.waypoints, v.fittings, v.supports, sc) if v.routed else None
         tries = plan.attempts.get(p.id, [])
         entry = {
             "pipe_id": p.id,
@@ -101,8 +114,9 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fail_causes": fail_causes(r.status, v),
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
-            "gravity_feasibility": feasibility(p),   # D64 (중력관만, 압력관 null)
-            "support_feasibility": support_feasibility(p, ext, std),   # D80 ⑩
+            "gravity_feasibility": feasibility(p, _wall(sc)),   # D64 (중력관만, 압력관 null, 관통이면 창 포함)
+            "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩ (D106 (a))
+            "terminal_feasibility": terminal_straight_blocked(p, sc.obstacles),   # D106 (b) 단자 직관 막힘
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
             "metrics": metrics(r, v),
@@ -133,13 +147,17 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "planner_events": plan.events,
         "peak_rss_mb": _peak_rss_mb(),   # 프로세스 최대 메모리 (8단계 밀집 시험)
         "gravity": _gravity_summary(routes),   # D64
+        "terminal_blocked": [x["pipe_id"] for x in routes                       # D106 (b) 단자 직관 막힘
+                             if x.get("terminal_feasibility") and not x["terminal_feasibility"]["feasible"]],
         "support_standard": rep["support_standard"],   # D78·D80 ⑪ 비공개 데이터 사용 여부·해시
         "support": _support_summary(routes),           # D80 ⑬
         **_shared_support(routes),                     # D81 공유 서포트 귀속 규칙·총무게
         **full_success_summary(routes),        # D77 ①
         "grid_variant": getattr(getattr(router, "grid", None), "name", None),   # D66 (layered 라우터만)
-        "search_budget": getattr(router, "search_budget", None),   # D72 결정적 탐색 예산 (timeout = 예산 소진)
+        "search_budget": (router.budget_for(sc) if hasattr(router, "budget_for")   # D72·D92 ③ 세트별 예산
+                          else getattr(router, "search_budget", None)),
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
+        "terminal_rules": _terminal_rules(),     # D94·D96 관통·경계 단자 직관 규칙
     })
     return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
 
@@ -152,6 +170,12 @@ def deterministic_view(out):
     if isinstance(out, list):
         return [deterministic_view(v) for v in out]
     return out
+
+
+def _wall(sc):
+    """블록 쌍 공유 격벽 (a, b) — 관통 중력관 D64 하한 (창 포함) 용. 단일 블록은 None."""
+    w = walls(sc)
+    return w[0] if w else None
 
 
 def _gravity_summary(routes: list) -> dict:
@@ -256,7 +280,8 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
         "success_rate": round(len(ok) / len(routes), 4) if routes else None,
         "success_rate_routed": round(len(ok) / len(routed), 4) if routed else None,   # D34 기준선 도달 가능 부분집합
         "J_total": jsum(ok, "total"),                                                 # §6.3 성공 배관 합
-        "J_breakdown_success": {k: jsum(ok, k) for k in ("pipe", "elbow", "tee", "valve", "support")},
+        "J_breakdown_success": {k: jsum(ok, k) for k in ("pipe", "elbow", "tee", "valve", "support")
+                                + (("penetration",) if any("penetration" in x["J"] for x in routed) else ())},
         "J_total_routed": jsum(routed, "total"),
         "real_weight_total": round(sum(x["real_weight"]["total"] for x in ok), 4),          # D49 보완, 성공 배관 합
         "real_weight_total_routed": round(sum(x["real_weight"]["total"] for x in routed), 4),
@@ -270,7 +295,8 @@ def global_summary(routes: list, total_sec: float, route_sec: float, verify_sec:
 
 
 def required_pipe_ids(sc_or_routes) -> tuple:
-    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관과 D80 ⑩ 규칙상 서포트 불가 배관을 뺀 전부.
+    """D77 ① 분모: 규칙상 가능한 배관 = D64 규칙상 불가능 중력관 · D80 ⑩ 규칙상 서포트 불가 · D106 (b) 단자 직관 막힘
+    배관을 뺀 전부.
     "단독 도달 불가" 는 증명된 불가능이 아니므로 분모에 남는다 (D34). 반환 (필수 배관 id 목록, 제외 id 목록).
     시나리오 또는 출력 routes[] 를 받는다. `추정:` D80 ⑩ 을 D64 와 같이 분모에서 뺀다 (D80 ⑩ "D64 방식")."""
     req, exc = [], []
@@ -278,14 +304,17 @@ def required_pipe_ids(sc_or_routes) -> tuple:
         std = load_standard()
         ext = np.array(sc_or_routes.block.extent, dtype=float)
         for p in sc_or_routes.pipes:
-            f = feasibility(p)
-            sf = support_feasibility(p, ext, std)
-            (exc if (f and not f["feasible"]) or not sf["feasible"] else req).append(p.id)
+            f = feasibility(p, _wall(sc_or_routes))
+            sf = support_feasibility(p, ext, std, splits(sc_or_routes))
+            tf = terminal_straight_blocked(p, sc_or_routes.obstacles)
+            (exc if (f and not f["feasible"]) or not sf["feasible"] or not tf["feasible"] else req).append(p.id)
     else:
         for x in sc_or_routes:
             f = x.get("gravity_feasibility")
             sf = x.get("support_feasibility")
-            (exc if (f and not f["feasible"]) or (sf and not sf["feasible"]) else req).append(x["pipe_id"])
+            tf = x.get("terminal_feasibility")
+            (exc if (f and not f["feasible"]) or (sf and not sf["feasible"]) or (tf and not tf["feasible"])
+             else req).append(x["pipe_id"])
     return req, exc
 
 
@@ -337,9 +366,11 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           + " |",
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
+    pen = any("penetration" in (x["J"] or {}) for x in out["routes"])   # D95 블록 쌍
     L += ["## 배관별", "",
-          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | 실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | "
+          + ("관통 | " if pen else "") + "실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if pen else "") + "---|---|---|---|"]
     for x in out["routes"]:
         J, m = x["J"] or {}, x["metrics"]
         fmt = lambda k: f"{J[k]:,.2f}" if J else "-"
@@ -349,7 +380,7 @@ def report_md(out: dict, scenario_path: str = "") -> str:
         L.append(f"| {x['pipe_id']} | {x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
                  f"{x['router']['search_sec']:.2f} | {x['router']['graph_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "
                  f"{', '.join(x['fail_causes']) or '-'} | {cls} | {fmt('total')} | {fmt('pipe')} | {fmt('elbow')} | "
-                 f"{fmt('support')} | {rw_s} | {m.get('length_m', '-')} | "
+                 f"{fmt('support')} | " + (f"{fmt('penetration')} | " if pen else "") + f"{rw_s} | {m.get('length_m', '-')} | "
                  f"{m.get('n_elbow_90', '-')}/{m.get('n_elbow_45', '-')} | {m.get('n_supports', '-')} |")
     L += ["", "## 위반 상세", ""]
     any_v = False
@@ -387,10 +418,20 @@ def main(argv=None) -> int:
     ap.add_argument("--grid", default="g0",
                     help="D66 고정층 격자 보강 변형 (layered 라우터): g0 = 기본, g1 = 중력관 높이·수평 보조선, "
                          "g2:<mm> = 전 배관 일정 간격 보조선, g1+g2:<mm> = 조합")
+    ap.add_argument("--boundary-rule", choices=("d47", "d96"), default=None,
+                    help="경계 단자 직관 규칙 (D96 영향 측정용 — 기본 = blockpair.D96)")
+    ap.add_argument("--first-bend", choices=("d105", "d87"), default="d105",
+                    help="첫 꺾임 격자선: d105 = 45·90·135° 각각 (기본), d87 = t₁₃₅ 한 줄 (비교용)")
     ap.add_argument("--html-only", action="store_true",
                     help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
                          "(plotly.js 포함 — 보고 첨부용, §0)")
     args = ap.parse_args(argv)
+    if args.first_bend == "d87":   # D105 영향 비교용 (이전 t₁₃₅ 한 줄)
+        from . import layered
+        layered.FIRST_BEND_ANGLES = (135,)
+    if args.boundary_rule:   # D96 영향 측정용 (기본 = blockpair.D96)
+        from . import blockpair
+        blockpair.D96 = args.boundary_rule == "d96"
     if args.html_only:
         for path in args.paths:
             stem = Path(path).stem
@@ -439,6 +480,9 @@ def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> N
     add_routes(fig, sc, [RouteResult(x["pipe_id"], "ok" if x["waypoints"] else x["router"]["status"],
                                      J=(x["J"] or {}).get("total"), waypoints=x["waypoints"]) for x in out["routes"]],
                line_width=2)   # 중심선은 가늘게 — 관(실제 굵기)이 보이도록
+    if sc.block_pair:   # D95 관통 피스 (hover: kg·격벽 두께)
+        from .viz import add_penetrations
+        add_penetrations(fig, sc, {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]})
     reps = {x["pipe_id"]: PipeReport(x["pipe_id"], bool(x["waypoints"]),
                                      violations=[Violation(v["module"], x["pipe_id"], v["pos"], v["message"])
                                                  for v in x["violations"]],
