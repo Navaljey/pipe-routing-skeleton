@@ -35,6 +35,8 @@ class PlanResult:
     attempts: dict = field(default_factory=dict)  # pipe_id → [{"status", "graph_sec", "search_sec"}] (D50③)
     total_sec: float = 0.0
     planner: str = ""
+    placement: list = field(default_factory=list)   # 최종 배치 시점 순서 (비면 order + events 로 복원, anytime 은 직접 기록)
+    free_solo: dict = field(default_factory=dict)   # 예약 없는 단독 결과 (분류에서 구한 것, D59) — D101 재사용
 
 
 # ---------------------------------------------------------------- 기본 라우터 (escape graph + A*)
@@ -195,6 +197,7 @@ def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limi
             alt = getattr(diag or router, "without_reservations", None)
             if cls == "individual" and alt is not None:   # D59: 예약을 빼면 단독으로 되는가 = 예약끼리 충돌
                 r2 = alt(sc, pipes[pid], time_limit, [])
+                res.free_solo[pid] = r2
                 detail["reservation_conflict"] = r2.status == "ok"
             res.fail_class[pid] = cls
             res.fail_detail[pid] = detail

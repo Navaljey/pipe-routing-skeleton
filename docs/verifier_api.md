@@ -81,3 +81,17 @@ python -m pipe_routing.verifier.bench <scenario.json>=<output.json> ... [--incre
 - 전체 검증 시간과 모듈별 분해를 잰다.
 - `--incremental N`: 무작위 배관 N 개를 remove → add 하며 호출별 시간을 잰다.
 - `--check K`: K 번째마다 전체 검증과 비트 동일인지 확인한다.
+
+---
+
+## 4. 서포트 힌트 (S1-7b 예정, D100)
+
+조회 전용·결과 불변 함수. 검증기 채점과 같은 함수를 쓴다 — 힌트가 말하는 형식·묶임은 검증기가 실제로 놓는 것과 같다.
+
+| 함수 | 답 | 공유하는 채점 함수 |
+|---|---|---|
+| `form_at` | 위치·배관 축에서 가능한 (면, 형식) 과 가장 가벼운 선택·무게 | `support_std.evaluate` (D80 ③④) |
+| `groupable` | 두 배관이 D 묶음 조건 (D82) 을 만족하는가, 아니면 어느 조건에서 막히는가 | `support_group` 묶음 판정 (D82) |
+| `together_at` | A·B·C 가 불가한 위치에서 함께 받치는 D (D89) 후보 | `support_group.together_at` (D89) |
+
+호출 비용은 S1-7b 구현 후 이 절에 적는다.

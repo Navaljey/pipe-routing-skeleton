@@ -40,6 +40,7 @@ class Trajectory:
     total_expanded: int = 0
     total_sec: float = 0.0
     stop: str = ""
+    placement: list = field(default_factory=list)   # 최선 해의 배치 시점 순서 (부재 막힘 (가)/(나) 판정용, 결과에 영향 없음)
 
 
 def _cost(r) -> float:
@@ -100,6 +101,9 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
     # 첫 해 = first-solution 기준선 (D50, rip-up 3회)
     first = sequential_ripup_planner(sc, router=counting_router, time_limit=time_limit)
     best = dict(first.routes)
+    from .support_diag import placement_time
+    best_when = placement_time(first.order, first.events, set(best))   # 배치 시점 (기록만)
+    tick = [len(best_when)]
     best_score = score(sc, best)          # D75: 첫 해 채점도 시간에 들어간다
     tr.t0_sec, tr.e0 = time.perf_counter() - t0, count[0]
     tr.points.append((count[0], tr.t0_sec, dict(best), "first", best_score))
@@ -114,11 +118,13 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
         return [(pipes[q], state[q].waypoints) for q in order if q in state and state[q].status == "ok"
                 and q not in exclude]
 
-    def lay(state, seq, order):
+    def lay(state, seq, order, when):
         for q in seq:
             if done():
                 return False
             state[q] = call(q, items(state, order, exclude=(q,)))
+            when[q] = tick[0]
+            tick[0] += 1
         return True
 
     tried_max, tried_failed = set(), set()
@@ -147,31 +153,32 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
         if kind is not None:
             blockers = [q for q in base_order if q != target and best[q].status == "ok"
                         and routes_conflict(pipes[target], route.waypoints, pipes[q], best[q].waypoints)]
-            cand = dict(best)           # 막는 배관이 없으면 대상만 지금 배치에서 다시 깐다 (예약이 풀렸거나 이웃이 바뀌었을 수 있다)
+            cand, cand_when = dict(best), dict(best_when)   # 막는 배관이 없으면 대상만 지금 배치에서 다시 깐다 (예약이 풀렸거나 이웃이 바뀌었을 수 있다)
             cand[target] = _Removed(target)
             for q in blockers:
                 cand[q] = _Removed(q)
             rng.shuffle(blockers)
             seq = [target] + blockers
-            if not lay(cand, seq, base_order):
+            if not lay(cand, seq, base_order, cand_when):
                 break
         else:
             kind = "restart"
             order = list(base_order)
             rng.shuffle(order)
-            cand = {q: _Removed(q) for q in order}
-            if not lay(cand, order, order):
+            cand, cand_when = {q: _Removed(q) for q in order}, {}
+            if not lay(cand, order, order, cand_when):
                 break
         if _objective(cand) > _objective(best):      # D75 ① 라우터 추정으로 1차 거르기
             tr.verified += 1
             sc_c = score(sc, cand)                  # D75 ② 검증기 채점 (시간에 포함)
             if better(sc_c, best_score):
-                best, best_score = cand, sc_c
+                best, best_score, best_when = cand, sc_c, cand_when
                 tried_max.clear()
                 tried_failed.clear()
                 tr.points.append((count[0], time.perf_counter() - t0, dict(best), kind, best_score))
             else:
                 tr.rejected += 1
+    tr.placement = sorted((q for q in best_when if best[q].status == "ok"), key=best_when.get)
     tr.total_expanded = count[0]
     tr.total_sec = time.perf_counter() - t0
     tr.stop = "expansions" if (max_expanded is not None and count[0] >= max_expanded) else "wall_clock"
@@ -291,7 +298,7 @@ def main(argv=None) -> int:
         best = tr.points[-1][2]
         # 최선 해의 실패 배관 분류 (D51·D60·D74, 순차 플래너와 같은 함수 — 예산 밖)
         order = [p.id for p in default_order(sc)]
-        plan = PlanResult(routes=best, order=order, planner="anytime_best")
+        plan = PlanResult(routes=best, order=order, planner="anytime_best", placement=tr.placement)
         placed = {pid: r for pid, r in best.items() if r.status == "ok"}
         solo_rb: dict = {}
 
