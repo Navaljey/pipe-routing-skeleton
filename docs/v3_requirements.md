@@ -180,4 +180,7 @@ skeleton(S0·S1) 측정에서 드러난, 기준선 A* 로는 풀리지 않거나
 **skeleton 준비물.**
 - 심판: D80·D81·D82(간격 재확인 포함)·D89. 증분 검증 `verifier.Session` (D85).
 - 기준선: D90 부재 예약까지 반영한 A* (E1 동결 측정).
-- 보고 지표: 공유 서포트 수·무게, 부재 막힘 support 위반 (유형별, `support_diag`).
+- 보고 지표: 공유 서포트 수·무게, 부재 막힘 support 위반 (유형별, `support_diag`) — 출력 `global.member_blockage`.
+- 사례 목록 `docs/reports/r7_cases.md`·`.json` (`python -m pipe_routing.r7_cases`): 첫 해 · 예산 끝 두 경우.
+
+**D96 + D105 갱신 (2026-10-26, `docs/reports/d97_d104.md` §3).** 부재 막힘 첫 해 기본 1 · 밀집 30 5 → 예산 끝 1 · 2, 모두 (나) 막는 배관이 먼저. 밀집 30 은 전부 막힌 쪽이 수직·45° 구간 — D89 대상 밖. Σ 단독 J (D101) 대비 다중 간격 기본 +0.34 % · 밀집 30 +1.11 %, 가장 큰 배관별 간격은 서포트 증가 (proc_006 P010 15A 서포트 269 kg vs 단독 J 24 kg) — 다중 조정으로 줄일 자리.
