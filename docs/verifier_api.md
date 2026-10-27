@@ -84,14 +84,52 @@ python -m pipe_routing.verifier.bench <scenario.json>=<output.json> ... [--incre
 
 ---
 
-## 4. 서포트 힌트 (S1-7b 예정, D100)
+## 4. 서포트 힌트 — `SupportHint` (S1-7b, D100)
 
-조회 전용·결과 불변 함수. 검증기 채점과 같은 함수를 쓴다 — 힌트가 말하는 형식·묶임은 검증기가 실제로 놓는 것과 같다.
+조회 전용·결과 불변. 검증기 채점과 **같은 함수**를 부른다 — 힌트가 말하는 형식·묶임은 검증기가 실제로 놓는 것과 같다.
 
-| 함수 | 답 | 공유하는 채점 함수 |
+```python
+from pipe_routing.verifier.hint import SupportHint
+
+h = SupportHint(sc, {"P001": wps1, "P002": wps2})   # 이 경로들이 놓인 상태에서 묻는다 (std=None → 환경 변수 / 공개 임시 표)
+h = SupportHint.from_session(session)                # 증분 검증 Session 의 지금 배치 (Session 은 바꾸지 않는다)
+
+r = h.form_at("P003", pos, axis)        # 묻는 배관 자신의 경로는 없어도 된다 (계획 중 경로 위 점)
+r["chosen"]                             # 검증기 supports[] 항목과 같은 필드 (form·face·variant·section·L·kg·members) 또는 None
+r["options"]                            # (면, 형식) 조합마다 status: ok | out_of_range (표 밖, D79 ③) | blocked (부재 간섭, D80 ⑧) | parallel
+
+g = h.groupable(("P001", pos1, axis1), ("P002", pos2, axis2), face=None)
+g["ok"], g["face"], g["kg"], g["kg_individual"], g["reason"]   # D82 조건 — 아니면 처음 걸린 이유
+
+t = h.together_at("P001", pos, axis)    # D89 함께 받치는 D (id·면·규격·kg_total·shares·members) 또는 None
+```
+
+| 함수 | 공유하는 채점 함수 | 검증기와의 관계 |
 |---|---|---|
-| `form_at` | 위치·배관 축에서 가능한 (면, 형식) 과 가장 가벼운 선택·무게 | `support_std.evaluate` (D80 ③④) |
-| `groupable` | 두 배관이 D 묶음 조건 (D82) 을 만족하는가, 아니면 어느 조건에서 막히는가 | `support_group` 묶음 판정 (D82) |
-| `together_at` | A·B·C 가 불가한 위치에서 함께 받치는 D (D89) 후보 | `support_group.together_at` (D89) |
+| `form_at` | `modules.support_candidates` → `support_std.evaluate` (D80 ③④⑧) | 검증기가 그 위치에 놓는 서포트와 같다 |
+| `groupable` | `support_group._try` (D82: 같은 면·수평 평행·±500 mm·표면 차 ≤ 50 mm·L1/L2 표 범위·간섭 없음·묶은 무게 < 개별 합) | 검증기 묶음은 모두 `ok`. **간격 재확인 (D82 보완) 은 보지 않는다** (`spacing_recheck: "not_checked"`) — 그 배관 서포트 목록 전체가 있어야 한다 |
+| `together_at` | `support_group.together_at` (D89) | 검증기는 `form_at(...)["chosen"]` 이 None 인 위치에서만 이 답을 쓴다 |
 
-호출 비용은 S1-7b 구현 후 이 절에 적는다.
+힌트가 보지 않는 것: 어느 위치에 서포트를 둘지 (D80 ⑤ 탐욕 — 간격·도달성), D82 보완 간격 재확인, 묶음 좌표 순서 탐욕.
+
+**대조 (2026-10-27, `python -m pipe_routing.verifier.hint_bench`, 비공개 표):** 기본·밀집 30 (D96 + D105 첫 해), 밀집 50 (S1-6c 경로), 블록 쌍 (S1-7) 경로를 지금 검증기로 다시 판정하고, 검증기가 놓은 서포트마다 힌트를 물었다. 검증기가 판정에 쓴 반올림 전 위치·축으로 묻는다 (출력 좌표는 반올림돼 있어 45° 배관에서 무게 끝자리가 달라진다).
+
+| | A·B·C 서포트 | D89 | D 묶음 후보 쌍 (같은 면 C, ±500 mm) |
+|---|---|---|---|
+| 호출 | 6,829 (수작업 42 · 기본 1,770 · 밀집 30 1,403 · 밀집 50 2,086 · 블록 쌍 1,528) | 1 | 107 |
+| 검증기와 다름 | **0** (형식·면·보강·규격·무게·L·부재 정확히) | **0** | groupable ok 2 — 둘 다 검증기 간격 재확인(D82 보완)에서 묶지 않음. 나머지 105 는 아니라고 답함 (표면 차 79 · 묶은 무게 ≥ 합 20 · L1/L2·간섭 6) |
+
+이 세트들의 검증기 결과에는 D 묶음이 없어 `groupable` 의 "묶음 = ok" 대조는 합성 시험 (`tests/test_s1_hint.py`) 으로 한다.
+
+**호출 비용** (단일 프로세스, Intel Xeon 2.8 GHz, 중앙 / p90 / 최대 ms)
+
+| 세트 | 생성 | `form_at` | `groupable` | `together_at` |
+|---|---|---|---|---|
+| 수작업 (5배관) | 1.3 | 0.84 / 0.94 / 1.2 | — | — |
+| 기본 (10배관) | 4.7 / 7.1 / 8.2 | 1.35 / 1.96 / 3.3 | 3.0 / 3.6 / 3.7 | — |
+| 밀집 30 | 17 / 20 / 20 | 1.71 / 2.61 / 5.4 | 3.3 / 5.1 / 6.3 | — |
+| 밀집 50 | 31 / 34 / 34 | 2.45 / 4.91 / 9.6 | 4.3 / 8.4 / 9.4 | 13 (1회) |
+| 블록 쌍 (24배관) | 15 / 18 / 18 | 2.29 / 3.49 / 8.0 | 4.6 / 6.9 / 7.8 | — |
+
+- `form_at` 은 다른 배관 조각 배열을 처음 한 번 만들고(생성 비용과 별도, 첫 호출에 포함) 이후 재사용한다.
+- 전체 검증 1회(밀집 50 중앙 6.7 s) 대비 `form_at` 은 약 1/2,700. 경로를 바꾸면 힌트 객체를 새로 만든다 (생성 수 ms~수십 ms).
