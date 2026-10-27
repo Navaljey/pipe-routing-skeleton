@@ -23,7 +23,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from .multi import classify_failures, default_order, routes_conflict, sequential_ripup_planner
+from .multi import classify_failures, classify_sequential, default_order, routes_conflict, sequential_ripup_planner
 
 RESTART_EVERY = 8   # `추정:` 이동 몇 번마다 한 번 순서 무작위 재시작
 
@@ -41,6 +41,7 @@ class Trajectory:
     total_sec: float = 0.0
     stop: str = ""
     placement: list = field(default_factory=list)   # 최선 해의 배치 시점 순서 (부재 막힘 (가)/(나) 판정용, 결과에 영향 없음)
+    first: object = None          # 첫 해 PlanResult (D110 ②: 첫 해 출력 = pipeline 순차 출력, 분류는 예산 밖에서)
 
 
 def _cost(r) -> float:
@@ -98,8 +99,9 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
         return ((max_expanded is not None and count[0] >= max_expanded)
                 or (max_sec is not None and time.perf_counter() - t0 >= max_sec))
 
-    # 첫 해 = first-solution 기준선 (D50, rip-up 3회)
-    first = sequential_ripup_planner(sc, router=counting_router, time_limit=time_limit)
+    # 첫 해 = first-solution 기준선 (D50, rip-up 3회). 실패 분류(진단 재라우팅)는 예산 밖 — 끝난 뒤 (D110 ②)
+    first = sequential_ripup_planner(sc, router=counting_router, time_limit=time_limit, classify=False)
+    tr.first = first
     best = dict(first.routes)
     from .support_diag import placement_time
     best_when = placement_time(first.order, first.events, set(best))   # 배치 시점 (기록만)
@@ -182,6 +184,7 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
     tr.total_expanded = count[0]
     tr.total_sec = time.perf_counter() - t0
     tr.stop = "expansions" if (max_expanded is not None and count[0] >= max_expanded) else "wall_clock"
+    classify_sequential(first, sc, router, time_limit)   # 예산 밖 (곡선 시간·확장 축에 넣지 않는다)
     return tr
 
 
@@ -320,6 +323,11 @@ def main(argv=None) -> int:
         (out_dir / f"{stem}_curve.json").write_text(json.dumps(curve, ensure_ascii=False, indent=1), encoding="utf-8")
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         (out_dir / f"{stem}_report.md").write_text(report_md(out, path), encoding="utf-8")
+        # D110 ②: 첫 해 출력 (= pipeline 순차 출력, 첫 해를 따로 돌리지 않는다). 채점·D101 은 예산 밖
+        out_first = run(sc, router=router, planner=lambda sc_, r_, tl: tr.first)
+        validate_output(out_first)
+        (out_dir / f"{stem}_first_output.json").write_text(json.dumps(out_first, ensure_ascii=False), encoding="utf-8")
+        (out_dir / f"{stem}_first_report.md").write_text(report_md(out_first, path), encoding="utf-8")
         print(f"{path}: t0 {tr.t0_sec:.0f}s · 점 {len(points)} · 이동 {tr.moves} · 확장 {tr.total_expanded} · "
               f"최종 경로 {points[-1]['routed']} 통과 {points[-1]['success']} 완전 성공 {points[-1]['full_success']} "
               f"J {points[-1]['J_total']}")

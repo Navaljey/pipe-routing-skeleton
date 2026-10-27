@@ -93,9 +93,11 @@ def _route(res: PlanResult, sc, pipe, router, time_limit, placed_items):
 
 
 def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time_limit: float = 60.0,
-                             max_ripups: int = MAX_RIPUPS, order_fn: Callable = default_order) -> PlanResult:
+                             max_ripups: int = MAX_RIPUPS, order_fn: Callable = default_order,
+                             classify: bool = True) -> PlanResult:
     """D50: 순서대로 깔고(놓인 배관 = 장애물), 실패 배관은 rip-up & reroute.
-    D52: 성공 수(경로가 놓인 배관 수)가 엄격히 늘 때만 유지하고, 같거나 줄면 되돌린다."""
+    D52: 성공 수(경로가 놓인 배관 수)가 엄격히 늘 때만 유지하고, 같거나 줄면 되돌린다.
+    classify = False 면 실패 분류를 미룬다 — 나중에 `classify_sequential` 로 (anytime 첫 해, D110 ②: 분류는 예산 밖)."""
     t0 = time.perf_counter()
     pipes = {p.id: p for p in sc.pipes}
     order = [p.id for p in order_fn(sc)]
@@ -151,10 +153,24 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             res.events.append(f"rip-up {res.ripups}: {f} 위해 {blockers} 걷어냄 → 성공 {before}→{after}")
             tried.clear()                            # 상태가 바뀌었으니 다른 실패 배관을 다시 시도할 수 있다
 
-    classify_failures(res, sc, router, time_limit, order, placed, routes, solo)
     res.routes = routes
+    if classify:
+        classify_sequential(res, sc, router, time_limit)
     res.total_sec = time.perf_counter() - t0
     return res
+
+
+def classify_sequential(res: PlanResult, sc: Scenario, router: Callable, time_limit: float = 60.0) -> None:
+    """순차 플래너 결과의 실패 분류 (D51·D60·D74). 단독 결과는 플래너의 캐시(res.solo)를 쓰고, 없으면 같은 방식(_route —
+    시도 기록 포함)으로 만든다 — 플래너 안에서 분류한 것과 같은 출력."""
+    pipes = {p.id: p for p in sc.pipes}
+    placed = {pid: r for pid, r in res.routes.items() if r.status == "ok"}
+
+    def solo(pid):
+        if pid not in res.solo:
+            res.solo[pid] = _route(res, sc, pipes[pid], router, time_limit, [])
+        return res.solo[pid]
+    classify_failures(res, sc, router, time_limit, res.order, placed, res.routes, solo)
 
 
 def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limit: float, order, placed: dict,

@@ -75,3 +75,23 @@ class AnytimeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(astar_fast.HAVE_NUMBA, "numba 없음")
+class FirstSolutionOutputTest(unittest.TestCase):
+    def test_first_output_equals_pipeline_sequential(self):
+        """D110 ②: anytime 첫 해 출력 = pipeline 순차 출력 (deterministic_view 바이트 동일) — 개선 이동이 여러 번 일어난 뒤
+        (라우터 캐시·부재 Session 이 움직인 뒤) 예산 밖에서 분류해도 같다. 작은 예산이라 실패 분류(D74 진단)도 일어난다."""
+        import json
+
+        from pipe_routing.pipeline import deterministic_view, run
+        sc = load(SCEN)
+        ref = run(sc, router=make_layered_router(expand_limit=8 * 2048))
+        r = make_layered_router(expand_limit=8 * 2048)
+        e0 = anytime_run(sc, make_layered_router(expand_limit=8 * 2048), seed=0, max_expanded=1).e0
+        tr = anytime_run(sc, r, seed=7, max_expanded=e0 + 400_000)
+        self.assertGreater(tr.moves, 1)
+        got = run(sc, router=r, planner=lambda sc_, r_, tl: tr.first)
+        self.assertTrue(ref["global"]["fail_class"] and any(ref["global"]["fail_class"].values()))
+        dump = lambda o: json.dumps(deterministic_view(o), ensure_ascii=False, sort_keys=True)   # noqa: E731
+        self.assertEqual(dump(got), dump(ref))
