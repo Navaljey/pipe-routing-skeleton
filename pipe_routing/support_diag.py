@@ -114,19 +114,27 @@ def relation(P, Q, clP, clQ, lo, hi) -> dict:
 
 
 def diagnose(out_path: str, std) -> list:
-    from . import verifier  # noqa: F401  (모듈 등록)
     out = json.loads(Path(out_path).read_text())
     stem = Path(out_path).name[: -len("_output.json")]
+    if not any(r["waypoints"] and r["layer0"].get("support") is False for r in out["routes"]):
+        return []
+    return diagnose_out(out, load(scenario_path(stem)), std, stem)
+
+
+def diagnose_out(out: dict, sc, std, stem: str = "") -> list:
+    """출력 dict 하나의 부재 막힘 진단 (pipeline global.member_blockage·R7 목록 공용)."""
+    from . import verifier  # noqa: F401  (모듈 등록)
+    stem = stem or out.get("scenario") or ""
     bad = [r for r in out["routes"] if r["waypoints"] and r["layer0"].get("support") is False]
     if not bad:
         return []
-    sc = load(scenario_path(stem))
     pipes = {p.id: p for p in sc.pipes}
     routes = {r["pipe_id"]: PipeRoute(r["pipe_id"], r["waypoints"]) for r in out["routes"] if r["waypoints"]}
     cls = {pid: centerlines_of(pipes[pid], r) for pid, r in routes.items()}
     segs = {pid: _segs(c) for pid, c in cls.items()}
     g = out["global"]
-    tpos = placement_time(g["order"], g.get("planner_events") or [], set(routes))
+    tpos = ({pid: i for i, pid in enumerate(p for p in g["placement_order"] if p in routes)}
+            if g.get("placement_order") else placement_time(g["order"], g.get("planner_events") or [], set(routes)))
     reach = _reach(std)
     rows = []
     for r in bad:

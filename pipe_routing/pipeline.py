@@ -84,8 +84,8 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
 # ---------------------------------------------------------------- 실행
 
 def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 60.0,
-        planner: Callable = sequential_ripup_planner) -> dict:
-    """시나리오 1개 실행 → §7.2 출력 dict."""
+        planner: Callable = sequential_ripup_planner, solo_ref: bool = True) -> dict:
+    """시나리오 1개 실행 → §7.2 출력 dict. solo_ref = D101 Σ 단독 J 참고치 (보고용, 계산 시간 밖)."""
     t0 = time.perf_counter()
     plan = planner(sc, router, time_limit)
     results = plan.routes
@@ -159,7 +159,31 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
         "terminal_rules": _terminal_rules(),     # D94·D96 관통·경계 단자 직관 규칙
     })
-    return {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+    if plan.placement:
+        g["placement_order"] = plan.placement   # 최종 배치 시점 순서 (anytime 최선 해 — 부재 막힘 (가)/(나) 판정용)
+    out = {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
+    g["member_blockage"] = member_blockage(out, sc, std)   # R7: 다른 배관 부재 막힘 support 위반
+    if solo_ref:   # D101 (예산 밖, computation_time_sec 에 넣지 않는다)
+        from .solo_ref import attach
+        attach(out, sc, router, std, reuse=plan.free_solo)
+    return out
+
+
+def member_blockage(out: dict, sc, std) -> dict:
+    """R7 — support 위반 배관 중 다른 배관 때문에 막힌 것 (단독 검증 통과). 막는 배관·배치 순서 (가) 나중 / (나) 먼저
+    · 막힘 유형은 support_diag 와 같은 판정 (출력 재분석, 경로는 바꾸지 않는다)."""
+    from .support_diag import diagnose_out
+    rows = diagnose_out(out, sc, std)
+    return {"count": sum(1 for r in rows if r["solo_pass"]), "support_violation": len(rows),
+            "after": sum(1 for r in rows if r["solo_pass"] and r["order"] == ["after"]),
+            "before": sum(1 for r in rows if r["solo_pass"] and r["order"] == ["before"]),
+            "both": sum(1 for r in rows if r["solo_pass"] and len(r["order"]) == 2),
+            "unknown": sum(1 for r in rows if r["solo_pass"] and not r["order"]),
+            "relation": dict(sorted(Counter(r["relation"] for r in rows if r["solo_pass"]).items())),
+            "pipes": [{"pipe": r["pipe"], "solo_pass": r["solo_pass"], "blockers": r["blockers"],
+                       "order": r["order"], "relation": r["relation"],
+                       "blocked_forms": sorted({f"{b['form']}/{b['face']}" for b in r["blocked_supports"]})}
+                      for r in rows]}
 
 
 def deterministic_view(out):
@@ -364,6 +388,14 @@ def report_md(out: dict, scenario_path: str = "") -> str:
              f"배관별 상대 오차 중앙 {g['support_estimate']['rel_median']} · 최대 |{g['support_estimate']['rel_max_abs']}| · "
              f"과대 {g['support_estimate']['over']} / 과소 {g['support_estimate']['under']}" if g.get("support_estimate") else "-")
           + " |",
+          (f"| 부재 막힘 (R7) | support 위반 {g['member_blockage']['support_violation']} 중 단독 통과 "
+           f"{g['member_blockage']['count']} — (가) 막는 배관이 나중 {g['member_blockage']['after']} · (나) 먼저 "
+           f"{g['member_blockage']['before']} · 양쪽 {g['member_blockage']['both']} |" if g.get("member_blockage") else "| 부재 막힘 (R7) | - |"),
+          (f"| Σ 단독 J 참고치 (D101) | 간격 {g['solo_reference']['gap']:+.2%} ({g['solo_reference']['both_pass']}배관, "
+           f"배관별 중앙 {g['solo_reference']['gap_pipe']['median']:+.2%}) · 단독 실패 {g['solo_reference']['solo_fail']} "
+           f"(경로 없음 {g['solo_reference']['solo_fail_router']}) · {g['solo_reference']['note']} · "
+           f"{g['solo_reference']['sec']:.1f} s (계산 시간 밖) |"
+           if g.get("solo_reference") and g["solo_reference"]["gap"] is not None else "| Σ 단독 J 참고치 (D101) | - |"),
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
     pen = any("penetration" in (x["J"] or {}) for x in out["routes"])   # D95 블록 쌍
@@ -422,6 +454,8 @@ def main(argv=None) -> int:
                     help="경계 단자 직관 규칙 (D96 영향 측정용 — 기본 = blockpair.D96)")
     ap.add_argument("--first-bend", choices=("d105", "d87"), default="d105",
                     help="첫 꺾임 격자선: d105 = 45·90·135° 각각 (기본), d87 = t₁₃₅ 한 줄 (비교용)")
+    ap.add_argument("--no-solo-ref", action="store_true",
+                    help="D101 Σ 단독 J 참고치 계산을 끈다 (보고용, 계산 시간 밖)")
     ap.add_argument("--html-only", action="store_true",
                     help="다시 계산하지 않고 -o 폴더의 기존 출력 JSON 으로 3D 리포트 HTML 만 다시 만든다 "
                          "(plotly.js 포함 — 보고 첨부용, §0)")
@@ -458,7 +492,8 @@ def main(argv=None) -> int:
     for path in args.paths:
         sc = load(path)
         out = run(sc, router=router, time_limit=args.time_limit,
-                  planner=sequential_ripup_planner if args.planner == "sequential" else independent_planner)
+                  planner=sequential_ripup_planner if args.planner == "sequential" else independent_planner,
+                  solo_ref=not args.no_solo_ref)
         validate_output(out)
         stem = Path(path).stem
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
