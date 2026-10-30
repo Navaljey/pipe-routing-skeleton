@@ -6,9 +6,81 @@
  "cases": [
   {
    "case": "first",
+   "set": "manual",
+   "dir": "out/e1_ana/first/manual",
+   "scenarios": 1,
+   "support_violation": 0,
+   "member_blockage": 0,
+   "after": 0,
+   "before": 0,
+   "both": 0,
+   "relation": {},
+   "blocked_forms": {},
+   "rows": []
+  },
+  {
+   "case": "budget_end",
+   "set": "manual",
+   "dir": "out/e1_ana/final/manual",
+   "scenarios": 1,
+   "support_violation": 0,
+   "member_blockage": 0,
+   "after": 0,
+   "before": 0,
+   "both": 0,
+   "relation": {},
+   "blocked_forms": {},
+   "rows": []
+  },
+  {
+   "case": "first",
    "set": "base",
-   "dir": "out/s1_7_base_d105",
-   "scenarios": 21,
+   "dir": "out/e1_ana/first/base",
+   "scenarios": 20,
+   "support_violation": 1,
+   "member_blockage": 1,
+   "after": 0,
+   "before": 1,
+   "both": 0,
+   "relation": {
+    "parallel_gt300": 1
+   },
+   "blocked_forms": {
+    "C/floor": 1
+   },
+   "rows": [
+    {
+     "scenario": "proc_000",
+     "pipe": "P010",
+     "size": "25A",
+     "type": "T5",
+     "gaps": 3,
+     "solo_pass": true,
+     "blockers": [
+      "P008"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P008": "50A"
+     },
+     "surface_gap_mm": {
+      "P008": 250.3
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    }
+   ]
+  },
+  {
+   "case": "budget_end",
+   "set": "base",
+   "dir": "out/e1_ana/final/base",
+   "scenarios": 20,
    "support_violation": 1,
    "member_blockage": 1,
    "after": 0,
@@ -50,8 +122,36 @@
   },
   {
    "case": "first",
+   "set": "stair",
+   "dir": "out/e1_ana/first/stair",
+   "scenarios": 5,
+   "support_violation": 0,
+   "member_blockage": 0,
+   "after": 0,
+   "before": 0,
+   "both": 0,
+   "relation": {},
+   "blocked_forms": {},
+   "rows": []
+  },
+  {
+   "case": "budget_end",
+   "set": "stair",
+   "dir": "out/e1_ana/final/stair",
+   "scenarios": 5,
+   "support_violation": 0,
+   "member_blockage": 0,
+   "after": 0,
+   "before": 0,
+   "both": 0,
+   "relation": {},
+   "blocked_forms": {},
+   "rows": []
+  },
+  {
+   "case": "first",
    "set": "dense30",
-   "dir": "out/s1_7_d30_d105",
+   "dir": "out/e1_ana/first/dense30",
    "scenarios": 5,
    "support_violation": 5,
    "member_blockage": 5,
@@ -196,52 +296,8 @@
   },
   {
    "case": "budget_end",
-   "set": "base",
-   "dir": "out/r7_any_base",
-   "scenarios": 21,
-   "support_violation": 1,
-   "member_blockage": 1,
-   "after": 0,
-   "before": 1,
-   "both": 0,
-   "relation": {
-    "parallel_gt300": 1
-   },
-   "blocked_forms": {
-    "C/floor": 1
-   },
-   "rows": [
-    {
-     "scenario": "proc_000",
-     "pipe": "P010",
-     "size": "25A",
-     "type": "T5",
-     "gaps": 3,
-     "solo_pass": true,
-     "blockers": [
-      "P008"
-     ],
-     "blocker_kind": "single",
-     "order": [
-      "before"
-     ],
-     "blocker_sizes": {
-      "P008": "50A"
-     },
-     "surface_gap_mm": {
-      "P008": 250.3
-     },
-     "relation": "parallel_gt300",
-     "blocked": [
-      "C/floor"
-     ]
-    }
-   ]
-  },
-  {
-   "case": "budget_end",
    "set": "dense30",
-   "dir": "out/r7_any_d30",
+   "dir": "out/e1_ana/final/dense30",
    "scenarios": 5,
    "support_violation": 2,
    "member_blockage": 2,
@@ -304,6 +360,776 @@
      "relation": "p_vertical_45",
      "blocked": [
       "B/wall_y1"
+     ]
+    }
+   ]
+  },
+  {
+   "case": "first",
+   "set": "dense50",
+   "dir": "out/e1_ana/first/dense50",
+   "scenarios": 5,
+   "support_violation": 13,
+   "member_blockage": 13,
+   "after": 0,
+   "before": 13,
+   "both": 0,
+   "relation": {
+    "crossing": 1,
+    "p_vertical_45": 6,
+    "parallel_50_300": 1,
+    "parallel_gt300": 4,
+    "q_vertical_45": 1
+   },
+   "blocked_forms": {
+    "B/wall_x1": 1,
+    "B/wall_y0": 1,
+    "C/ceiling": 8,
+    "C/floor": 4
+   },
+   "rows": [
+    {
+     "scenario": "dense50_000",
+     "pipe": "P007",
+     "size": "65A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P034"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P034": "100A"
+     },
+     "surface_gap_mm": {
+      "P034": 81.4
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "B/wall_y0"
+     ]
+    },
+    {
+     "scenario": "dense50_000",
+     "pipe": "P017",
+     "size": "50A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P007"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P007": "65A"
+     },
+     "surface_gap_mm": {
+      "P007": 51.6
+     },
+     "relation": "crossing",
+     "blocked": [
+      "B/wall_x1",
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_000",
+     "pipe": "P033",
+     "size": "400A",
+     "type": "T5",
+     "gaps": 3,
+     "solo_pass": true,
+     "blockers": [
+      "P024",
+      "P026"
+     ],
+     "blocker_kind": "multiple",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P024": "500A",
+      "P026": "400A"
+     },
+     "surface_gap_mm": {
+      "P024": 16.7,
+      "P026": 213.5
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_000",
+     "pipe": "P040",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P002"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P002": "400A"
+     },
+     "surface_gap_mm": {
+      "P002": 113.6
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_001",
+     "pipe": "P012",
+     "size": "15A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P028"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P028": "65A"
+     },
+     "surface_gap_mm": {
+      "P028": 10.9
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P005",
+     "size": "65A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P037"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P037": "200A"
+     },
+     "surface_gap_mm": {
+      "P037": 436.4
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P024",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P008"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P008": "500A"
+     },
+     "surface_gap_mm": {
+      "P008": 1535.2
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P040",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P024"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P024": "400A"
+     },
+     "surface_gap_mm": {
+      "P024": 834.8
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P041",
+     "size": "50A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P034"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P034": "65A"
+     },
+     "surface_gap_mm": {
+      "P034": 191.6
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P043",
+     "size": "50A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P012"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P012": "65A"
+     },
+     "surface_gap_mm": {
+      "P012": 100.3
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P007",
+     "size": "25A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P003"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P003": "50A"
+     },
+     "surface_gap_mm": {
+      "P003": 42.7
+     },
+     "relation": "parallel_50_300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P020",
+     "size": "100A",
+     "type": "T5",
+     "gaps": 2,
+     "solo_pass": true,
+     "blockers": [
+      "P041"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P041": "150A"
+     },
+     "surface_gap_mm": {
+      "P041": 151.3
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P024",
+     "size": "25A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P006"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P006": "400A"
+     },
+     "surface_gap_mm": {
+      "P006": 7.3
+     },
+     "relation": "q_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    }
+   ]
+  },
+  {
+   "case": "budget_end",
+   "set": "dense50",
+   "dir": "out/e1_ana/final/dense50",
+   "scenarios": 5,
+   "support_violation": 12,
+   "member_blockage": 12,
+   "after": 0,
+   "before": 12,
+   "both": 0,
+   "relation": {
+    "crossing": 1,
+    "p_vertical_45": 6,
+    "parallel_50_300": 1,
+    "parallel_gt300": 3,
+    "q_vertical_45": 1
+   },
+   "blocked_forms": {
+    "B/wall_x1": 1,
+    "B/wall_y0": 1,
+    "C/ceiling": 8,
+    "C/floor": 3
+   },
+   "rows": [
+    {
+     "scenario": "dense50_000",
+     "pipe": "P007",
+     "size": "65A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P034"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P034": "100A"
+     },
+     "surface_gap_mm": {
+      "P034": 81.4
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "B/wall_y0"
+     ]
+    },
+    {
+     "scenario": "dense50_000",
+     "pipe": "P017",
+     "size": "50A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P007"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P007": "65A"
+     },
+     "surface_gap_mm": {
+      "P007": 51.6
+     },
+     "relation": "crossing",
+     "blocked": [
+      "B/wall_x1",
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_000",
+     "pipe": "P040",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P002"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P002": "400A"
+     },
+     "surface_gap_mm": {
+      "P002": 113.6
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_001",
+     "pipe": "P012",
+     "size": "15A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P028"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P028": "65A"
+     },
+     "surface_gap_mm": {
+      "P028": 10.9
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P005",
+     "size": "65A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P037"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P037": "200A"
+     },
+     "surface_gap_mm": {
+      "P037": 436.4
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P024",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P008"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P008": "500A"
+     },
+     "surface_gap_mm": {
+      "P008": 1535.2
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P040",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P024"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P024": "400A"
+     },
+     "surface_gap_mm": {
+      "P024": 834.8
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P041",
+     "size": "50A",
+     "type": "T5",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P034"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P034": "65A"
+     },
+     "surface_gap_mm": {
+      "P034": 191.6
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_002",
+     "pipe": "P043",
+     "size": "50A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P012"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P012": "65A"
+     },
+     "surface_gap_mm": {
+      "P012": 100.3
+     },
+     "relation": "p_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P007",
+     "size": "25A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P003"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P003": "50A"
+     },
+     "surface_gap_mm": {
+      "P003": 42.7
+     },
+     "relation": "parallel_50_300",
+     "blocked": [
+      "C/floor"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P020",
+     "size": "100A",
+     "type": "T5",
+     "gaps": 2,
+     "solo_pass": true,
+     "blockers": [
+      "P041"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P041": "150A"
+     },
+     "surface_gap_mm": {
+      "P041": 151.3
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/ceiling"
+     ]
+    },
+    {
+     "scenario": "dense50_004",
+     "pipe": "P024",
+     "size": "25A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P006"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P006": "400A"
+     },
+     "surface_gap_mm": {
+      "P006": 7.3
+     },
+     "relation": "q_vertical_45",
+     "blocked": [
+      "C/ceiling"
+     ]
+    }
+   ]
+  },
+  {
+   "case": "first",
+   "set": "pair",
+   "dir": "out/e1_ana/first/pair",
+   "scenarios": 5,
+   "support_violation": 1,
+   "member_blockage": 1,
+   "after": 0,
+   "before": 1,
+   "both": 0,
+   "relation": {
+    "parallel_gt300": 1
+   },
+   "blocked_forms": {
+    "C/floor": 1
+   },
+   "rows": [
+    {
+     "scenario": "pair_004",
+     "pipe": "P009",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P003"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P003": "400A"
+     },
+     "surface_gap_mm": {
+      "P003": 1563.5
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
+     ]
+    }
+   ]
+  },
+  {
+   "case": "budget_end",
+   "set": "pair",
+   "dir": "out/e1_ana/final/pair",
+   "scenarios": 5,
+   "support_violation": 1,
+   "member_blockage": 1,
+   "after": 0,
+   "before": 1,
+   "both": 0,
+   "relation": {
+    "parallel_gt300": 1
+   },
+   "blocked_forms": {
+    "C/floor": 1
+   },
+   "rows": [
+    {
+     "scenario": "pair_004",
+     "pipe": "P009",
+     "size": "400A",
+     "type": "T1",
+     "gaps": 1,
+     "solo_pass": true,
+     "blockers": [
+      "P003"
+     ],
+     "blocker_kind": "single",
+     "order": [
+      "before"
+     ],
+     "blocker_sizes": {
+      "P003": "400A"
+     },
+     "surface_gap_mm": {
+      "P003": 1563.5
+     },
+     "relation": "parallel_gt300",
+     "blocked": [
+      "C/floor"
      ]
     }
    ]
