@@ -71,7 +71,33 @@
           "fail_causes": {"type": "array", "items": {"type": "string"}},
           "violations": {"type": "array"},
           "metrics": {"type": "object"},
-          "router": {"type": "object"}
+          "router": {"type": "object"},
+          "tree": {
+            "type": "object",
+            "description": "D112 분기 배관만 (S2-3~). 주관 + 다리 + 티. waypoints (위) = 주관과 같음. 다리 waypoints 는 티 → 다리 단자 순 (흐름 방향은 flow)",
+            "required": ["main", "legs", "method"],
+            "properties": {
+              "main": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+              "legs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["leg_id", "nominal_size", "waypoints", "tee"],
+                  "properties": {
+                    "leg_id": {"type": "string"},
+                    "nominal_size": {"type": "string"},
+                    "flow": {"enum": ["out", "in"]},
+                    "found": {"type": "boolean", "description": "§7 Q10: 찾은 다리만 true (배관 실패여도 찾은 다리는 기록)"},
+                    "waypoints": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+                    "tee": {"oneOf": [{"type": "null"},
+                                      {"type": "object", "required": ["pos", "angle"],
+                                       "properties": {"pos": {"$ref": "#/$defs/vec3"}, "angle": {"enum": [45, 90]}}}]}
+                  }
+                }
+              },
+              "method": {"enum": ["exact", "exact_retry", "sequential"], "description": "§7 Q9"}
+            }
+          }
         }
       }
     },

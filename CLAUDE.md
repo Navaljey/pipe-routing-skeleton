@@ -471,6 +471,7 @@ J = Σ 직관 길이(m) × kg/m
 - `kind`: `nozzle` | `boundary` (D6). `dir`: 단자의 접속 방향 (첫 직진 방향)
 - 흐름 방향은 항상 start → end (D20)
 - 장애물 선택 속성 `supportable`·`penetrable`·`penetration_axis` (D93, 기본 false — D21). 블록 안 사용은 S2 (D113)
+- **S2 필드 (S2-0, 상위 호환):** 배관 선택 필드 `valves: [{"type": "gate"}]` (D111, 0~1개 — 위치는 라우터가 고른다) · `branches: [{"id", "nominal_size", "pos", "kind", "dir", "host"?, "flow"?}]` (D112, 1~5개, 다리 구경 ≤ 주관, `flow` = out 갈래 (기본, dir = 도착 규약) / in 합류 (dir = 출발 규약), 중력관은 in 만 — §7 Q1). `valve_positions`·`branch_points` 는 required 아님, **빈 배열만 허용 — 값이 있으면 로드 오류** (§7 Q8). 저장 시 두 이전 필드는 빈 배열로 그대로 쓴다 (E1 파일 바이트 동일). 출력 routes[] 선택 필드 `tree` {main, legs[{leg_id, nominal_size, flow, found, waypoints, tee {pos, angle}}], method exact·exact_retry·sequential} (D112, §7 Q9·Q10)
 - 단자 선택 필드 `host`: 노즐이 붙은 장애물 id (D28). 최상위 선택 필드 `meta`: 이름·생성기 설정 기록용, 라우터·검증기는 읽지 않는다
 - 정식 스키마: `schemas/scenario_input.schema.json`. 로드·검증: `python -m pipe_routing.scenario <json>...` (D33)
 
@@ -533,7 +534,7 @@ J = Σ 직관 길이(m) × kg/m
 | S1-7b | support_hint 조회 API (D100) — `form_at` · `groupable` · `together_at` | 결과 불변 (검증기와 같은 함수, 채점 출력 비트 동일) 시험 → 병합, 호출 비용 `docs/verifier_api.md` §4 — **충족 (2026-10-27, `docs/reports/s1_7b.md`)**: 힌트 = 검증기 6,829 + 1건 일치, 결과 불변 시험 통과 |
 | S1-8 | 평가셋 동결 **E1** (D70 수정) + V3 계약 확정 (D71, 기존 S1-7) — 실행 조건 D110 | `docs/eval_set_E1.md` (세트: 수작업·기본·계단·밀집 30·밀집 50·블록 쌍, 목록·시드·해시·커밋·기준선 곡선, 밀집 30 기준선 측정 추가) — **충족 (2026-10-30, `docs/eval_set_E1.md`)**: 41 시나리오 해시 일치, 6 세트 기준선 곡선 (동시 2), 참조 품질선 17/21 (메모리 부족 4) |
 | S2 | 설계안 `docs/reports/s2_plan.md` (D111~D115) | **승인 (2026-11-02 소유자, §7 14 항목 확정)** — 단계마다 PR 하나, E1 첫 해 41 바이트 동일 확인 후 병합, 단계마다 보고 (3D 리포트 — 밸브·분기·관통이 보이는 사례) |
-| S2-0 | 스키마 상위 호환 (`valves`·`branches` 추가, `valve_positions`·`branch_points` required 해제) · 로더 E1 41 시험 · 생성기 기본값 비트 동일 시험 · 출력 스키마 `tree` | 시험 통과, E1 41 로드 불변 |
+| S2-0 | 스키마 상위 호환 (`valves`·`branches` 추가, `valve_positions`·`branch_points` required 해제) · 로더 E1 41 시험 · 생성기 기본값 비트 동일 시험 · 출력 스키마 `tree` | 시험 통과, E1 41 로드 불변 — **충족 (2026-11-02)**: `tests/test_s2_compat.py` (E1 41 로드·해시·재저장 바이트 동일, 시드 시나리오 40 재생성 동일, 학습·검증 시드 범위 기본값 출력 sha256 고정, 새 필드·이전 필드 오류, 출력 `tree`) |
 | S2-1 | 내부 구조재 (D113) — 지지면 확장 · 판 관통 일반화 · 라우터 u·격자선 · 생성기 `internal` · 세트 | Dijkstra 대조 · 정합 위반 0 · E1 첫 해 41 바이트 동일 |
 | S2-2 | 밸브 (D111) + `valve_at` (D114) | 같음 + 힌트 대조 |
 | S2-3 | 분기 1개 정확 풀이 (D112) + `tee_at` (D114) | 무차별 최적 일치 · 정합 위반 0 · E1 불변 |

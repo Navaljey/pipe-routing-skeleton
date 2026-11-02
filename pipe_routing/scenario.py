@@ -17,6 +17,8 @@ from .constants import (GRAVITY_TYPES, INSULATION_MM, PIPE_SPECS, S0_ROUTER_TYPE
                         SNAP_MM, effective_radius)
 from .geometry import Box, Vec3, box_distance, union_volume
 
+VALVE_TYPES = frozenset({"T2", "T4", "T6", "T8"})    # D27·D111
+BRANCH_TYPES = frozenset({"T3", "T4", "T7", "T8"})   # D27·D112
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "scenario_input.schema.json"
 EPS = 1e-6
 AXIS_DIRS = {(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)}
@@ -65,6 +67,22 @@ class Terminal:
 
 
 @dataclass
+class Branch:
+    """D112 분기 단자 (다리 하나). 티 위치는 입력이 아니다 — 라우터가 고른다.
+    flow (§7 Q1): "out" = 갈래 (주관 → 티 → 다리 단자, dir = 도착 방향 D29 end 규약),
+    "in" = 합류 (다리 단자 → 티 → 주관, dir = 출발 방향 D29 start 규약). 중력관은 in 만."""
+    id: str
+    nominal_size: str
+    terminal: Terminal
+    flow: str = "out"
+
+    @property
+    def which(self) -> str:
+        """다리 단자가 따르는 단자 규약 (D29): out → end, in → start."""
+        return "end" if self.flow == "out" else "start"
+
+
+@dataclass
 class Pipe:
     id: str
     type_id: str
@@ -77,6 +95,10 @@ class Pipe:
     valve_positions: list[Vec3] = field(default_factory=list)
     branch_points: list[Vec3] = field(default_factory=list)
     crossing_window: Optional[tuple] = None   # D76 ②: 관통 배관 — 공유 격벽 위 창 (y0, y1, z0, z1)
+    valves: list[str] = field(default_factory=list)      # D111: 필요 밸브 종류 (S2 = ["gate"] 또는 [])
+    branches: list[Branch] = field(default_factory=list)  # D112: 분기 단자 1~5개 (없으면 [])
+    # valve_positions·branch_points 는 입력으로는 빈 배열만 허용 (§7 Q8). 내부 필드는 S2-2·S2-3 에서
+    # 검증기 판정 입력이 경로 출력 (PipeRoute) 으로 옮겨질 때까지 검증기 수작업 시험이 직접 채운다.
 
     @property
     def radius(self) -> float:
@@ -252,6 +274,10 @@ def _terminal(d: dict) -> Terminal:
     return Terminal(_vec(d["pos"]), d["kind"], tuple(int(c) for c in d["dir"]), d.get("host"))
 
 
+def _branch(d: dict) -> Branch:
+    return Branch(d["id"], d["nominal_size"], _terminal(d), d.get("flow", "out"))
+
+
 def _window(w) -> Optional[tuple]:
     if not w:
         return None
@@ -263,6 +289,13 @@ def from_dict(data: dict) -> Scenario:
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     struct = [f"{'/'.join(map(str, e.absolute_path)) or '<root>'}: {e.message}"
               for e in jsonschema.Draft202012Validator(schema).iter_errors(data)]
+    for i, p in enumerate(data.get("pipes", []) if isinstance(data, dict) else []):
+        if not isinstance(p, dict):
+            continue
+        if p.get("valve_positions"):   # §7 Q8: 이전 필드에 값이 있으면 오류
+            struct.append(f"pipes/{i}/valve_positions: D111 — 밸브 위치는 입력이 아님 (라우터가 고른다), valves 사용")
+        if p.get("branch_points"):
+            struct.append(f"pipes/{i}/branch_points: D112 — 티 위치는 입력이 아님 (라우터가 고른다), branches 사용")
     if struct:
         raise ScenarioError(struct)
 
@@ -275,8 +308,9 @@ def from_dict(data: dict) -> Scenario:
                    for o in data["obstacles"]],
         pipes=[Pipe(p["id"], p["type_id"], p["nominal_size"], p["gravity_pipe"], p["min_slope"],
                     float(p["insulation_thickness"]), _terminal(p["start"]), _terminal(p["end"]),
-                    [_vec(v) for v in p["valve_positions"]], [_vec(v) for v in p["branch_points"]],
-                    _window(p.get("crossing_window")))
+                    [_vec(v) for v in p.get("valve_positions", [])], [_vec(v) for v in p.get("branch_points", [])],
+                    _window(p.get("crossing_window")), [v["type"] for v in p.get("valves", [])],
+                    [_branch(b) for b in p.get("branches", [])])
                for p in data["pipes"]],
         meta=dict(data.get("meta", {})),
         block_pair=dict(data["block_pair"]) if data.get("block_pair") else None,
@@ -321,6 +355,10 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             errors.append(f"{p.id}: min_slope 는 중력관만 지정 (D13)")
         if p.type_id not in S0_ROUTER_TYPES:
             warnings.append(f"{p.id}: {p.type_id} 는 S0 라우터 대상 아님 (D27)")
+        if (p.type_id in VALVE_TYPES) != bool(p.valves):   # D33 확장 (S2 설계안 §1.2) `추정:` 경고로 시작
+            warnings.append(f"{p.id}: {p.type_id} 와 valves {len(p.valves)}개 불일치 (밸브 타입 T2·T4·T6·T8)")
+        if (p.type_id in BRANCH_TYPES) != bool(p.branches):   # S2 설계안 §1.3 `추정:` 경고로 시작
+            warnings.append(f"{p.id}: {p.type_id} 와 branches {len(p.branches)}개 불일치 (분기 타입 T3·T4·T7·T8)")
         if p.insulation_thickness != INSULATION_MM:
             warnings.append(f"{p.id}: 보온재 {p.insulation_thickness}mm ≠ D17 기준 {INSULATION_MM}mm")
         for which in ("start", "end"):
@@ -332,6 +370,7 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             snapped(f"{p.id}.branch[{i}]", v)
         if p.start.pos == p.end.pos:
             errors.append(f"{p.id}: start 와 end 가 같은 위치")
+        errors += _branch_errors(p, sc.block, sc.obstacles)
     for o in sc.obstacles:   # D93: 블록 안 supportable·penetrable 장애물은 S2 (M27)
         if o.supportable or o.penetrable:
             errors.append(f"{o.id}: supportable·penetrable 장애물 — S2 예정 — 미지원 (D93, M27)")
@@ -359,6 +398,40 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             if box_distance(s, t) < need - EPS:
                 warnings.append(f"{p.id}.{w} ↔ {q.id}.{v}: 단자 직진 구간 거리 < {need:.2f} (D17)")
     return errors, warnings
+
+
+def leg_pipe(pipe: Pipe, b: Branch) -> Pipe:
+    """다리 단자를 단자 규약 함수 (terminal_errors 등) 에 넘기기 위한 가상 배관 — 다리 구경·같은 보온재,
+    다리 단자는 flow 에 따라 start (in) 또는 end (out) 자리."""
+    t = b.terminal
+    return Pipe(f"{pipe.id}.{b.id}", pipe.type_id, b.nominal_size, pipe.gravity_pipe, pipe.min_slope,
+                pipe.insulation_thickness, t, t)
+
+
+def _branch_errors(p: Pipe, block: Block, obstacles: list[Obstacle]) -> list[str]:
+    """D112 분기 단자: 다리 구경 ≤ 주관 구경, 다리 id 중복 없음, 중력관 flow = in (§7 Q1),
+    단자 규약 D28·D29·D32 (flow 에 따라 start/end 규약), 10 mm 스냅, 단자끼리 같은 위치 아님."""
+    errs = []
+    ids = set()
+    sizes = list(PIPE_SPECS)
+    taken = {p.start.pos, p.end.pos}
+    for b in p.branches:
+        tag = f"{p.id}.branch[{b.id}]"
+        if b.id in ids:
+            errs.append(f"{tag}: 다리 id 중복")
+        ids.add(b.id)
+        if sizes.index(b.nominal_size) > sizes.index(p.nominal_size):
+            errs.append(f"{tag}: 다리 구경 {b.nominal_size} > 주관 구경 {p.nominal_size} (D112)")
+        if p.gravity_pipe and b.flow != "in":
+            errs.append(f"{tag}: 중력관 분기는 합류 (flow = in) 만 (D112, §7 Q1)")
+        if any(abs(c / SNAP_MM - round(c / SNAP_MM)) > EPS for c in b.terminal.pos):
+            errs.append(f"{tag}: 좌표 {list(b.terminal.pos)} 가 {SNAP_MM}mm 격자에 맞지 않음 (D5)")
+        if b.terminal.pos in taken:
+            errs.append(f"{tag}: 다른 단자와 같은 위치")
+        taken.add(b.terminal.pos)
+        errs += [e.replace(f"{p.id}.{b.id}.{b.which}", tag)
+                 for e in terminal_errors(leg_pipe(p, b), b.which, block, obstacles)]
+    return errs
 
 
 def _pair_errors(sc: Scenario) -> list[str]:
@@ -432,6 +505,10 @@ def to_dict(sc: Scenario) -> dict:
         "start": term(p.start), "end": term(p.end),
         "valve_positions": [vec(v) for v in p.valve_positions],
         "branch_points": [vec(v) for v in p.branch_points],
+        **({"valves": [{"type": v} for v in p.valves]} if p.valves else {}),
+        **({"branches": [{"id": b.id, "nominal_size": b.nominal_size, **term(b.terminal),
+                          **({"flow": b.flow} if b.flow != "out" else {})} for b in p.branches]}
+           if p.branches else {}),
         **({"crossing_window": {"y": vec(p.crossing_window[:2]), "z": vec(p.crossing_window[2:])}}
            if p.crossing_window else {}),
     } for p in sc.pipes]
