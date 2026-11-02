@@ -58,7 +58,7 @@
       "items": {
         "type": "object",
         "required": ["id", "type_id", "nominal_size", "gravity_pipe", "min_slope",
-                     "insulation_thickness", "start", "end", "valve_positions", "branch_points"],
+                     "insulation_thickness", "start", "end"],
         "additionalProperties": false,
         "properties": {
           "id": {"type": "string", "minLength": 1},
@@ -69,8 +69,32 @@
           "insulation_thickness": {"type": "number", "minimum": 0},
           "start": {"$ref": "#/$defs/terminal"},
           "end": {"$ref": "#/$defs/terminal"},
-          "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
-          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"}},
+          "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"},
+                              "description": "D111 이전 필드 (상위 호환으로만 남김, required 아님). 빈 배열만 허용 — 값이 있으면 로드 오류 (S2 §7 Q8). 밸브는 valves"},
+          "branch_points": {"type": "array", "items": {"$ref": "#/$defs/vec3"},
+                            "description": "D112 이전 필드 (상위 호환으로만 남김, required 아님). 빈 배열만 허용 — 값이 있으면 로드 오류 (S2 §7 Q8). 분기는 branches"},
+          "valves": {
+            "type": "array", "maxItems": 1,
+            "description": "D111: 필요 밸브 — 위치는 라우터가 고른다. S2 = 게이트밸브 0 또는 1개, 주관에만 (§7 Q14)",
+            "items": {"type": "object", "required": ["type"], "additionalProperties": false,
+                      "properties": {"type": {"enum": ["gate"]}}}
+          },
+          "branches": {
+            "type": "array", "minItems": 1, "maxItems": 5,
+            "description": "D112: 분기 단자 1~5개 — 티 위치는 라우터가 고른다. 다리 구경 ≤ 주관 구경 (로더 오류)",
+            "items": {
+              "type": "object", "required": ["id", "nominal_size", "pos", "kind", "dir"], "additionalProperties": false,
+              "properties": {
+                "id": {"type": "string", "minLength": 1},
+                "nominal_size": {"enum": ["15A", "25A", "50A", "65A", "100A", "150A", "200A", "300A", "400A", "500A"]},
+                "pos": {"$ref": "#/$defs/vec3"},
+                "kind": {"enum": ["nozzle", "boundary"]},
+                "dir": {"type": "array", "items": {"type": "integer", "minimum": -1, "maximum": 1}, "minItems": 3, "maxItems": 3},
+                "host": {"type": "string", "description": "선택. 노즐이 붙은 장애물 id (D28)"},
+                "flow": {"enum": ["out", "in"], "description": "§7 Q1: out = 갈래 (주관 → 티 → 다리 단자, dir = 도착 방향), in = 합류 (다리 단자 → 티 → 주관, dir = 출발 방향). 기본 out, 중력관 (T7·T8) 은 in 만"}
+              }
+            }
+          },
           "crossing_window": {
             "type": "object",
             "description": "관통 배관만 (D76 ②). 공유 격벽 위 창 사각형 — 관통점은 이 안에서 라우터가 고른다",

@@ -24,10 +24,18 @@ def pipe(pid="P", type_id="T1", size="100A", start=START, end=END, sdir=(1, 0, 0
 
 
 def scenario(pipes, obstacles=()):
-    return from_dict({"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"},
-                      "obstacles": [{"id": f"OBS_{i}", "type": "box", "min": list(lo), "max": list(hi)}
-                                    for i, (lo, hi) in enumerate(obstacles)],
-                      "pipes": copy.deepcopy(pipes)})
+    # §7 Q8: 입력의 valve_positions·branch_points 는 빈 배열만 — 밸브·분기 위치 판정 시험은 로드 뒤
+    # 내부 필드에 넣는다 (S2-2·S2-3 에서 판정 입력이 PipeRoute 로 옮겨질 때까지).
+    pipes = copy.deepcopy(pipes)
+    legacy = [(p.pop("valve_positions", []), p.pop("branch_points", [])) for p in pipes]
+    sc = from_dict({"block": {"width": 40000, "length": 40000, "height": 10000, "unit": "mm"},
+                    "obstacles": [{"id": f"OBS_{i}", "type": "box", "min": list(lo), "max": list(hi)}
+                                  for i, (lo, hi) in enumerate(obstacles)],
+                    "pipes": pipes})
+    for p, (vp, bp) in zip(sc.pipes, legacy):
+        p.valve_positions = [tuple(float(c) for c in v) for v in vp]
+        p.branch_points = [tuple(float(c) for c in v) for v in bp]
+    return sc
 
 
 def run(pipes, routes, obstacles=(), pid="P"):
