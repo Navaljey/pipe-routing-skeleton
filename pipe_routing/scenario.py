@@ -13,8 +13,8 @@ from typing import Optional
 
 import jsonschema
 
-from .constants import (GRAVITY_TYPES, INSULATION_MM, PIPE_SPECS, S0_ROUTER_TYPES,
-                        SNAP_MM, effective_radius)
+from . import pipe_spec
+from .constants import CLEARANCE_MM, GRAVITY_TYPES, PIPE_SPECS, S0_ROUTER_TYPES, SNAP_MM
 from .geometry import Box, Vec3, box_distance, union_volume
 
 VALVE_TYPES = frozenset({"T2", "T4", "T6", "T8"})    # D27·D111
@@ -99,20 +99,45 @@ class Pipe:
     branches: list[Branch] = field(default_factory=list)  # D112: 분기 단자 1~5개 (없으면 [])
     # valve_positions·branch_points 는 입력으로는 빈 배열만 허용 (§7 Q8). 내부 필드는 S2-2·S2-3 에서
     # 검증기 판정 입력이 경로 출력 (PipeRoute) 으로 옮겨질 때까지 검증기 수작업 시험이 직접 채운다.
+    service: Optional[str] = None      # D116 서비스 코드 (입력)
+    line_no: Optional[str] = None      # D116 직접 적은 배관 이름 (입력)
+    pipe_class: Optional[str] = None   # D117 입력 class (없으면 서비스 기본 → DEFAULT)
+
+    # ---- 배관 사양 (D116·D117): OD·r·kg/m·관이음 무게는 이 속성으로만 읽는다 (pipe_spec)
+    @property
+    def class_name(self) -> str:
+        return pipe_spec.resolve(self.service, self.pipe_class, 0.0)[0]
+
+    @property
+    def spec(self) -> "pipe_spec.Spec":
+        return pipe_spec.spec(self.class_name, self.nominal_size)
+
+    def spec_of(self, nominal_size: str) -> "pipe_spec.Spec":
+        """같은 class 의 다른 구경 (분기 다리·리듀서 뒤)."""
+        return pipe_spec.spec(self.class_name, nominal_size)
 
     @property
     def radius(self) -> float:
-        """유효 반경 (D17)."""
-        return effective_radius(self.nominal_size, self.insulation_thickness)
+        """유효 반경 = OD/2 + 보온 + 10 (D17·D117, constants.effective_radius 와 같은 식·순서)."""
+        return self.spec.od / 2 + self.insulation_thickness + CLEARANCE_MM
 
     @property
     def min_straight(self) -> int:
-        return PIPE_SPECS[self.nominal_size].min_straight
+        return PIPE_SPECS[self.nominal_size].min_straight   # §3.3 — 호칭경 기준 (D117)
 
     @property
     def od(self) -> float:
-        """외경 mm (§3.1)."""
-        return PIPE_SPECS[self.nominal_size].od
+        """외경 mm (class 표, D117)."""
+        return self.spec.od
+
+    @property
+    def kg_per_m(self) -> float:
+        """직관 kg/m (class 표, D117)."""
+        return self.spec.kg_per_m
+
+    def elbow_kg(self, deflection_deg: int) -> float:
+        """§3.4 엘보 청구 (class 표, D25)."""
+        return pipe_spec.elbow_kg(self.spec, deflection_deg)
 
 
 @dataclass
@@ -274,6 +299,15 @@ def _terminal(d: dict) -> Terminal:
     return Terminal(_vec(d["pos"]), d["kind"], tuple(int(c) for c in d["dir"]), d.get("host"))
 
 
+def _insulation(p: dict) -> float:
+    """D117: 보온 = 입력 → 서비스 기본 → 50 mm."""
+    ins = p.get("insulation_thickness")
+    if ins is None:
+        svc = pipe_spec.services().get(p.get("service"))
+        return svc.insulation_mm if svc else pipe_spec.DEFAULT_INSULATION_MM
+    return float(ins)
+
+
 def _branch(d: dict) -> Branch:
     return Branch(d["id"], d["nominal_size"], _terminal(d), d.get("flow", "out"))
 
@@ -307,10 +341,11 @@ def from_dict(data: dict) -> Scenario:
                             "xyz".index(o["penetration_axis"]) if "penetration_axis" in o else None)
                    for o in data["obstacles"]],
         pipes=[Pipe(p["id"], p["type_id"], p["nominal_size"], p["gravity_pipe"], p["min_slope"],
-                    float(p["insulation_thickness"]), _terminal(p["start"]), _terminal(p["end"]),
+                    _insulation(p), _terminal(p["start"]), _terminal(p["end"]),
                     [_vec(v) for v in p.get("valve_positions", [])], [_vec(v) for v in p.get("branch_points", [])],
                     _window(p.get("crossing_window")), [v["type"] for v in p.get("valves", [])],
-                    [_branch(b) for b in p.get("branches", [])])
+                    [_branch(b) for b in p.get("branches", [])], p.get("service"), p.get("line_no"),
+                    p.get("pipe_class"))
                for p in data["pipes"]],
         meta=dict(data.get("meta", {})),
         block_pair=dict(data["block_pair"]) if data.get("block_pair") else None,
@@ -344,6 +379,9 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
         if any(lo < 0 or hi > e for lo, hi, e in zip(o.box.min, o.box.max, ext)):
             errors.append(f"{o.id}: 블록 범위 밖")
 
+    spec_err = _spec_errors(sc)
+    if spec_err:   # 사양을 못 읽으면 단자 규약 (r) 판정을 할 수 없다
+        return errors + spec_err, warnings
     ids = set()
     for p in sc.pipes:
         if p.id in ids:
@@ -359,8 +397,6 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             warnings.append(f"{p.id}: {p.type_id} 와 valves {len(p.valves)}개 불일치 (밸브 타입 T2·T4·T6·T8)")
         if (p.type_id in BRANCH_TYPES) != bool(p.branches):   # S2 설계안 §1.3 `추정:` 경고로 시작
             warnings.append(f"{p.id}: {p.type_id} 와 branches {len(p.branches)}개 불일치 (분기 타입 T3·T4·T7·T8)")
-        if p.insulation_thickness != INSULATION_MM:
-            warnings.append(f"{p.id}: 보온재 {p.insulation_thickness}mm ≠ D17 기준 {INSULATION_MM}mm")
         for which in ("start", "end"):
             snapped(f"{p.id}.{which}", getattr(p, which).pos)
             errors += terminal_errors(p, which, sc.block, sc.obstacles)
@@ -400,12 +436,35 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+def _spec_errors(sc: Scenario) -> list[str]:
+    """D116·D117: 모르는 서비스·class, class 표에 없는 구경 (다리 포함), 서비스 압력/중력 불일치."""
+    errs = []
+    svcs = pipe_spec.services()
+    for p in sc.pipes:
+        if p.service is not None:
+            s = svcs.get(p.service)
+            if s is None:
+                errs.append(f"{p.id}: 모르는 서비스 '{p.service}' (D116)")
+                continue
+            if s.gravity != p.gravity_pipe:
+                errs.append(f"{p.id}: 서비스 {p.service} ({'중력' if s.gravity else '압력'}) 와 "
+                            f"gravity_pipe={p.gravity_pipe}·{p.type_id} 불일치 (D116)")
+        cls = p.class_name
+        if cls not in pipe_spec.class_names():
+            errs.append(f"{p.id}: 모르는 pipe class '{cls}' (D117)")
+            continue
+        for nd in [p.nominal_size] + [b.nominal_size for b in p.branches]:
+            if not pipe_spec.has(cls, nd):
+                errs.append(f"{p.id}: class {cls} 에 구경 {nd} 없음 (D117)")
+    return errs
+
+
 def leg_pipe(pipe: Pipe, b: Branch) -> Pipe:
     """다리 단자를 단자 규약 함수 (terminal_errors 등) 에 넘기기 위한 가상 배관 — 다리 구경·같은 보온재,
     다리 단자는 flow 에 따라 start (in) 또는 end (out) 자리."""
     t = b.terminal
     return Pipe(f"{pipe.id}.{b.id}", pipe.type_id, b.nominal_size, pipe.gravity_pipe, pipe.min_slope,
-                pipe.insulation_thickness, t, t)
+                pipe.insulation_thickness, t, t, service=pipe.service, pipe_class=pipe.pipe_class)
 
 
 def _branch_errors(p: Pipe, block: Block, obstacles: list[Obstacle]) -> list[str]:
@@ -501,6 +560,9 @@ def to_dict(sc: Scenario) -> dict:
     out["pipes"] = [{
         "id": p.id, "type_id": p.type_id, "nominal_size": p.nominal_size,
         "gravity_pipe": p.gravity_pipe, "min_slope": p.min_slope,
+        **({"service": p.service} if p.service is not None else {}),
+        **({"line_no": p.line_no} if p.line_no is not None else {}),
+        **({"pipe_class": p.pipe_class} if p.pipe_class is not None else {}),
         "insulation_thickness": num(p.insulation_thickness),
         "start": term(p.start), "end": term(p.end),
         "valve_positions": [vec(v) for v in p.valve_positions],

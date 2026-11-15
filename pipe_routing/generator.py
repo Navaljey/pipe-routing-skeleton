@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .constants import (BLOCK_HEIGHT, BLOCK_LENGTH, BLOCK_WIDTH, INSULATION_MM, NOMINAL_SIZES,
+from .constants import (BLOCK_HEIGHT, BLOCK_LENGTH, BLOCK_WIDTH, CLEARANCE_MM, INSULATION_MM, NOMINAL_SIZES,
                         SNAP_MM, default_drain_slope, effective_radius)
 from .geometry import Box, box_distance, union_volume
 from .scenario import (Block, Obstacle, Pipe, Scenario, ScenarioError, Terminal, save,
@@ -40,6 +40,29 @@ class GeneratorConfig:
     stair_rule: bool = False                     # D64: 중력관 낙차 ≥ 계단식 하향 규칙(D61) 하한 — 새 세트에만
     d94_rule: bool = False                       # D107: 경계 단자 직진 구간 ≥ max(3D, r) + t₁₃₅ (D94·D96) — 새 세트에만
     exclude_faces: tuple = ()                    # 경계 단자를 두지 않을 면 [(축, -1|+1)] — 블록 쌍 공유 격벽 (D76)
+    services: bool = False                       # D116·D117: 배관마다 서비스 (→ class·보온) — 별도 난수열, 기본 꺼짐
+
+
+# S2 생성 옵션 (D115 보완): 꺼져 있으면 meta.config 에 쓰지 않는다 — 기본 출력 비트 동일
+OPTION_KEYS = ("services",)
+SERVICE_SALT = 0x5E5   # `추정:` 서비스 난수열 = Random(seed ^ SERVICE_SALT) — 기본 난수열 소비 불변
+
+
+def _config_meta(cfg) -> dict:
+    d = asdict(cfg)
+    for k in OPTION_KEYS:
+        if k in d and not d[k]:
+            del d[k]
+    return d
+
+
+def _pick_service(svc_rng, size: str, gravity: bool):
+    """(서비스 코드, 보온 mm, 유효 반경) — 압력 배관 = 압력 서비스 균등, 중력 배관 = 중력 서비스 균등 (D116, `추정:`)."""
+    from . import pipe_spec
+    codes = [c for c, s in pipe_spec.services().items() if s.gravity == gravity]
+    code = svc_rng.choice(codes)
+    cls, ins = pipe_spec.resolve(code, None, None)
+    return code, ins, pipe_spec.spec(cls, size).od / 2 + ins + CLEARANCE_MM
 
 
 def _snap(v: float) -> int:
@@ -73,9 +96,9 @@ def gen_obstacles(rng: random.Random, cfg: GeneratorConfig) -> list[Obstacle]:
     return [Obstacle(f"OBS_{i + 1:03d}", "box", b) for i, b in enumerate(boxes)]
 
 
-def _sample_nozzle(rng, which, size, obstacles) -> Optional[Terminal]:
-    """장애물 면 위 한 점에서 법선 방향으로 유효 반경만큼 띄운 위치 (D28)."""
-    r = effective_radius(size)
+def _sample_nozzle(rng, which, size, obstacles, r=None) -> Optional[Terminal]:
+    """장애물 면 위 한 점에서 법선 방향으로 유효 반경만큼 띄운 위치 (D28). r = 배관 유효 반경 (기본 = 보온 50)."""
+    r = effective_radius(size) if r is None else r
     host = rng.choice(obstacles)
     ax = rng.randrange(3)
     side = rng.choice((-1, 1))
@@ -96,9 +119,9 @@ def _sample_nozzle(rng, which, size, obstacles) -> Optional[Terminal]:
     return Terminal(tuple(float(c) for c in pos), "nozzle", d, host.id)
 
 
-def _sample_boundary(rng, which, size, cfg, gravity) -> Optional[Terminal]:
+def _sample_boundary(rng, which, size, cfg, gravity, r=None) -> Optional[Terminal]:
     """블록 6면 중 한 면 위 한 점 (D35). 측면 격벽 : 데크 관통 = 1 − deck_ratio : deck_ratio."""
-    r = effective_radius(size)
+    r = effective_radius(size) if r is None else r
     ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
     if rng.random() < cfg.deck_ratio:
         ax = 2
@@ -123,26 +146,27 @@ def _sample_boundary(rng, which, size, cfg, gravity) -> Optional[Terminal]:
     return Terminal(tuple(pos), "boundary", tuple(d))
 
 
-def _sample_terminal(rng, which, size, cfg, obstacles, gravity):
+def _sample_terminal(rng, which, size, cfg, obstacles, gravity, r=None):
     if obstacles and rng.random() < cfg.nozzle_ratio:
-        return _sample_nozzle(rng, which, size, obstacles)
-    return _sample_boundary(rng, which, size, cfg, gravity)
+        return _sample_nozzle(rng, which, size, obstacles, r)
+    return _sample_boundary(rng, which, size, cfg, gravity, r)
 
 
 def gen_pipe(rng: random.Random, cfg: GeneratorConfig, idx: int, block: Block,
-             obstacles: list[Obstacle], placed: list[Pipe]) -> Optional[Pipe]:
+             obstacles: list[Obstacle], placed: list[Pipe], svc_rng=None) -> Optional[Pipe]:
     gravity = rng.random() < cfg.gravity_ratio
     size = rng.choice(cfg.sizes)
     slope = default_drain_slope(size) if gravity else None
+    code, ins, r = _pick_service(svc_rng, size, gravity) if svc_rng is not None else (None, INSULATION_MM, None)
     for _ in range(cfg.max_tries):
-        s = _sample_terminal(rng, "start", size, cfg, obstacles, gravity)
-        e = _sample_terminal(rng, "end", size, cfg, obstacles, gravity)
+        s = _sample_terminal(rng, "start", size, cfg, obstacles, gravity, r)
+        e = _sample_terminal(rng, "end", size, cfg, obstacles, gravity, r)
         if s is None or e is None:
             continue
         if sum(abs(a - b) for a, b in zip(s.pos, e.pos)) < cfg.min_terminal_dist_mm:
             continue
         pipe = Pipe(f"P{idx + 1:03d}", "T5" if gravity else "T1", size, gravity, slope,
-                    INSULATION_MM, s, e)
+                    ins, s, e, service=code)
         # 생성기는 로더의 오류뿐 아니라 경고 조건까지 모두 피한다
         if any(terminal_errors(pipe, w, block, obstacles) or terminal_warnings(pipe, w, block, obstacles)
                for w in ("start", "end")):
@@ -198,15 +222,16 @@ def generate(cfg: GeneratorConfig, name: str = "") -> Scenario:
     rng = random.Random(cfg.seed)
     block = Block(BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
     obstacles = gen_obstacles(rng, cfg)
+    svc_rng = random.Random(cfg.seed ^ SERVICE_SALT) if cfg.services else None
     pipes: list[Pipe] = []
     for _ in range(cfg.n_pipes):
-        p = gen_pipe(rng, cfg, len(pipes), block, obstacles, pipes)
+        p = gen_pipe(rng, cfg, len(pipes), block, obstacles, pipes, svc_rng)
         if p is not None:
             pipes.append(p)
     if not pipes:
         raise RuntimeError(f"seed {cfg.seed}: 배관을 하나도 배치하지 못함")
     meta = {"name": name or f"proc_seed{cfg.seed}", "source": "procedural",
-            "generator": "pipe_routing.generator", "config": asdict(cfg),
+            "generator": "pipe_routing.generator", "config": _config_meta(cfg),
             "n_pipes_requested": cfg.n_pipes}
     sc = Scenario(block, obstacles, pipes, meta)
     errors, warnings = validate(sc)
@@ -226,12 +251,13 @@ def main(argv=None) -> int:
     ap.add_argument("--prefix", default="proc", help="시나리오 이름 앞부분 (밀집 세트 등, D58)")
     ap.add_argument("--stair-rule", action="store_true",
                     help="중력관 낙차를 계단식 하향 규칙(D61) 하한 이상으로 보장 (D64, 새 세트용)")
+    ap.add_argument("--services", action="store_true", help="배관마다 유체 서비스 (D116·D117, 새 세트용)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
-                              stair_rule=args.stair_rule)
+                              stair_rule=args.stair_rule, services=args.services)
         name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")
@@ -253,6 +279,7 @@ class PairConfig:
     wall_thickness: float = 20.0         # 공유 격벽 두께 mm (D93, `추정:` 생성기 기본값)
     stair_rule: bool = True              # 새 세트 → D64 낙차 하한 보장
     d94_rule: bool = True                # 새 세트 → D107 경계 단자·관통 창 직진 구간 보장
+    services: bool = False               # D116·D117 (생성기와 같은 별도 난수열, 기본 꺼짐)
 
 
 def _shift_terminal(t: Terminal, dx: float) -> Terminal:
@@ -261,7 +288,7 @@ def _shift_terminal(t: Terminal, dx: float) -> Terminal:
 
 def _shift_pipe(p: Pipe, dx: float, pid: str, window=None) -> Pipe:
     return Pipe(pid, p.type_id, p.nominal_size, p.gravity_pipe, p.min_slope, p.insulation_thickness,
-                _shift_terminal(p.start, dx), _shift_terminal(p.end, dx), crossing_window=window)
+                _shift_terminal(p.start, dx), _shift_terminal(p.end, dx), crossing_window=window, service=p.service)
 
 
 def _windows_overlap(a, b) -> bool:
@@ -305,6 +332,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
                            exclude_faces=((0, -1),))
     obsA = gen_obstacles(rng, cfgA)
     obsB = gen_obstacles(rng, cfgB)
+    svc_rng = random.Random(pc.seed ^ SERVICE_SALT) if pc.services else None
     obstacles = [Obstacle(f"OBS_{i + 1:03d}", "box", o.box) for i, o in enumerate(obsA)]
     obstacles += [Obstacle(f"OBS_{len(obsA) + i + 1:03d}", "box",
                            Box((o.box.min[0] + dB, *o.box.min[1:]), (o.box.max[0] + dB, *o.box.max[1:])))
@@ -313,12 +341,12 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
     pipes: list[Pipe] = []
     localA: list[Pipe] = []
     for _ in range(pc.n_pipes_per_block):
-        p = gen_pipe(rng, cfgA, len(localA), local, obsA, localA)
+        p = gen_pipe(rng, cfgA, len(localA), local, obsA, localA, svc_rng)
         if p is not None:
             localA.append(p)
     localB: list[Pipe] = []
     for _ in range(pc.n_pipes_per_block):
-        p = gen_pipe(rng, cfgB, len(localB), local, obsB, localB)
+        p = gen_pipe(rng, cfgB, len(localB), local, obsB, localB, svc_rng)
         if p is not None:
             localB.append(p)
     for p in localA:
@@ -337,8 +365,9 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
             gravity = rng.random() < cfgA.gravity_ratio
             size = rng.choice(cfgA.sizes)
             slope = default_drain_slope(size) if gravity else None
-            s_ = _sample_terminal(rng, "start", size, cfgA, obsA, gravity)
-            e_ = _sample_terminal(rng, "end", size, cfgB, obsB, gravity)
+            code, ins, r = _pick_service(svc_rng, size, gravity) if svc_rng is not None else (None, INSULATION_MM, None)
+            s_ = _sample_terminal(rng, "start", size, cfgA, obsA, gravity, r)
+            e_ = _sample_terminal(rng, "end", size, cfgB, obsB, gravity, r)
             if s_ is None or e_ is None:
                 continue
             y0 = _rand_snapped(rng, 0, BLOCK_LENGTH - wy)
@@ -346,7 +375,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
             win = (float(y0), float(y0 + wy), float(z0), float(z0 + wz))
             if any(_windows_overlap(win, w) for w in windows):
                 continue
-            pa = Pipe("tmp", "T5" if gravity else "T1", size, gravity, slope, INSULATION_MM, s_, e_)
+            pa = Pipe("tmp", "T5" if gravity else "T1", size, gravity, slope, ins, s_, e_, service=code)
             if terminal_errors(pa, "start", local, obsA) or terminal_warnings(pa, "start", local, obsA):
                 continue
             if terminal_errors(pa, "end", local, obsB) or terminal_warnings(pa, "end", local, obsB):
@@ -358,8 +387,8 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
             e_g = _shift_terminal(e_, dB)
             if e_g.host:
                 e_g.host = idB[e_g.host]
-            pipe = Pipe(f"P{len(pipes) + 1:03d}", pa.type_id, size, gravity, slope, INSULATION_MM, s_, e_g,
-                        crossing_window=win)
+            pipe = Pipe(f"P{len(pipes) + 1:03d}", pa.type_id, size, gravity, slope, ins, s_, e_g,
+                        crossing_window=win, service=code)
             if gravity:
                 if s_.pos[2] <= e_g.pos[2]:
                     continue
@@ -373,7 +402,7 @@ def generate_block_pair(pc: PairConfig, name: str = "") -> Scenario:
             pipes.append(pipe)
             break
     meta = {"name": name or f"pair_seed{pc.seed}", "source": "procedural",
-            "generator": "pipe_routing.generator.generate_block_pair", "config": asdict(pc),
+            "generator": "pipe_routing.generator.generate_block_pair", "config": _config_meta(pc),
             "n_pipes_requested": 2 * pc.n_pipes_per_block + pc.n_crossing,
             "n_crossing": sum(1 for p in pipes if p.crossing_window)}
     sc = Scenario(Block(2 * W + T, BLOCK_LENGTH, BLOCK_HEIGHT), obstacles, pipes, meta,
@@ -390,12 +419,13 @@ def main_pair(argv=None) -> int:
     ap.add_argument("--out", default="scenarios/pair")
     ap.add_argument("--n", type=int, default=5)
     ap.add_argument("--seed", type=int, default=20265008)
+    ap.add_argument("--services", action="store_true", help="배관마다 유체 서비스 (D116·D117)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         name = f"pair_{i:03d}"
-        sc = generate_block_pair(PairConfig(seed=args.seed + i), name)
+        sc = generate_block_pair(PairConfig(seed=args.seed + i, services=args.services), name)
         save(sc, out / f"{name}.json")
         print(f"{name}: {json.dumps(sc.summary(), ensure_ascii=False)} 관통 {sc.meta['n_crossing']}")
     return 0

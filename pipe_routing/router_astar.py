@@ -15,7 +15,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
-from .constants import FITTINGS, PIPE_SPECS
 from .scenario import Pipe, load
 from .space import DEFLECTION, DIRS, SpaceRepresentation, State
 
@@ -57,8 +56,8 @@ def heuristic_factory(space: SpaceRepresentation, pipe: Pipe):
         같은데 목표가 전방 반직선 위에 없으면 벗어났다 돌아와야 하므로 ≥2. 그 밖에는 0
     """
     goal = tuple(map(float, pipe.end.pos))
-    kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
-    e45 = FITTINGS[pipe.nominal_size].elbow45
+    kgmm = pipe.kg_per_m / 1000
+    e45 = pipe.spec.elbow45
     end_dir = tuple(pipe.end.dir)
 
     def h(state: State) -> float:
@@ -153,7 +152,7 @@ def _finish(space, pipe, goal_state, parent, expanded, generated, sec) -> RouteR
 
 
 def _finish_chain(space, pipe, states, expanded, generated, sec) -> RouteResult:
-    kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
+    kgmm = pipe.kg_per_m / 1000
     pts = [space.position(s.node) for s in states]
     length = sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
     J = sum(space.cost(a, b, pipe) for a, b in zip(states, states[1:]))

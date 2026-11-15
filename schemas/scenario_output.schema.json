@@ -72,6 +72,10 @@
           "violations": {"type": "array"},
           "metrics": {"type": "object"},
           "router": {"type": "object"},
+          "line_no": {"type": "string", "description": "D116 배관 이름 (서비스·이름을 적은 배관만)"},
+          "service": {"type": "string", "description": "D116 서비스 코드"},
+          "pipe_class": {"type": "string", "description": "D117 해석된 pipe class"},
+          "insulation_thickness": {"type": "number", "description": "D117 해석된 보온 두께 mm"},
           "tree": {
             "type": "object",
             "description": "D112 분기 배관만 (S2-3~). 주관 + 다리 + 티. waypoints (위) = 주관과 같음. 다리 waypoints 는 티 → 다리 단자 순 (흐름 방향은 flow)",

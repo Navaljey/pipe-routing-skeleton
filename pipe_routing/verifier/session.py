@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 
-from ..constants import PIPE_SPECS, VALVE_FRONT_MM
+from ..constants import VALVE_FRONT_MM
 from ..scenario import Scenario
 from .core import MODULE_ORDER, MODULES, Context, PipeRoute, centerlines_of
 from .geom import segment_segment_distance
@@ -29,7 +29,8 @@ from .geom import segment_segment_distance
 def _reach(std) -> float:
     from .. import support_std as ss
     lmax = max(float(r.bounds[-1]) for r in std.rows.values())
-    od = max(s.od for s in PIPE_SPECS.values())
+    from .. import pipe_spec
+    od = pipe_spec.max_od()   # 불러온 모든 class 의 최대 OD (D117)
     sup = 1.2 * (lmax + 100) + od / 2 + ss.C_SIDE_MM + max(ss.ANGLE_HALF.values()) + 100
     valve = float(np.hypot(VALVE_FRONT_MM + 100, VALVE_FRONT_MM)) + 100
     return max(sup, valve)

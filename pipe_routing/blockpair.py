@@ -79,8 +79,7 @@ def crossing_straight(pipe) -> float:
 
 def penetration_kg(sc, pipe) -> float:
     """D95 관통 피스 무게 = 배관 kg/m × 관통 길이(격벽 두께). `추정:` 정식 표가 오면 계수만 교체."""
-    from .constants import PIPE_SPECS
-    return PIPE_SPECS[pipe.nominal_size].kg_per_m * thickness(sc) / 1000 if walls(sc) else 0.0
+    return pipe.kg_per_m * thickness(sc) / 1000 if walls(sc) else 0.0
 
 
 def window_box(sc, window) -> tuple:

@@ -58,7 +58,7 @@
       "items": {
         "type": "object",
         "required": ["id", "type_id", "nominal_size", "gravity_pipe", "min_slope",
-                     "insulation_thickness", "start", "end"],
+                     "start", "end"],
         "additionalProperties": false,
         "properties": {
           "id": {"type": "string", "minLength": 1},
@@ -66,7 +66,13 @@
           "nominal_size": {"enum": ["15A", "25A", "50A", "65A", "100A", "150A", "200A", "300A", "400A", "500A"]},
           "gravity_pipe": {"type": "boolean"},
           "min_slope": {"oneOf": [{"type": "null"}, {"type": "number", "exclusiveMinimum": 0, "maximum": 1}]},
-          "insulation_thickness": {"type": "number", "minimum": 0},
+          "insulation_thickness": {"type": "number", "minimum": 0,
+                                   "description": "보온 두께 mm (D17·D117). 선택 — 없으면 서비스 기본 보온, 서비스도 없으면 50. 0 허용"},
+          "service": {"type": "string", "minLength": 1,
+                      "description": "D116 유체 서비스 코드 (data/services.json). 모르는 코드·압력/중력 불일치 = 로드 오류"},
+          "line_no": {"type": "string", "minLength": 1, "description": "D116 배관 이름 (직접 적으면 그대로 출력)"},
+          "pipe_class": {"type": "string", "minLength": 1,
+                         "description": "D117 pipe class (없으면 서비스 기본 class, 서비스도 없으면 DEFAULT). 모르는 class·표에 없는 구경 = 로드 오류"},
           "start": {"$ref": "#/$defs/terminal"},
           "end": {"$ref": "#/$defs/terminal"},
           "valve_positions": {"type": "array", "items": {"$ref": "#/$defs/vec3"},
