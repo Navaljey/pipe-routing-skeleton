@@ -14,7 +14,7 @@ from typing import Optional
 import jsonschema
 
 from . import pipe_spec
-from .constants import CLEARANCE_MM, GRAVITY_TYPES, PIPE_SPECS, S0_ROUTER_TYPES, SNAP_MM
+from .constants import GRAVITY_TYPES, PIPE_SPECS, S0_ROUTER_TYPES, SNAP_MM
 from .geometry import Box, Vec3, box_distance, union_volume
 
 VALVE_TYPES = frozenset({"T2", "T4", "T6", "T8"})    # D27·D111
@@ -104,14 +104,14 @@ class Pipe:
     line_no: Optional[str] = None      # D116 직접 적은 배관 이름 (입력)
     pipe_class: Optional[str] = None   # D117 입력 class (없으면 서비스 기본 → DEFAULT)
 
-    # ---- 배관 사양 (D116·D117): OD·r·kg/m·관이음 무게는 이 속성으로만 읽는다 (pipe_spec)
+    # ---- 배관 사양 (D116·D117): OD·r·kg/m·관이음 무게는 공개 조회 pipe_spec.pipe_spec(pipe) 로만 읽는다
     @property
     def class_name(self) -> str:
         return pipe_spec.resolve(self.service, self.pipe_class, 0.0)[0]
 
     @property
-    def spec(self) -> "pipe_spec.Spec":
-        return pipe_spec.spec(self.class_name, self.nominal_size)
+    def spec(self) -> "pipe_spec.PipeSpec":
+        return pipe_spec.pipe_spec(self)
 
     def spec_of(self, nominal_size: str) -> "pipe_spec.Spec":
         """같은 class 의 다른 구경 (분기 다리·리듀서 뒤)."""
@@ -120,7 +120,7 @@ class Pipe:
     @property
     def radius(self) -> float:
         """유효 반경 = OD/2 + 보온 + 10 (D17·D117, constants.effective_radius 와 같은 식·순서)."""
-        return self.spec.od / 2 + self.insulation_thickness + CLEARANCE_MM
+        return self.spec.r
 
     @property
     def min_straight(self) -> int:
