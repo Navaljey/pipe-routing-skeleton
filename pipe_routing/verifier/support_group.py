@@ -24,7 +24,7 @@ def _cands(ctx, reports):
     out = []
     for pid, rep in reports.items():
         for i, s in enumerate(rep.supports):
-            if s.get("form") != "C":
+            if s.get("form") != "C" or "@" in s.get("face", ""):   # `추정:` 장애물 면 C (D113) 는 묶지 않는다
                 continue
             u = np.array(s["axis"], dtype=float)
             if abs(u[2]) > 1e-9:

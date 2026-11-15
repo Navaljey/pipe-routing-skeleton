@@ -381,23 +381,25 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
     box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
     od = pipe.od
+    anchors = ss.anchors_of(ctx.scenario)   # D113 supportable 장애물 면 (없으면 이전과 같다)
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
         ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True,
-                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario))
+                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario),
+                         anchors=anchors)
         for i in range(len(P)):
             o = int(ev["opt"][i])
             if o < 0:
                 res.append(None)
                 continue
-            face, frm = ss.OPTIONS[o]
+            label, frm, face = ss.option_label(o, anchors)
             L = float(ev["L"][i])
             reinf = bool(ev["reinf"][i])
             ang = std.angle_of(frm, pipe.nominal_size, int(ev["k"][i]))
             mem = ss.members(frm, P[i], U[i], face, L, od, reinf)
-            res.append({"form": frm, "variant": "reinforced" if reinf else "standard", "face": face,
+            res.append({"form": frm, "variant": "reinforced" if reinf else "standard", "face": label,
                         "section": ang, "L": round(L, 1), "dims": {"L": round(L, 1)},
                         "members": [{"a": _pt(a), "b": _pt(b), "role": role} for a, b, role in mem],
                         "member_length_mm": round(float(ss.member_length(frm, np.array([L]), od,
@@ -457,6 +459,11 @@ def support_fixed_points(ctx: Context, pid: str) -> list:
             P = ctx.centerlines[pid][0].points
             cum = np.concatenate([[0], np.cumsum(np.linalg.norm(P[1:] - P[:-1], axis=1))])
             out = [float(cum[i] + np.linalg.norm(q - P[i])) for i, q in bp.crossing_points(sc, pipe, P)]
+        from .. import internal
+        if internal.plates(sc):   # D113: 내부 판 관통부 = 서포트 고정점 (판 중심면)
+            P = ctx.centerlines[pid][0].points
+            cum = np.concatenate([[0], np.cumsum(np.linalg.norm(P[1:] - P[:-1], axis=1))])
+            out += [float(cum[i] + np.linalg.norm(q - P[i])) for i, q, _ in internal.crossings(sc, pipe, P)]
         ctx.cache[key] = sorted(out)
     return ctx.cache[key]
 

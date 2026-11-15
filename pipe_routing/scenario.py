@@ -49,6 +49,7 @@ class Obstacle:
     supportable: bool = False      # D93: 면을 서포트 지지면으로 (기본 false = D21)
     penetrable: bool = False       # D93: 관통 가능
     penetration_axis: Optional[int] = None   # D93: 관통 축 0·1·2 (없으면 가장 짧은 변 축 — penetration_axis())
+    access: bool = False           # D119: 접근 구역 (배관·서포트 부재 진입 금지, 지지·관통 불가)
 
     def pen_axis(self) -> int:
         """D93 관통 축: 지정값, 없으면 박스의 가장 짧은 변 축 (`추정:`, 동률이면 앞 축)."""
@@ -338,7 +339,8 @@ def from_dict(data: dict) -> Scenario:
         block=Block(float(b["width"]), float(b["length"]), float(b["height"])),
         obstacles=[Obstacle(o["id"], o["type"], Box(_vec(o["min"]), _vec(o["max"])), bool(o.get("supportable", False)),
                             bool(o.get("penetrable", False)),
-                            "xyz".index(o["penetration_axis"]) if "penetration_axis" in o else None)
+                            "xyz".index(o["penetration_axis"]) if "penetration_axis" in o else None,
+                            bool(o.get("access", False)))
                    for o in data["obstacles"]],
         pipes=[Pipe(p["id"], p["type_id"], p["nominal_size"], p["gravity_pipe"], p["min_slope"],
                     _insulation(p), _terminal(p["start"]), _terminal(p["end"]),
@@ -407,9 +409,13 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
         if p.start.pos == p.end.pos:
             errors.append(f"{p.id}: start 와 end 가 같은 위치")
         errors += _branch_errors(p, sc.block, sc.obstacles)
-    for o in sc.obstacles:   # D93: 블록 안 supportable·penetrable 장애물은 S2 (M27)
-        if o.supportable or o.penetrable:
-            errors.append(f"{o.id}: supportable·penetrable 장애물 — S2 예정 — 미지원 (D93, M27)")
+    for o in sc.obstacles:   # D113·D119 속성 조합: 장비 (F, F) · 격벽·데크 (T, T) · 필라·스티프너 (T, F) · 접근 구역
+        if o.penetrable and not o.supportable:
+            errors.append(f"{o.id}: penetrable 장애물은 supportable 이어야 함 — (false, true) 조합 없음 (D113)")
+        if o.access and (o.supportable or o.penetrable):
+            errors.append(f"{o.id}: 접근 구역은 지지·관통 불가 — access 와 supportable·penetrable 함께 불가 (D119)")
+        if (o.penetrable or o.supportable or o.access) and sc.block_pair:
+            errors.append(f"{o.id}: 블록 쌍 안 내부 구조재·접근 구역은 S2 범위 밖 (`추정:` D113 은 단일 블록)")
     errors += _pair_errors(sc)
     if errors:
         return errors, warnings
@@ -555,7 +561,8 @@ def to_dict(sc: Scenario) -> dict:
     out["obstacles"] = [{"id": o.id, "type": o.type, "min": vec(o.box.min), "max": vec(o.box.max),
                          **({"supportable": True} if o.supportable else {}),
                          **({"penetrable": True} if o.penetrable else {}),
-                         **({"penetration_axis": "xyz"[o.penetration_axis]} if o.penetration_axis is not None else {})}
+                         **({"penetration_axis": "xyz"[o.penetration_axis]} if o.penetration_axis is not None else {}),
+                         **({"access": True} if o.access else {})}
                         for o in sc.obstacles]
     out["pipes"] = [{
         "id": p.id, "type_id": p.type_id, "nominal_size": p.nominal_size,

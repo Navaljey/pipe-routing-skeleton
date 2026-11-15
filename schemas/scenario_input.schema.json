@@ -46,9 +46,10 @@
           "type": {"type": "string"},
           "min": {"$ref": "#/$defs/vec3"},
           "max": {"$ref": "#/$defs/vec3"},
-          "supportable": {"type": "boolean", "description": "D93: 면을 서포트 지지면으로 쓸 수 있음 (기본 false = D21). S1-7: true 는 미지원 오류 (S2 예정, M27)"},
-          "penetrable": {"type": "boolean", "description": "D93: 배관 관통 가능 (기본 false). S1-7: true 는 미지원 오류 (S2 예정, M27)"},
-          "penetration_axis": {"enum": ["x", "y", "z"], "description": "D93: 관통 축 (선택, 없으면 박스의 가장 짧은 변 축 — 추정)"}
+          "supportable": {"type": "boolean", "description": "D93: 면을 서포트 지지면으로 쓸 수 있음 (기본 false = D21). D113 (S2-1): 내부 격벽·데크 = supportable·penetrable, 필라·스티프너 = supportable"},
+          "penetrable": {"type": "boolean", "description": "D93: 배관 관통 가능 (기본 false). D113 (S2-1): 내부 격벽·데크 = supportable·penetrable, 필라·스티프너 = supportable"},
+          "penetration_axis": {"enum": ["x", "y", "z"], "description": "D93: 관통 축 (선택, 없으면 박스의 가장 짧은 변 축 — 추정)"},
+              "access": {"type": "boolean", "description": "D119 접근 구역 (통로·정비 공간): 배관·서포트 부재 진입 금지, supportable·penetrable 과 함께 불가"}
         }
       }
     },
