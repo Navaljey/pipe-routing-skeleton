@@ -133,3 +133,26 @@ t = h.together_at("P001", pos, axis)    # D89 함께 받치는 D (id·면·규�
 
 - `form_at` 은 다른 배관 조각 배열을 처음 한 번 만들고(생성 비용과 별도, 첫 호출에 포함) 이후 재사용한다.
 - 전체 검증 1회(밀집 50 중앙 6.7 s) 대비 `form_at` 은 약 1/2,700. 경로를 바꾸면 힌트 객체를 새로 만든다 (생성 수 ms~수십 ms).
+
+## 5. 배관 사양 조회 — `pipe_spec` (S2-0b, D116·D117)
+
+배관 하나의 사양 (OD · kg/m · 유효 반경 · 보온 · 관이음 무게) 을 돌려준다. **라우터·검증기·서포트·예약은 모두 이 함수 (와 이를 읽는 `Pipe.od`·`Pipe.kg_per_m`·`Pipe.radius`·`Pipe.elbow_kg`) 로만 읽는다** — 상수 표를 직접 읽는 곳은 없다 (시험 `tests/test_s2_spec.py::NoDirectReadsTest`). V3·최적화 세션도 같은 값을 쓴다.
+
+```python
+from pipe_routing.pipe_spec import pipe_spec
+s = pipe_spec(pipe)          # pipe = scenario.Pipe (load / from_dict 결과)
+s.od, s.kg_per_m             # 외경 mm, 직관 kg/m (그 배관 class 표)
+s.insulation_mm, s.r         # 보온 mm, 유효 반경 = OD/2 + 보온 + 10 (D17·D117)
+s.elbow90, s.elbow45         # 엘보 kg (135° 청구 = elbow90 + elbow45, D25)
+s.gate_valve                 # 게이트밸브 kg
+s.reducer                    # 리듀서 kg (D118, end_nominal_size 가 있을 때만 — 없으면 None)
+s.pipe_class, s.nominal_size # 해석된 class (입력 → 서비스 기본 → DEFAULT), 호칭경
+s.source                     # "builtin" (DEFAULT = CLAUDE.md §3.1·§3.2) · "public_approx" · "private"
+```
+
+- 해석 순서: class = 배관 `pipe_class` → 서비스 (`service`) 기본 class → `DEFAULT`, 보온 = 배관 `insulation_thickness` → 서비스 기본 → 50 mm (로더가 정한다).
+- 최소 직진 (§3.3)·엘보 R = 1.5D·L_max (D62)·서포트 간격 (§3.6) 은 호칭경 기준이라 여기에 없다 (`constants`).
+- 관련 조회: `pipe_spec.spec(class, nd)` (구경별 원표), `pipe_spec.services()` (서비스 표), `pipe_spec.line_numbers(sc)` (배관 이름), `pipe_spec.standard_info()` (출력 global `pipe_class_standard` = {source, sha256}).
+- 결과 불변: `DEFAULT` 는 §3.1·§3.2 상수와 값·계산 순서가 같다 (E1 결과 불변).
+
+> **D78 주의 — 사내 class 표:** 환경 변수 `PIPE_CLASS_STANDARD` 로 사내 class 표 (비공개 레포) 를 읽으면 이 함수의 반환값 (OD·kg/m·관이음 무게) 은 **비공개 수치**다 (`source = "private"`). 공개 레포의 문서·커밋·보고서·리포트에 그 값을 적지 않는다. 비교·재현에는 출력 global `pipe_class_standard.sha256` 만 쓴다. 공개 임시 표 (`data/pipe_classes.json`, `추정:`) 결과는 사내 표 결과와 비교하지 않는다.

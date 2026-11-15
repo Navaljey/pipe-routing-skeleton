@@ -59,6 +59,17 @@ class TablesTest(unittest.TestCase):
         self.assertEqual((sv["ST"].pipe_class, sv["ST"].insulation_mm), ("CS80", 75.0))
         self.assertTrue(all(s.pipe_class in pipe_spec.class_names() for s in sv.values()))
 
+    def test_public_pipe_spec(self):   # 공개 API pipe_spec(pipe) — Pipe 속성이 모두 이 값 (D117)
+        sc = scen(pipe("A"), pipe("B", service="ST", y=5000))
+        for p in sc.pipes:
+            s = pipe_spec.pipe_spec(p)
+            self.assertEqual((s.od, s.kg_per_m, s.r, s.insulation_mm), (p.od, p.kg_per_m, p.radius,
+                                                                        p.insulation_thickness))
+            self.assertEqual((s.elbow90, s.elbow45, s.reducer), (p.elbow_kg(90), p.elbow_kg(45), None))
+        a, b = (pipe_spec.pipe_spec(p) for p in sc.pipes)
+        self.assertEqual((a.pipe_class, a.source, a.r), ("DEFAULT", "builtin", effective_radius("100A")))
+        self.assertEqual((b.pipe_class, b.insulation_mm, b.source), ("CS80", 75.0, "public_approx"))
+
     def test_reducer_kg_fallback(self):   # D118: 표에 없으면 큰 쪽 45° 엘보
         self.assertEqual(pipe_spec.reducer_kg("DEFAULT", "100A", "50A"), FITTINGS["100A"].elbow45)
 
@@ -69,7 +80,7 @@ class TablesTest(unittest.TestCase):
                                                         "fittings": {"100A": {"elbow90": 4, "elbow45": 2,
                                                                               "gate_valve": 21, "reducer": 3}}}}}))
             os.environ[pipe_spec.CLASS_ENV] = str(f)
-            pipe_spec._tables.cache_clear()
+            pipe_spec.reload()
             try:
                 self.assertEqual(pipe_spec.standard_info()["source"], "private")
                 self.assertEqual(pipe_spec.spec("XC", "100A").kg_per_m, 20.0)
@@ -78,7 +89,7 @@ class TablesTest(unittest.TestCase):
                     scen(pipe(size="50A", pipe_class="XC"))
             finally:
                 del os.environ[pipe_spec.CLASS_ENV]
-                pipe_spec._tables.cache_clear()
+                pipe_spec.reload()
         self.assertEqual(pipe_spec.standard_info()["source"], "public_approx")
 
 

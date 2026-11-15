@@ -76,6 +76,12 @@ def _tables() -> tuple:
     return classes, src, hashlib.sha256(raw).hexdigest()
 
 
+def reload() -> None:
+    """표 캐시를 비운다 (환경 변수 PIPE_CLASS_STANDARD 를 바꾼 뒤)."""
+    _tables.cache_clear()
+    _pipe_spec.cache_clear()
+
+
 def class_names() -> list:
     return list(_tables()[0])
 
@@ -96,6 +102,40 @@ def standard_info() -> dict:
 
 def max_od() -> float:
     return max(s.od for c in _tables()[0].values() for s in c.values())
+
+
+@dataclass(frozen=True)
+class PipeSpec:
+    """배관 하나의 사양 (공개 API, D117) — 라우터·검증기·서포트·예약이 모두 이 값으로 읽는다.
+    사내 class 표 (PIPE_CLASS_STANDARD) 를 쓰면 값은 비공개 수치다 (D78 — 공개 문서·보고에 적지 않는다)."""
+    nominal_size: str
+    pipe_class: str
+    od: float             # 외경 mm
+    kg_per_m: float       # 직관 kg/m
+    insulation_mm: float  # 보온 두께 mm
+    r: float              # 유효 반경 = OD/2 + 보온 + 10 (D17·D117)
+    elbow90: float        # kg
+    elbow45: float
+    gate_valve: float
+    reducer: Optional[float]   # 리듀서 kg (D118 — end_nominal_size 가 있을 때만, 없으면 None)
+    source: str           # "builtin" (DEFAULT) · "public_approx" · "private"
+
+
+@lru_cache(maxsize=4096)
+def _pipe_spec(cls: str, nd: str, ins: float, end_nd: Optional[str]) -> PipeSpec:
+    from .constants import CLEARANCE_MM
+    sp = spec(cls, nd)
+    red = reducer_kg(cls, nd, end_nd) if end_nd and end_nd != nd else None
+    src = "builtin" if cls == DEFAULT_CLASS else standard_info()["source"]
+    return PipeSpec(nd, cls, sp.od, sp.kg_per_m, ins, sp.od / 2 + ins + CLEARANCE_MM, sp.elbow90, sp.elbow45,
+                    sp.gate_valve, red, src)
+
+
+def pipe_spec(pipe) -> PipeSpec:
+    """배관별 사양 조회 (공개 API, D117 정합 원칙). class = 입력 → 서비스 기본 → DEFAULT, 보온 = 해석된 값 (로더)."""
+    cls = resolve(pipe.service, pipe.pipe_class, 0.0)[0]
+    return _pipe_spec(cls, pipe.nominal_size, float(pipe.insulation_thickness),
+                      getattr(pipe, "end_nominal_size", None))
 
 
 def elbow_kg(sp: Spec, deflection_deg: int) -> float:
