@@ -112,11 +112,12 @@ def _seg_hits_rect(p0, p1, lo, hi):
 class LineSupport:
     """고정 레이어 하나(구경별)의 격자선 서포트 모델. 선 데이터는 처음 쓸 때 계산해 캐시한다."""
 
-    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing, sp=(), fixed=()):
+    def __init__(self, std, ext, box_lo, box_hi, nd: str, od: float, spacing, sp=(), fixed=(), anchors=()):
         """sp = 블록 쌍 공유 격벽 (a, b) 목록 (D76) — 면·부재 범위는 선이 속한 블록 기준. box = 장애물 + 관통 창(구멍).
         fixed = 서포트 고정점 [(축, (c1 범위), (c2 범위), 선 좌표 t)] — 그 축 방향 선 중 다른 두 좌표가 범위 안인 선은
         t 에서 지지된 것으로 본다 (무게 0, D94 관통부). 불가 구간에서 t 를 뺀다."""
         self.fixed = tuple(fixed)
+        self.anchors = tuple(anchors)   # D113 supportable 장애물 면 (없으면 이전과 같은 연산)
         self.std, self.nd, self.od = std, nd, od
         self.ext = np.asarray(ext, dtype=float)
         self.sp = tuple(sp)
@@ -143,8 +144,11 @@ class LineSupport:
         else:
             blo, bhi = np.zeros((n, 3)), np.broadcast_to(self.ext, (n, 3))
         res = [[] for _ in range(n)]
-        for o, (face, frm) in enumerate(ss.OPTIONS):
-            L = dist[:, ss.OPT_FACE[o]]
+        items = [(face, frm, dist[:, ss.OPT_FACE[o]], None) for o, (face, frm) in enumerate(ss.OPTIONS)]
+        for an in self.anchors:   # D113: 앵커 면 — 선 위에서 거리 일정, 면 사각형 조건은 선 좌표 구간
+            La = ss.anchor_distance(an, X0, U)
+            items += [(an.face, frm, La, an) for frm in an.forms()]
+        for face, frm, L, an in items:
             fin = np.isfinite(L)
             if not fin.any():
                 continue
@@ -171,8 +175,28 @@ class LineSupport:
                 lo_t, hi_t = -1 - m0[i], self.ext[ax] + 1 - m1[i]
                 blocked[i].append([-np.inf, lo_t - _EPS])
                 blocked[i].append([hi_t + _EPS, np.inf])
-            # 장애물
-            for bl, bh in zip(self.box_lo, self.box_hi):
+            if an is not None:   # D113: 부재가 면에 닿는 끝점이 면 사각형 안 (반폭 안쪽) — ax 는 구간, 나머지는 상수
+                fa, pl = an.axis, an.plane
+                for i in range(len(live)):
+                    cps = [E[i, m] for E in (A, B) for m in range(A.shape[1])
+                           if V[i, m] and abs(E[i, m, fa] - pl) <= 1e-6]
+                    if not cps:
+                        blocked[i].append([-np.inf, np.inf])
+                        continue
+                    cps = np.array(cps)
+                    q3 = [q for q in range(3) if q != fa and q != ax]
+                    if any(((cps[:, q] < an.lo[q] + half[i] - 1e-6) | (cps[:, q] > an.hi[q] - half[i] + 1e-6)).any()
+                           for q in q3):
+                        blocked[i].append([-np.inf, np.inf])
+                        continue
+                    tl = an.lo[ax] + half[i] - cps[:, ax].min()
+                    th = an.hi[ax] - half[i] - cps[:, ax].max()
+                    blocked[i].append([-np.inf, tl - _EPS])
+                    blocked[i].append([th + _EPS, np.inf])
+            # 장애물 (앵커 면의 그 장애물 자체는 빼고)
+            for j, (bl, bh) in enumerate(zip(self.box_lo, self.box_hi)):
+                if an is not None and j == an.box:
+                    continue
                 for m in range(A.shape[1]):
                     a, b, v = A[:, m], B[:, m], V[:, m]
                     if not v.any():
@@ -327,13 +351,14 @@ class LineSupport:
         U = D / L[:, None]
         M = (P0 + P1) / 2
         ev = ss.evaluate(self.std, self.ext, self.box_lo, self.box_hi, self.nd, self.od, M, U, others=None,
-                         exact=True, prefer_ceiling=False, sp=self.sp)
+                         exact=True, prefer_ceiling=False, sp=self.sp, anchors=self.anchors)
         ok = ev["opt"] >= 0
         smax = self.hmax   # 45° = 수평 간격 (검증기와 같음)
         w = np.where(ok, ev["kg"], 0.0)
         if (~ok).any():   # 막힘 무시 표 범위 안 최소 무게
             free = ss.evaluate(self.std, self.ext, np.zeros((0, 3)), np.zeros((0, 3)), self.nd, self.od, M[~ok],
-                               U[~ok], others=None, exact=False, prefer_ceiling=False, sp=self.sp)
+                               U[~ok], others=None, exact=False, prefer_ceiling=False, sp=self.sp,
+                               anchors=tuple(ss.Anchor(a.obs_id, -1, a.face, a.lo, a.hi) for a in self.anchors))
             w[~ok] = np.where(free["opt"] >= 0, free["kg"], 0.0)
         half = L / 2
         return L / smax * w, np.where(ok, pack(half, half, np.zeros(n)), pack(np.full(n, NONE), 0, 0))

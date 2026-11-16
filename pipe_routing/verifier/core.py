@@ -19,6 +19,15 @@ MODULE_ORDER = ["collision", "boundary", "bend", "gravity_slope", "valve", "bran
 MODULES: dict[str, Callable] = {}
 
 
+def module_order(scenario) -> list:
+    """시나리오에 쓰는 모듈 순서 — MODULE_ORDER + 그 시나리오에만 있는 모듈 (D119 access: 접근 구역이 있을 때).
+    E1 (접근 구역 없음) 은 MODULE_ORDER 그대로 → 출력 layer0 키 불변."""
+    out = list(MODULE_ORDER)
+    if any(getattr(o, "access", False) for o in scenario.obstacles):
+        out.append("access")
+    return out
+
+
 def register(name: str):
     def deco(fn):
         MODULES[name] = fn
@@ -105,7 +114,7 @@ def verify(scenario: Scenario, routes: list, modules=None, std=None) -> dict:
     """
     from . import modules as _  # noqa: F401  (모듈 등록)
     t0 = time.perf_counter()
-    timing = {"centerline": 0.0, **{m: 0.0 for m in (modules or MODULE_ORDER)}, "group_d": 0.0}   # D84 시간 분해
+    timing = {"centerline": 0.0, **{m: 0.0 for m in (modules or module_order(scenario))}, "group_d": 0.0}   # D84 시간 분해
     pipes = {p.id: p for p in scenario.pipes}
     rmap = {r.pipe_id: r for r in routes if r.waypoints}
     cls = {pid: centerlines_of(pipes[pid], r) for pid, r in rmap.items()}
@@ -134,7 +143,7 @@ def pipe_report(ctx: Context, p: Pipe, modules=None, timing=None) -> "PipeReport
     """배관 하나의 Layer 0 판정 (D 묶음 전). 증분 검증(D85)도 이 함수를 쓴다."""
     rep = PipeReport(p.id, p.id in ctx.routes)
     if rep.routed:
-        for name in modules or MODULE_ORDER:
+        for name in modules or module_order(ctx.scenario):
             t = time.perf_counter()
             res = MODULES[name](ctx, ctx.routes[p.id])
             if timing is not None:

@@ -147,6 +147,12 @@ def support_extra_coords(sc, size: str, block=None, pipes=None):
         for a0, a1 in ranges:   # 블록 쌍이면 블록마다 (공유 격벽은 양쪽 블록의 벽, D76 ①)
             if math.isfinite(L) and 0 < L < a1 - a0:
                 out[ax].append(a0 + _snap_down(L - 10) if side == 0 else a0 + _snap_up(a1 - a0 - L + 10))
+    from .support_std import anchors_of
+    for an in (anchors_of(sc) if block is None else ()):   # D113 앵커 면: 띠 경계 한 줄 (표 끝 안쪽) `추정:`
+        ax, side = ss_face_axis()[an.face]                  # (면 사각형 경계 선은 넣지 않는다 — 격자가 세제곱으로 커짐)
+        L = lm[an.face]
+        if math.isfinite(L):
+            out[ax].append(an.plane + _snap_down(L - 10) if side == 0 else an.plane - _snap_down(L - 10))
     tangents = [elbow_tangent(size, a) for a in FIRST_BEND_ANGLES]   # D105: 편향각별 첫 꺾임 선
     for p in (sc.pipes if pipes is None else pipes):
         if p.nominal_size != size:

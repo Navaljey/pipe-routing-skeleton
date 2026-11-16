@@ -26,6 +26,7 @@ from .layered import fixed_layer_stats, layered_router_a, make_layered_router, p
 from .multi import FAIL_CLASS_KO, FAIL_CLASSES, astar_router, independent_planner, sequential_ripup_planner
 from .scenario import Pipe, Scenario, load, terminal_straight_blocked
 from .verifier import MODULE_ORDER, PipeRoute, verify
+from .verifier.core import module_order
 
 OUTPUT_SCHEMA = Path(__file__).resolve().parent.parent / "schemas" / "scenario_output.schema.json"
 
@@ -63,6 +64,13 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) 
     if sc is not None and getattr(sc, "block_pair", None):
         from .blockpair import crossing_points, penetration_kg
         J["penetration"] = len(crossing_points(sc, pipe, waypoints)) * penetration_kg(sc, pipe) if waypoints else 0.0
+    elif sc is not None and waypoints:
+        from . import internal
+        if internal.plates(sc):   # D113·D95 내부 판 관통 (판이 있는 시나리오만 항목)
+            from .verifier.geom import build_centerline
+            from .constants import ANGLE_TOL_DEG, elbow_radius
+            P = build_centerline(waypoints, elbow_radius(pipe.nominal_size), ANGLE_TOL_DEG).points
+            J["penetration"] = internal.penetration_kg(sc, pipe, P)
     J["total"] = sum(J.values())
     return {k: round(v, 4) for k, v in J.items()}
 
@@ -82,6 +90,12 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
 
 
 # ---------------------------------------------------------------- 실행
+
+def ss_anchors_of(sc):
+    """D113 supportable 장애물 면 (없으면 ())."""
+    from .support_std import anchors_of
+    return anchors_of(sc) if hasattr(sc, "obstacles") else ()
+
 
 def spec_fields(p, names: dict) -> dict:
     """routes[] 사양 필드 (D116·D117) — 서비스·class·이름을 적은 배관만."""
@@ -125,14 +139,14 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "fittings": v.fittings,
             "supports": v.supports,
             "support_gaps": v.support_gaps,        # D80 ④ 서포트 불가 구간 (3D 표시)
-            "layer0": {m: v.layer0.get(m) for m in MODULE_ORDER} if v.routed else {},
+            "layer0": {m: v.layer0.get(m) for m in module_order(sc)} if v.routed else {},
             "J": J,
             "real_weight": real_weight(p, r.waypoints, J) if J else None,
             "fail_causes": fail_causes(r.status, v),
             "fail_class": plan.fail_class.get(p.id),
             "fail_detail": plan.fail_detail.get(p.id),
             "gravity_feasibility": feasibility(p, _wall(sc)),   # D64 (중력관만, 압력관 null, 관통이면 창 포함)
-            "support_feasibility": support_feasibility(p, ext, std, splits(sc)),   # D80 ⑩ (D106 (a))
+            "support_feasibility": support_feasibility(p, ext, std, splits(sc), ss_anchors_of(sc)),   # D80 ⑩ (D106 (a))
             "terminal_feasibility": terminal_straight_blocked(p, sc.obstacles),   # D106 (b) 단자 직관 막힘
             "violations": [{"module": x.module, "pos": x.pos, "message": x.message, "other": x.other}
                            for x in v.violations],
@@ -283,7 +297,7 @@ def fail_causes(router_status: str, v) -> list:
     """§9-2 실패 원인: 라우터 실패(timeout/unreachable, D34·D40) 또는 위반 모듈 목록."""
     if router_status != "ok":
         return [f"router:{router_status}"]
-    return [m for m in MODULE_ORDER if v.layer0.get(m) is False]
+    return [m for m in v.layer0 if v.layer0.get(m) is False]
 
 
 def metrics(r, v) -> dict:
@@ -349,7 +363,7 @@ def required_pipe_ids(sc_or_routes) -> tuple:
         ext = np.array(sc_or_routes.block.extent, dtype=float)
         for p in sc_or_routes.pipes:
             f = feasibility(p, _wall(sc_or_routes))
-            sf = support_feasibility(p, ext, std, splits(sc_or_routes))
+            sf = support_feasibility(p, ext, std, splits(sc_or_routes), ss_anchors_of(sc_or_routes))
             tf = terminal_straight_blocked(p, sc_or_routes.obstacles)
             (exc if (f and not f["feasible"]) or not sf["feasible"] or not tf["feasible"] else req).append(p.id)
     else:

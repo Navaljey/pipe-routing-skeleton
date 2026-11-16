@@ -354,11 +354,20 @@ class Anchor:
 def anchors_of(sc) -> tuple:
     """시나리오의 supportable 장애물 면 (D113). 장애물 순서 · FACE_ORDER 순서 (동률 깨기 `추정:`)."""
     out = []
+    ext = sc.block.extent
+    wmin = 2 * min(ANGLE_HALF.values())
     for i, o in enumerate(sc.obstacles):
         if not o.supportable:
             continue
         for face in FACE_ORDER:
-            out.append(Anchor(o.id, i, face, tuple(map(float, o.box.min)), tuple(map(float, o.box.max))))
+            a = Anchor(o.id, i, face, tuple(map(float, o.box.min)), tuple(map(float, o.box.max)))
+            # 쓸 수 없는 면은 뺀다 (판정 결과 같음): 면 폭이 앵글 두 반폭보다 좁으면 부재 끝점이 면 안에 들어갈 수 없고
+            # (anchor_contacts_ok 가 늘 거부), 블록 경계 위의 면은 그 바깥에 배관이 있을 수 없다
+            if any(a.hi[q] - a.lo[q] < wmin for q in range(3) if q != a.axis):
+                continue
+            if a.plane <= 0 or a.plane >= ext[a.axis]:
+                continue
+            out.append(a)
     return tuple(out)
 
 
@@ -481,7 +490,7 @@ def band_lmax(std: Standard, nd: str) -> dict:
     return {f: (deck if f in ("floor", "ceiling") else wall) for f in FACE_ORDER}
 
 
-def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
+def support_feasibility(pipe, ext, std: Standard, sp=(), anchors=()) -> dict:
     """규칙상 서포트 불가 (D80 ⑩, D64 방식의 장애물 무시 하한): 어느 단자에서든 최대 간격 안에 서포트 가능 띠(어느 면에서든
     표 범위 안)에 닿을 수 없고 다른 단자도 그 거리 밖이면 불가.
 
@@ -543,6 +552,10 @@ def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
             else:
                 u = 0.0
         ulb.append(u)
+    for k, t in enumerate(T):   # D113 앵커 면: 단자에서 면 사각형까지 유클리드 거리 − 표 끝 (하한, 장애물 무시)
+        for a in anchors:
+            g = np.maximum(0.0, np.maximum(np.asarray(a.lo) - t, t - np.asarray(a.hi)))
+            ulb[k] = min(ulb[k], max(0.0, float(np.sqrt((g * g).sum())) - lm[a.face] + 1.0) / smax)
     span = float(np.linalg.norm(T[0] - T[1]))
     bad = [u > 1 + 1e-9 and span > smax for u in ulb]
     return {"feasible": not any(bad), "band_gap_mm": [round(g, 1) for g in gap], "smax_mm": smax,
