@@ -106,14 +106,16 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
     open_heap = [(h(start), next(tie), 0.0, start)]
     g_best = {start: 0.0}
     parent: dict[State, Optional[State]] = {start: None}
-    # 지배 가지치기: (노드, 방향) → [(run, bend, g), ...] 확정(팝)된 상태.
+    # 지배 가지치기: (노드, 방향) → [(run, bend, ends, hz, su, g), ...] 확정(팝)된 상태.
     # run 이 크거나 같고 bend(직전 엘보 편향각)가 작거나 같으면 이후 허용 이동이 포함관계로 넓다 (State 설명, D45)
     closed: dict[tuple, list[tuple[float, int, float]]] = {}
     expanded = generated = 0
 
     def dominated(s: State, g: float) -> bool:
-        for run, bend, ends, hz, gc in closed.get((s.node, s.dir), ()):
-            if run >= s.run and bend <= s.bend and (ends & s.ends) == s.ends and hz <= s.hz and gc <= g + 1e-9:
+        # D80 ⑨: 지지 없이 온 정규화 길이 su 도 비교한다 (su 가 작거나 같아야 이후 허용 이동이 넓다) — 컴파일 경로와 같은 규칙
+        for run, bend, ends, hz, su, gc in closed.get((s.node, s.dir), ()):
+            if (run >= s.run and bend <= s.bend and (ends & s.ends) == s.ends and hz <= s.hz and su <= s.su
+                    and gc <= g + 1e-9):
                 return True
         return False
 
@@ -123,7 +125,7 @@ def astar_route(space: SpaceRepresentation, pipe: Pipe, time_limit: float = TIME
             continue   # 낡은 큐 항목
         if dominated(s, g):
             continue
-        closed.setdefault((s.node, s.dir), []).append((s.run, s.bend, s.ends, s.hz, g))
+        closed.setdefault((s.node, s.dir), []).append((s.run, s.bend, s.ends, s.hz, s.su, g))
         expanded += 1
         if space.is_goal(s, pipe):
             return _finish(space, pipe, s, parent, expanded, generated, time.perf_counter() - t0)
