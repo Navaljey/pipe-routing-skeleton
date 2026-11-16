@@ -26,7 +26,6 @@ try:
 except ImportError:   # numba 가 없으면 파이썬 구현을 쓴다 (결과는 같다)
     HAVE_NUMBA = False
 
-from .constants import PIPE_SPECS, FITTINGS, elbow_kg
 from .space import ALLOWED_DEFLECTIONS, DEFLECTION, DIR_INDEX, DIRS, State
 
 EPS = 1e-6
@@ -436,10 +435,10 @@ def _consts(space, pipe, goal):
             need += getattr(space, "r_bnd", space.r)   # D47 r, D96 max(3D, r)
         goal_need_m[bi] = need - EPS
     thr = np.array([space.r + space.tangent[a] + EPS for a in ANG])
-    ekg = np.array([elbow_kg(pipe.nominal_size, a) for a in ANG])
+    ekg = np.array([pipe.elbow_kg(a) for a in ANG])
     kgpm = space.kg_per_m
-    kgmm = PIPE_SPECS[pipe.nominal_size].kg_per_m / 1000
-    e45 = FITTINGS[pipe.nominal_size].elbow45
+    kgmm = pipe.kg_per_m / 1000
+    e45 = pipe.spec.elbow45
     C = (defl_idx, np.array(DIRS, dtype=np.int64), need_m, run_cap, goal_need_m, thr, ekg, float(kgpm), float(kgmm),
          float(e45), int(DIR_INDEX[tuple(pipe.end.dir)]), int(CHECK_EVERY), goal[0], goal[1], goal[2])
     return None, C

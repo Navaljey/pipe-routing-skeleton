@@ -13,7 +13,7 @@ D82 보완 (2026-10-19): 묶음 가로대는 축 위치 평균에 놓이므로, 
 import numpy as np
 
 from .. import support_std as ss
-from ..constants import PIPE_SPECS, SUPPORT_SPACING
+from ..constants import SUPPORT_SPACING
 
 ATTRIBUTION_RULE = "unit_weight_proportional"   # D81
 WINDOW_MM = 500.0   # D82 ③ (2026-10-18 소유자: ±250 → ±500)
@@ -238,7 +238,7 @@ def together_at(ctx, pid, p, u, s_mm, pieces=None):
     if best is None:
         return None
     q, (kg, ang, mem, L1, L2, basis), face = best
-    w = {pid: PIPE_SPECS[pP.nominal_size].kg_per_m, q: PIPE_SPECS[ctx.pipes[q].nominal_size].kg_per_m}
+    w = {pid: pP.kg_per_m, q: ctx.pipes[q].kg_per_m}   # D81 단위중량 비례 (D117 class 표)
     shares = {k: round(kg * v / sum(w.values()), 4) for k, v in w.items()}
     # 같은 D 를 P·Q 양쪽이 찾으면 (서로 막는 쌍) 같은 id — attach_together 가 실물 하나로 합친다
     gid = f"T-{'+'.join(sorted([pid, q]))}-{face}-{ax}-{round(float(p[ax]), 1)}"
@@ -333,7 +333,7 @@ def group_d(ctx, reports) -> int:
         kg, ang, mem, L1, L2, basis = best
         n_groups += 1
         gid = f"D{n_groups:03d}"
-        w = {g["pid"]: PIPE_SPECS[g["nd"]].kg_per_m for g in grp}
+        w = {g["pid"]: ctx.pipes[g["pid"]].kg_per_m for g in grp}
         wsum = sum(w.values())
         carried = sorted(g["pid"] for g in grp)
         a0 = float(np.mean([g["p"][g["ax"]] for g in grp]))

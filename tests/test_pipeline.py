@@ -84,7 +84,7 @@ class PipelineTest(unittest.TestCase):
         f = FITTINGS["100A"]
         self.assertAlmostEqual(J["pipe"], 10 * PIPE_SPECS["100A"].kg_per_m)
         self.assertAlmostEqual(J["elbow"], f.elbow90 + f.elbow45)
-        self.assertAlmostEqual(J["tee"], f.tee)
+        self.assertEqual(J["tee"], 0.0)   # D112: 티는 별도 중량 없음 (§3.2 티 열 미사용)
         self.assertAlmostEqual(J["valve"], f.gate_valve)
         self.assertAlmostEqual(J["support"], 4.873)
 

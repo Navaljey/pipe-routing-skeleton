@@ -19,7 +19,6 @@ from typing import Callable
 import jsonschema
 import numpy as np
 
-from .constants import FITTINGS, PIPE_SPECS
 from .blockpair import splits, walls
 from .gravity import feasibility
 from .support_std import load_standard, support_feasibility
@@ -50,11 +49,12 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) 
     엘보·티·밸브 = 검증기가 보고한 관이음 목록 × §3.2 중량 (135° = 90° + 45°, D25), 서포트 = 검증기 서포트 kg 합 (D46).
     블록 쌍 (sc 가 block_pair): 관통 = 공유 격벽 통과 수 × 관통 피스 무게 (D95, 직관과 별도) — 블록 쌍에서만 항목이 있다.
     """
-    f = FITTINGS[pipe.nominal_size]
-    unit = {"elbow_90": f.elbow90, "elbow_45": f.elbow45, "tee": f.tee, "gate_valve": f.gate_valve}
+    f = pipe.spec   # D117 배관 class 표
+    # D112: 티는 별도 중량 없음 (§3.2 티 열 미사용 — 몸체는 직관·다리 길이로 청구)
+    unit = {"elbow_90": f.elbow90, "elbow_45": f.elbow45, "tee": 0.0, "gate_valve": f.gate_valve}
     by = {k: sum(unit[x["type"]] for x in fittings if x["type"] == k) for k in unit}
     J = {
-        "pipe": polyline_length_mm(waypoints) / 1000 * PIPE_SPECS[pipe.nominal_size].kg_per_m,
+        "pipe": polyline_length_mm(waypoints) / 1000 * pipe.kg_per_m,
         "elbow": by["elbow_90"] + by["elbow_45"],
         "tee": by["tee"],
         "valve": by["gate_valve"],
@@ -74,7 +74,7 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
     from .verifier.geom import build_centerline
     cl = build_centerline(waypoints, elbow_radius(pipe.nominal_size), ANGLE_TOL_DEG)
     straight = polyline_length_mm(waypoints) - sum(2 * b.tangent for b in cl.bends if math.isfinite(b.tangent))
-    out = {"pipe": straight / 1000 * PIPE_SPECS[pipe.nominal_size].kg_per_m,
+    out = {"pipe": straight / 1000 * pipe.kg_per_m,
            "elbow": J["elbow"], "tee": J["tee"], "valve": J["valve"], "support": J["support"],
            **({"penetration": J["penetration"]} if "penetration" in J else {})}
     out["total"] = sum(out.values())
@@ -82,6 +82,20 @@ def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
 
 
 # ---------------------------------------------------------------- 실행
+
+def spec_fields(p, names: dict) -> dict:
+    """routes[] 사양 필드 (D116·D117) — 서비스·class·이름을 적은 배관만."""
+    if p.service is None and p.pipe_class is None and p.line_no is None:
+        return {}
+    out = {}
+    if p.id in names:
+        out["line_no"] = names[p.id]
+    if p.service is not None:
+        out["service"] = p.service
+    out["pipe_class"] = p.class_name
+    out["insulation_thickness"] = p.insulation_thickness
+    return out
+
 
 def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 60.0,
         planner: Callable = sequential_ripup_planner, solo_ref: bool = True) -> dict:
@@ -95,6 +109,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
     ext = np.array(sc.block.extent, dtype=float)
 
     routes = []
+    from .pipe_spec import line_numbers
+    names = line_numbers(sc)
     for p in sc.pipes:
         r, v = results[p.id], rep["pipes"][p.id]
         J = j_breakdown(p, r.waypoints, v.fittings, v.supports, sc) if v.routed else None
@@ -103,6 +119,7 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
             "pipe_id": p.id,
             "type_id": p.type_id,
             "nominal_size": p.nominal_size,
+            **spec_fields(p, names),   # D116·D117 (서비스·class 를 적은 배관만 — E1 출력 불변)
             "success": v.success,
             "waypoints": [[round(c, 3) for c in w] for w in r.waypoints] if r.status == "ok" else [],
             "fittings": v.fittings,
@@ -159,6 +176,9 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
         "terminal_rules": _terminal_rules(),     # D94·D96 관통·경계 단자 직관 규칙
     })
+    if any(p.service is not None or p.pipe_class is not None for p in sc.pipes):
+        from . import pipe_spec
+        g["pipe_class_standard"] = pipe_spec.standard_info()   # D117 (D78 방식)
     if plan.placement:
         g["placement_order"] = plan.placement   # 최종 배치 시점 순서 (anytime 최선 해 — 부재 막힘 (가)/(나) 판정용)
     out = {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
@@ -399,17 +419,20 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           f"| 계산 시간 | {g['computation_time_sec']:.2f} s (라우팅 {g['routing_time_sec']:.2f} · 검증 {g['verify_time_sec']:.2f}) |",
           ""]
     pen = any("penetration" in (x["J"] or {}) for x in out["routes"])   # D95 블록 쌍
+    named = any("line_no" in x or "pipe_class" in x for x in out["routes"])   # D116·D117 (E1 리포트 불변)
     L += ["## 배관별", "",
-          "| 배관 | 구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | "
+          "| 배관 | " + ("이름 | 서비스 · class · 보온 | " if named else "") + "구경 | 타입 | 라우터 | 탐색 s | 그래프 s | 판정 | 실패 원인 | 분류 | J total | 직관 | 엘보 | 서포트 | "
           + ("관통 | " if pen else "") + "실중량 | 길이 m | 엘보 90/45 | 서포트 수 |",
-          "|---|---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if pen else "") + "---|---|---|---|"]
+          "|---|" + ("---|---|" if named else "") + "---|---|---|---|---|---|---|---|---|---|---|---|" + ("---|" if pen else "") + "---|---|---|---|"]
     for x in out["routes"]:
         J, m = x["J"] or {}, x["metrics"]
         fmt = lambda k: f"{J[k]:,.2f}" if J else "-"
         rw = x.get("real_weight") or {}
         cls = FAIL_CLASS_KO.get(x.get("fail_class"), "-")
         rw_s = f"{rw['total']:,.2f}" if rw else "-"
-        L.append(f"| {x['pipe_id']} | {x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
+        sp = (f"{x.get('line_no', '-')} | {x.get('service', '-')} · {x.get('pipe_class', '-')} · "
+              f"{x.get('insulation_thickness', '-')} | ") if named else ""
+        L.append(f"| {x['pipe_id']} | {sp}{x['nominal_size']} | {x['type_id']} | {x['router']['status']} | "
                  f"{x['router']['search_sec']:.2f} | {x['router']['graph_sec']:.2f} | {'PASS' if x['success'] else 'FAIL'} | "
                  f"{', '.join(x['fail_causes']) or '-'} | {cls} | {fmt('total')} | {fmt('pipe')} | {fmt('elbow')} | "
                  f"{fmt('support')} | " + (f"{fmt('penetration')} | " if pen else "") + f"{rw_s} | {m.get('length_m', '-')} | "

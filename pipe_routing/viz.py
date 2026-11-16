@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import plotly.graph_objects as go
 
-from .constants import PIPE_SPECS
+from . import pipe_spec
 from .geometry import Box
 from .scenario import Scenario, load, terminal_stub
 
@@ -87,11 +87,14 @@ def add_terminals(fig: go.Figure, sc: Scenario, connect: bool = True) -> None:
 
     connect=True 면 start–end 를 점선으로 잇는다 (경로가 아니라 짝 표시).
     """
+    names = pipe_spec.line_numbers(sc)
     for n, p in enumerate(sc.pipes):
-        color = _PALETTE[n % len(_PALETTE)]
+        color = pipe_spec.color(p, n, _PALETTE)   # D116 서비스 색
         group = p.id
         label = f"{p.id} {p.type_id} {p.nominal_size}" + (f" 구배≥{p.min_slope:g}" if p.gravity_pipe else "")
-        width = 4 + 8 * PIPE_SPECS[p.nominal_size].od / PIPE_SPECS["500A"].od
+        if names.get(p.id):
+            label += f" {names[p.id]}"
+        width = 4 + 8 * p.od / pipe_spec.max_od()
         for which, symbol in (("start", "circle"), ("end", "diamond")):
             t = getattr(p, which)
             filled = t.kind == "nozzle"
@@ -232,7 +235,7 @@ def add_penetrations(fig: go.Figure, sc: Scenario, waypoints: dict) -> None:
 
 def add_routes(fig: go.Figure, sc: Scenario, results, line_width: int = 7) -> None:
     """라우터 결과 경로 (4단계). 성공 배관은 배관 색 굵은 선, 꺾임점 표시. 실패는 범례에만 상태 표기."""
-    color_of = {p.id: _PALETTE[n % len(_PALETTE)] for n, p in enumerate(sc.pipes)}
+    color_of = {p.id: pipe_spec.color(p, n, _PALETTE) for n, p in enumerate(sc.pipes)}
     for r in results:
         color = color_of.get(r.pipe_id, "black")
         if r.status != "ok":
@@ -286,8 +289,9 @@ def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: b
     from .constants import ANGLE_TOL_DEG, elbow_radius
     from .verifier.geom import build_centerline
     pipes = {p.id: p for p in sc.pipes}
-    color_of = colors or {p.id: _PALETTE[n % len(_PALETTE)] for n, p in enumerate(sc.pipes)}
+    color_of = colors or {p.id: pipe_spec.color(p, n, _PALETTE) for n, p in enumerate(sc.pipes)}
     first_clear = True
+    names = pipe_spec.line_numbers(sc)
     for pid, wps in routes.items():
         if not wps or pid not in pipes:
             continue
@@ -309,7 +313,7 @@ def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: b
             step = max(1, -(-(len(pts) - 1) // 8))
             sel = pts[::step] + ([pts[-1]] if (len(pts) - 1) % step else [])
             A += sel[:-1]; B += sel[1:]
-        r_body = PIPE_SPECS[p.nominal_size].od / 2 + p.insulation_thickness
+        r_body = p.od / 2 + p.insulation_thickness
         for r, name, op, vis in ((r_body, f"{pid} 관 (외경+보온재 Ø{2 * r_body:.0f})", opacity, True),
                                  (p.radius, f"{pid} 유효 반경 r={p.radius:.0f} (D17)", 0.12, "legendonly")):
             if vis == "legendonly" and not show_clearance:
@@ -320,8 +324,10 @@ def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: b
                                     name="유효 반경 관 (D17, 전 배관)" if clear else name,
                                     showlegend=(first_clear if clear else True), visible=vis, flatshading=True,
                                     legendgroup=f"tube_{pid}" if vis is True else "clearance",
-                                    hovertext=f"{pid} {p.nominal_size} OD {PIPE_SPECS[p.nominal_size].od} + 보온 "
-                                              f"{p.insulation_thickness:.0f} mm", hoverinfo="text"))
+                                    hovertext=f"{pid} {p.nominal_size} OD {p.od} + 보온 "
+                                              f"{p.insulation_thickness:.0f} mm"
+                                              + (f" — {lab}" if (lab := pipe_spec.label(p, names)) else ""),
+                                    hoverinfo="text"))
             if clear:
                 first_clear = False
 

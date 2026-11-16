@@ -13,7 +13,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from .constants import ANGLE_TOL_DEG, PIPE_SPECS, SNAP_MM, elbow_kg, elbow_radius, elbow_tangent
+from .constants import ANGLE_TOL_DEG, SNAP_MM, elbow_radius, elbow_tangent
 from .geometry import Vec3
 from .scenario import Pipe, Scenario, boundary_face, load
 from .trim_kernel import blocked_intervals
@@ -133,7 +133,7 @@ class EscapeGraph:
                         for a in self.tangent}
         self._arc_ok: dict[tuple, bool] = {}
         self._arc_tpl: dict[tuple, tuple] = {}   # D48 캐시: (노드, 들어오는 방향, 나가는 방향) → 엘보 호 이격 OK
-        self.kg_per_m = PIPE_SPECS[pipe.nominal_size].kg_per_m
+        self.kg_per_m = pipe.kg_per_m
         ext = scenario.block.extent
         m = _snap_up(self.r)
         # 영역: 블록 안쪽 유효 반경 (10mm 올림). 경계 단자만 예외 (D39)
@@ -713,7 +713,7 @@ class EscapeGraph:
 
     def cost(self, a: State, b: State, pipe: Pipe = None) -> float:
         return (self.edge_length(a.node, b.node) / 1000 * self.kg_per_m
-                + elbow_kg(self.pipe.nominal_size, DEFLECTION[a.dir][b.dir]))
+                + self.pipe.elbow_kg(DEFLECTION[a.dir][b.dir]))
 
     def is_free(self, a: Vec3, b: Vec3, pipe: Pipe = None) -> bool:
         p0 = np.array([a], dtype=float)

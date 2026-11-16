@@ -1,0 +1,89 @@
+{
+ "_note": "서비스 표 (D116, 추정: — 사내 목록으로 교체 가능, M32). gravity = 중력관 서비스, insulation_mm = 기본 보온, color = 3D·리포트 색 (추정:)",
+ "services": {
+  "FO": {
+   "name": "연료유",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 50,
+   "color": "#8c564b"
+  },
+  "DO": {
+   "name": "디젤유",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#bcbd22"
+  },
+  "LO": {
+   "name": "윤활유",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#e5ae38"
+  },
+  "SW": {
+   "name": "해수",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#2ca02c"
+  },
+  "FW": {
+   "name": "청수",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 25,
+   "color": "#1f77b4"
+  },
+  "BG": {
+   "name": "빌지",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#7f7f7f"
+  },
+  "ST": {
+   "name": "증기",
+   "gravity": false,
+   "class": "CS80",
+   "insulation_mm": 75,
+   "color": "#d62728"
+  },
+  "CN": {
+   "name": "응축수",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 50,
+   "color": "#ff9896"
+  },
+  "CA": {
+   "name": "압축공기",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#17becf"
+  },
+  "FF": {
+   "name": "소화수",
+   "gravity": false,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#e377c2"
+  },
+  "SD": {
+   "name": "오수",
+   "gravity": true,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#9467bd"
+  },
+  "DD": {
+   "name": "갑판 배수",
+   "gravity": true,
+   "class": "CS40",
+   "insulation_mm": 0,
+   "color": "#393b79"
+  }
+ }
+}
