@@ -43,10 +43,13 @@ class GeneratorConfig:
     services: bool = False                       # D116·D117: 배관마다 서비스 (→ class·보온) — 별도 난수열, 기본 꺼짐
     internal: bool = False                       # D113: 내부 격벽·데크·필라·스티프너 — 별도 난수열, 기본 꺼짐
     access: bool = False                         # D119: 주 통로 + 장비 정비 공간 — 별도 난수열, 기본 꺼짐
+    stiffeners: tuple = (10, 20)                 # D113 스티프너 개수 범위 (internal 일 때만) — 기능 시험용 작은 세트 (4, 8) (D123 ②)
+    maint_ratio: float = 1.0                     # D119 정비 공간을 두는 장비 비율 (access 일 때만) — 작은 세트 0.3 (D123 ②)
 
 
 # S2 생성 옵션 (D115 보완): 꺼져 있으면 meta.config 에 쓰지 않는다 — 기본 출력 비트 동일
 OPTION_KEYS = ("services", "internal", "access")
+SUB_OPTIONS = {"stiffeners": "internal", "maint_ratio": "access"}   # 부모 옵션이 꺼져 있으면 meta 에 쓰지 않는다
 SERVICE_SALT = 0x5E5   # `추정:` 서비스 난수열 = Random(seed ^ SERVICE_SALT) — 기본 난수열 소비 불변
 INTERNAL_SALT = 0x1A7  # `추정:` 내부 구조재 난수열 (D113)
 ACCESS_SALT = 0xACC    # `추정:` 접근 구역 난수열 (D119)
@@ -90,7 +93,7 @@ def gen_plates(irng: random.Random) -> list:
     return out
 
 
-def gen_internal(irng: random.Random, plates: list, equip: list, avoid: list) -> list:
+def gen_internal(irng: random.Random, plates: list, equip: list, avoid: list, stiff=(10, 20)) -> list:
     """D113 판 + 필라 4~8 (300 × 300, 전고) + 스티프너 10~20 (격벽·블록 벽 면에 붙은 평판 150 × 20, 길이 2~6 m)
     (`추정:` s2_plan §2). 필라·스티프너는 장비·접근 구역·(필라는) 격벽과 겹치지 않게."""
     W, L, H = BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT
@@ -109,7 +112,7 @@ def gen_internal(irng: random.Random, plates: list, equip: list, avoid: list) ->
     walls = [(0, 0.0, +1), (0, float(W), -1), (1, 0.0, +1), (1, float(L), -1)]
     walls += [(a, b.min[a], -1) for b, a in ((b, a) for k, b, a in plates if k == "bulkhead")]
     walls += [(a, b.max[a], +1) for b, a in ((b, a) for k, b, a in plates if k == "bulkhead")]
-    for _ in range(irng.randint(10, 20)):
+    for _ in range(irng.randint(*stiff)):
         for _try in range(50):
             wa, wc, sgn = irng.choice(walls)
             o = 1 - wa
@@ -131,12 +134,14 @@ def gen_internal(irng: random.Random, plates: list, equip: list, avoid: list) ->
     return obs
 
 
-def gen_maintenance(arng: random.Random, equip: list, solid: list) -> list:
+def gen_maintenance(arng: random.Random, equip: list, solid: list, ratio: float = 1.0) -> list:
     """D119 장비 정비 공간: 장비마다 수평 4면 중 하나 (균등 `추정:`) 앞 깊이 800 × 장비 높이 × 면 폭. 블록 밖은 잘라내고,
     다른 장비·내부 구조재와 겹치면 건너뛴다."""
     out = []
     ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
     for o in equip:
+        if ratio < 1.0 and arng.random() >= ratio:   # 비율 1 이면 난수를 쓰지 않는다 (기존 세트 비트 동일)
+            continue
         ax = arng.randrange(2)
         side = arng.choice((-1, 1))
         lo, hi = list(o.box.min), list(o.box.max)
@@ -159,6 +164,11 @@ def _config_meta(cfg) -> dict:
     for k in OPTION_KEYS:
         if k in d and not d[k]:
             del d[k]
+    for k, parent in SUB_OPTIONS.items():
+        if parent not in d:
+            d.pop(k, None)
+        elif k in d and isinstance(d[k], tuple):
+            d[k] = list(d[k])
     return d
 
 
@@ -340,10 +350,10 @@ def generate(cfg: GeneratorConfig, name: str = "") -> Scenario:
     obstacles = gen_obstacles(rng, cfg, avoid=tuple(avoid))
     equip = list(obstacles)
     if irng is not None:
-        obstacles += gen_internal(irng, plates, equip, [passage] if passage else [])
+        obstacles += gen_internal(irng, plates, equip, [passage] if passage else [], tuple(cfg.stiffeners))
     if arng is not None:
         obstacles += [Obstacle("ACC_001", "passage", passage, access=True)]
-        obstacles += gen_maintenance(arng, equip, [o.box for o in obstacles])
+        obstacles += gen_maintenance(arng, equip, [o.box for o in obstacles], cfg.maint_ratio)
     svc_rng = random.Random(cfg.seed ^ SERVICE_SALT) if cfg.services else None
     pipes: list[Pipe] = []
     for _ in range(cfg.n_pipes):
@@ -376,13 +386,18 @@ def main(argv=None) -> int:
     ap.add_argument("--services", action="store_true", help="배관마다 유체 서비스 (D116·D117, 새 세트용)")
     ap.add_argument("--internal", action="store_true", help="내부 격벽·데크·필라·스티프너 (D113, 새 세트용)")
     ap.add_argument("--access", action="store_true", help="주 통로·장비 정비 공간 (D119, 새 세트용)")
+    ap.add_argument("--stiffeners", type=int, nargs=2, default=list(GeneratorConfig.stiffeners),
+                    help="스티프너 개수 범위 (D113, 기능 시험용 작은 세트 4 8 — D123 ②)")
+    ap.add_argument("--maint-ratio", type=float, default=GeneratorConfig.maint_ratio,
+                    help="정비 공간을 두는 장비 비율 (D119, 작은 세트 0.3 — D123 ②)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
                               stair_rule=args.stair_rule, services=args.services, internal=args.internal,
-                              access=args.access)
+                              access=args.access, stiffeners=tuple(args.stiffeners),
+                              maint_ratio=args.maint_ratio)
         name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")

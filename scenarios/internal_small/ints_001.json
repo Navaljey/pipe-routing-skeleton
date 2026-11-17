@@ -1,0 +1,1061 @@
+{
+  "meta": {
+    "name": "ints_001",
+    "source": "procedural",
+    "generator": "pipe_routing.generator",
+    "config": {
+      "seed": 20266109,
+      "obstacle_fill": 0.12,
+      "box_xy_mm": [
+        4000,
+        8000
+      ],
+      "box_z_mm": [
+        1000,
+        4000
+      ],
+      "max_boxes": 1000,
+      "n_pipes": 10,
+      "sizes": [
+        "15A",
+        "25A",
+        "50A",
+        "65A",
+        "100A",
+        "150A",
+        "200A",
+        "300A",
+        "400A",
+        "500A"
+      ],
+      "gravity_ratio": 0.3,
+      "nozzle_ratio": 0.5,
+      "deck_ratio": 0.5,
+      "min_terminal_dist_mm": 5000,
+      "max_tries": 500,
+      "stair_rule": true,
+      "d94_rule": true,
+      "exclude_faces": [],
+      "services": true,
+      "internal": true,
+      "access": true,
+      "stiffeners": [
+        4,
+        8
+      ],
+      "maint_ratio": 0.3
+    },
+    "n_pipes_requested": 10
+  },
+  "block": {
+    "width": 40000,
+    "length": 40000,
+    "height": 10000,
+    "unit": "mm"
+  },
+  "obstacles": [
+    {
+      "id": "OBS_001",
+      "type": "box",
+      "min": [
+        13700,
+        1310,
+        5480
+      ],
+      "max": [
+        20980,
+        8860,
+        8360
+      ]
+    },
+    {
+      "id": "OBS_002",
+      "type": "box",
+      "min": [
+        30710,
+        5940,
+        4950
+      ],
+      "max": [
+        34920,
+        10950,
+        8490
+      ]
+    },
+    {
+      "id": "OBS_003",
+      "type": "box",
+      "min": [
+        5740,
+        6270,
+        4330
+      ],
+      "max": [
+        13450,
+        13580,
+        7870
+      ]
+    },
+    {
+      "id": "OBS_004",
+      "type": "box",
+      "min": [
+        8100,
+        22940,
+        1830
+      ],
+      "max": [
+        13540,
+        30590,
+        4300
+      ]
+    },
+    {
+      "id": "OBS_005",
+      "type": "box",
+      "min": [
+        33810,
+        9870,
+        4460
+      ],
+      "max": [
+        38520,
+        17290,
+        8290
+      ]
+    },
+    {
+      "id": "OBS_006",
+      "type": "box",
+      "min": [
+        35360,
+        13350,
+        2620
+      ],
+      "max": [
+        39670,
+        18120,
+        6010
+      ]
+    },
+    {
+      "id": "OBS_007",
+      "type": "box",
+      "min": [
+        740,
+        19120,
+        4150
+      ],
+      "max": [
+        5190,
+        24230,
+        7600
+      ]
+    },
+    {
+      "id": "OBS_008",
+      "type": "box",
+      "min": [
+        9420,
+        490,
+        900
+      ],
+      "max": [
+        16900,
+        8200,
+        1980
+      ]
+    },
+    {
+      "id": "OBS_009",
+      "type": "box",
+      "min": [
+        4020,
+        14100,
+        3620
+      ],
+      "max": [
+        8160,
+        20970,
+        5520
+      ]
+    },
+    {
+      "id": "OBS_010",
+      "type": "box",
+      "min": [
+        30640,
+        13150,
+        6110
+      ],
+      "max": [
+        38320,
+        18690,
+        8450
+      ]
+    },
+    {
+      "id": "OBS_011",
+      "type": "box",
+      "min": [
+        5150,
+        20160,
+        4140
+      ],
+      "max": [
+        10650,
+        26520,
+        6100
+      ]
+    },
+    {
+      "id": "OBS_012",
+      "type": "box",
+      "min": [
+        4090,
+        23770,
+        7400
+      ],
+      "max": [
+        9700,
+        31310,
+        9600
+      ]
+    },
+    {
+      "id": "OBS_013",
+      "type": "box",
+      "min": [
+        16150,
+        5420,
+        1890
+      ],
+      "max": [
+        21070,
+        10470,
+        4340
+      ]
+    },
+    {
+      "id": "OBS_014",
+      "type": "box",
+      "min": [
+        19090,
+        8980,
+        2120
+      ],
+      "max": [
+        24210,
+        14490,
+        3480
+      ]
+    },
+    {
+      "id": "OBS_015",
+      "type": "box",
+      "min": [
+        18810,
+        23030,
+        1440
+      ],
+      "max": [
+        24610,
+        31020,
+        4710
+      ]
+    },
+    {
+      "id": "OBS_016",
+      "type": "box",
+      "min": [
+        9220,
+        13290,
+        5580
+      ],
+      "max": [
+        13900,
+        20550,
+        8370
+      ]
+    },
+    {
+      "id": "OBS_017",
+      "type": "box",
+      "min": [
+        15730,
+        22350,
+        3550
+      ],
+      "max": [
+        20240,
+        29280,
+        7500
+      ]
+    },
+    {
+      "id": "OBS_018",
+      "type": "box",
+      "min": [
+        9950,
+        8520,
+        4350
+      ],
+      "max": [
+        15020,
+        15670,
+        7950
+      ]
+    },
+    {
+      "id": "OBS_019",
+      "type": "box",
+      "min": [
+        8950,
+        5370,
+        4200
+      ],
+      "max": [
+        13780,
+        13050,
+        6770
+      ]
+    },
+    {
+      "id": "OBS_020",
+      "type": "box",
+      "min": [
+        21320,
+        32200,
+        7040
+      ],
+      "max": [
+        25890,
+        39840,
+        9120
+      ]
+    },
+    {
+      "id": "OBS_021",
+      "type": "box",
+      "min": [
+        15940,
+        1860,
+        1440
+      ],
+      "max": [
+        23770,
+        9320,
+        4270
+      ]
+    },
+    {
+      "id": "OBS_022",
+      "type": "box",
+      "min": [
+        10450,
+        23280,
+        3620
+      ],
+      "max": [
+        14620,
+        28300,
+        4840
+      ]
+    },
+    {
+      "id": "OBS_023",
+      "type": "box",
+      "min": [
+        9360,
+        23410,
+        6470
+      ],
+      "max": [
+        14970,
+        29520,
+        9850
+      ]
+    },
+    {
+      "id": "INT_001",
+      "type": "bulkhead",
+      "min": [
+        0,
+        31870,
+        0
+      ],
+      "max": [
+        40000,
+        31890,
+        10000
+      ],
+      "supportable": true,
+      "penetrable": true,
+      "penetration_axis": "y"
+    },
+    {
+      "id": "INT_002",
+      "type": "bulkhead",
+      "min": [
+        28250,
+        0,
+        0
+      ],
+      "max": [
+        28270,
+        40000,
+        10000
+      ],
+      "supportable": true,
+      "penetrable": true,
+      "penetration_axis": "x"
+    },
+    {
+      "id": "INT_003",
+      "type": "pillar",
+      "min": [
+        24400,
+        13120,
+        0
+      ],
+      "max": [
+        24700,
+        13420,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_004",
+      "type": "pillar",
+      "min": [
+        33170,
+        37300,
+        0
+      ],
+      "max": [
+        33470,
+        37600,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_005",
+      "type": "pillar",
+      "min": [
+        33880,
+        32510,
+        0
+      ],
+      "max": [
+        34180,
+        32810,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_006",
+      "type": "pillar",
+      "min": [
+        33430,
+        11590,
+        0
+      ],
+      "max": [
+        33730,
+        11890,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_007",
+      "type": "pillar",
+      "min": [
+        35870,
+        37470,
+        0
+      ],
+      "max": [
+        36170,
+        37770,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_008",
+      "type": "pillar",
+      "min": [
+        21320,
+        1300,
+        0
+      ],
+      "max": [
+        21620,
+        1600,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_009",
+      "type": "pillar",
+      "min": [
+        4510,
+        13490,
+        0
+      ],
+      "max": [
+        4810,
+        13790,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_010",
+      "type": "pillar",
+      "min": [
+        34300,
+        21680,
+        0
+      ],
+      "max": [
+        34600,
+        21980,
+        10000
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_011",
+      "type": "stiffener",
+      "min": [
+        3460,
+        31850,
+        7580
+      ],
+      "max": [
+        8020,
+        31870,
+        7730
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_012",
+      "type": "stiffener",
+      "min": [
+        28270,
+        6880,
+        5010
+      ],
+      "max": [
+        28290,
+        7030,
+        8850
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_013",
+      "type": "stiffener",
+      "min": [
+        30750,
+        31890,
+        2840
+      ],
+      "max": [
+        30900,
+        31910,
+        8460
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_014",
+      "type": "stiffener",
+      "min": [
+        28230,
+        31530,
+        4530
+      ],
+      "max": [
+        28250,
+        36750,
+        4680
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_015",
+      "type": "stiffener",
+      "min": [
+        28270,
+        6050,
+        5130
+      ],
+      "max": [
+        28290,
+        11080,
+        5280
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_016",
+      "type": "stiffener",
+      "min": [
+        0,
+        1470,
+        4410
+      ],
+      "max": [
+        20,
+        1620,
+        8630
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_017",
+      "type": "stiffener",
+      "min": [
+        28230,
+        29220,
+        2380
+      ],
+      "max": [
+        28250,
+        29370,
+        7190
+      ],
+      "supportable": true
+    },
+    {
+      "id": "INT_018",
+      "type": "stiffener",
+      "min": [
+        28230,
+        6580,
+        6960
+      ],
+      "max": [
+        28250,
+        6730,
+        9480
+      ],
+      "supportable": true
+    },
+    {
+      "id": "ACC_001",
+      "type": "passage",
+      "min": [
+        0,
+        15970,
+        0
+      ],
+      "max": [
+        40000,
+        16770,
+        2000
+      ],
+      "access": true
+    },
+    {
+      "id": "ACC_002",
+      "type": "maintenance",
+      "min": [
+        20520,
+        32200,
+        7040
+      ],
+      "max": [
+        21320,
+        39840,
+        9120
+      ],
+      "access": true
+    }
+  ],
+  "pipes": [
+    {
+      "id": "P001",
+      "type_id": "T1",
+      "nominal_size": "500A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "CA",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          26580,
+          970,
+          0
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          1
+        ]
+      },
+      "end": {
+        "pos": [
+          38690,
+          0,
+          3150
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P002",
+      "type_id": "T5",
+      "nominal_size": "50A",
+      "gravity_pipe": true,
+      "min_slope": 0.01,
+      "service": "SD",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          40000,
+          570,
+          8280
+        ],
+        "kind": "boundary",
+        "dir": [
+          -1,
+          0,
+          0
+        ]
+      },
+      "end": {
+        "pos": [
+          11950,
+          0,
+          2690
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P003",
+      "type_id": "T1",
+      "nominal_size": "100A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "DO",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          16560,
+          29350,
+          5850
+        ],
+        "kind": "nozzle",
+        "dir": [
+          0,
+          1,
+          0
+        ],
+        "host": "OBS_017"
+      },
+      "end": {
+        "pos": [
+          38700,
+          0,
+          930
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P004",
+      "type_id": "T5",
+      "nominal_size": "400A",
+      "gravity_pipe": true,
+      "min_slope": 0.005,
+      "service": "SD",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          9920,
+          30380,
+          9290
+        ],
+        "kind": "nozzle",
+        "dir": [
+          1,
+          0,
+          0
+        ],
+        "host": "OBS_012"
+      },
+      "end": {
+        "pos": [
+          19120,
+          15120,
+          0
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P005",
+      "type_id": "T1",
+      "nominal_size": "100A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "DO",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          2180,
+          0,
+          3200
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          1,
+          0
+        ]
+      },
+      "end": {
+        "pos": [
+          15090,
+          10610,
+          5390
+        ],
+        "kind": "nozzle",
+        "dir": [
+          -1,
+          0,
+          0
+        ],
+        "host": "OBS_018"
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P006",
+      "type_id": "T1",
+      "nominal_size": "50A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "CN",
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          8200,
+          26620,
+          5470
+        ],
+        "kind": "nozzle",
+        "dir": [
+          0,
+          1,
+          0
+        ],
+        "host": "OBS_011"
+      },
+      "end": {
+        "pos": [
+          38490,
+          0,
+          7800
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P007",
+      "type_id": "T1",
+      "nominal_size": "50A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "CA",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          5340,
+          11650,
+          10000
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "end": {
+        "pos": [
+          21980,
+          1140,
+          10000
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          1
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P008",
+      "type_id": "T5",
+      "nominal_size": "50A",
+      "gravity_pipe": true,
+      "min_slope": 0.01,
+      "service": "SD",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          5840,
+          40000,
+          1190
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          -1,
+          0
+        ]
+      },
+      "end": {
+        "pos": [
+          38140,
+          17780,
+          0
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P009",
+      "type_id": "T1",
+      "nominal_size": "65A",
+      "gravity_pipe": false,
+      "min_slope": null,
+      "service": "FO",
+      "insulation_thickness": 50,
+      "start": {
+        "pos": [
+          15070,
+          24510,
+          8240
+        ],
+        "kind": "nozzle",
+        "dir": [
+          1,
+          0,
+          0
+        ],
+        "host": "OBS_023"
+      },
+      "end": {
+        "pos": [
+          16310,
+          33250,
+          0
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          0,
+          -1
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    },
+    {
+      "id": "P010",
+      "type_id": "T5",
+      "nominal_size": "100A",
+      "gravity_pipe": true,
+      "min_slope": 0.01,
+      "service": "DD",
+      "insulation_thickness": 0,
+      "start": {
+        "pos": [
+          0,
+          1900,
+          5550
+        ],
+        "kind": "boundary",
+        "dir": [
+          1,
+          0,
+          0
+        ]
+      },
+      "end": {
+        "pos": [
+          8360,
+          40000,
+          170
+        ],
+        "kind": "boundary",
+        "dir": [
+          0,
+          1,
+          0
+        ]
+      },
+      "valve_positions": [],
+      "branch_points": []
+    }
+  ]
+}
