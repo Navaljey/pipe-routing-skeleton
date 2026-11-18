@@ -171,6 +171,15 @@ class AccessTest(unittest.TestCase):
         d = astar_route(g, p, 600, heuristic=lambda s: 0.0)
         self.assertTrue(math.isclose(d.J, r.J, rel_tol=1e-9))
 
+    def test_pipeline_output_schema(self):
+        """접근 구역이 있는 시나리오의 파이프라인 출력 (layer0.access) 이 출력 스키마를 통과한다."""
+        from pipe_routing.pipeline import run, validate_output
+        clear_cache()
+        sc = scen([self.ACC], pipe([0, 15000, 1000], [40000, 15000, 1000]))
+        out = run(sc, solo_ref=False)
+        validate_output(out)
+        self.assertIn("access", out["routes"][0]["layer0"])
+
 
 class GeneratorTest(unittest.TestCase):
     def test_options(self):
