@@ -60,9 +60,11 @@ class SupportHint:
         dist = ss.face_distances(ext, P, U, sp)
         bounds = bp.local_bounds(ext, P, sp) if sp else None
         out = []
-        for o, (face, frm) in enumerate(ss.OPTIONS):
-            L = float(dist[0, ss.OPT_FACE[o]])
-            row = {"face": face, "form": frm, "L": round(L, 1) if np.isfinite(L) else None, "kg": None}
+        anchors = ss.anchors_of(self.scenario)   # D113 supportable 장애물 면 (검증기와 같은 옵션 목록)
+        for o, (face, frm, an) in enumerate(ss.option_list(anchors)):
+            L = float(dist[0, ss.FACE_ORDER.index(face)]) if an is None else float(ss.anchor_distance(an, P, U)[0])
+            row = {"face": face if an is None else an.label, "form": frm,
+                   "L": round(L, 1) if np.isfinite(L) else None, "kg": None}
             if not np.isfinite(L):
                 row["status"] = "parallel"          # 배관 축과 평행한 법선의 면 (D80 ③)
                 out.append(row)
@@ -74,7 +76,16 @@ class SupportHint:
                 continue
             A, B, v = ss.member_arrays(frm, P, U, face, np.array([L]), pipe.od, rf)
             half = ss.ANGLE_HALF[self.std.angle_of(frm, pipe.nominal_size, int(k[0]))]
-            bl = ss.members_blocked(A, B, v, float(half), ext, box_lo, box_hi, (oA, oB, oR, oS), True,
+            bl_lo, bl_hi = box_lo, box_hi
+            if an is not None:   # D113: 면 사각형 안에 닿아야 하고, 그 장애물 자신과의 간섭은 보지 않는다
+                if not ss.anchor_contacts_ok(an, A, B, v, np.array([half]))[0]:
+                    row["kg"] = round(float(kg[0]), 4)
+                    row["status"] = "off_face"
+                    out.append(row)
+                    continue
+                bl_lo = [x for j, x in enumerate(box_lo) if j != an.box]
+                bl_hi = [x for j, x in enumerate(box_hi) if j != an.box]
+            bl = ss.members_blocked(A, B, v, float(half), ext, bl_lo, bl_hi, (oA, oB, oR, oS), True,
                                     bounds=bounds)[0]
             row["kg"] = round(float(kg[0]), 4)
             row["status"] = "blocked" if bl else "ok"

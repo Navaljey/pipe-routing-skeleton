@@ -22,7 +22,7 @@ import numpy as np
 
 from ..constants import VALVE_FRONT_MM
 from ..scenario import Scenario
-from .core import MODULE_ORDER, MODULES, Context, PipeRoute, centerlines_of
+from .core import MODULE_ORDER, MODULES, Context, PipeRoute, centerlines_of, module_order
 from .geom import segment_segment_distance
 
 
@@ -176,7 +176,7 @@ class Session:
             if mods:
                 redo[q] = [m for m in MODULE_ORDER if m in mods]
         if pid in self.routes:
-            redo[pid] = list(MODULE_ORDER)
+            redo[pid] = module_order(self.scenario)
         ctx = self._ctx()
         for q, mods in redo.items():
             res = self.mod.setdefault(q, {})
@@ -196,7 +196,7 @@ class Session:
         for pid in self.order:
             rep = PipeReport(pid, pid in self.routes)
             if rep.routed:
-                for name in MODULE_ORDER:
+                for name in module_order(self.scenario):
                     res = self.mod[pid][name]
                     rep.layer0[name] = None if res is None else not res
                     rep.violations += res or []

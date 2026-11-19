@@ -147,6 +147,12 @@ def support_extra_coords(sc, size: str, block=None, pipes=None):
         for a0, a1 in ranges:   # 블록 쌍이면 블록마다 (공유 격벽은 양쪽 블록의 벽, D76 ①)
             if math.isfinite(L) and 0 < L < a1 - a0:
                 out[ax].append(a0 + _snap_down(L - 10) if side == 0 else a0 + _snap_up(a1 - a0 - L + 10))
+    from .support_std import anchors_of
+    for an in (anchors_of(sc) if block is None else ()):   # D113 앵커 면: 띠 경계 한 줄 (표 끝 안쪽) `추정:`
+        ax, side = ss_face_axis()[an.face]                  # (면 사각형 경계 선은 넣지 않는다 — 격자가 세제곱으로 커짐)
+        L = lm[an.face]
+        if math.isfinite(L):
+            out[ax].append(an.plane + _snap_down(L - 10) if side == 0 else an.plane - _snap_down(L - 10))
     tangents = [elbow_tangent(size, a) for a in FIRST_BEND_ANGLES]   # D105: 편향각별 첫 꺾임 선
     for p in (sc.pipes if pipes is None else pipes):
         if p.nominal_size != size:
@@ -168,6 +174,11 @@ def terminal_first_bend(p, term, t: float) -> float:
         return max(p.min_straight, t)
     from .blockpair import boundary_straight
     return max(p.min_straight, boundary_straight(p) + t)
+
+
+def ss_anchors(sc):
+    from .support_std import anchors_of
+    return anchors_of(sc)
 
 
 def ss_face_axis():
@@ -205,8 +216,15 @@ def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True):
     if support_lines:
         sl = support_extra_coords(sc, pipe.nominal_size, pipes=same)
         extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], sl)]
+    kw = {}
+    from . import internal
+    if internal.has_internal(sc):   # D113·D119: 판 = 관통 구역 (soft, 판마다 축) + 가장자리 (hard), 첫 꺾임 선
+        obs, hard, soft, axes = internal.router_boxes(sc, same[0])
+        fb = internal.first_bend_coords(sc, same[0])
+        extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], fb)]
+        kw = dict(obstacles=obs, walls=hard, soft=soft, soft_axes=axes)
     g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
-                    extra_coords=extra)
+                    extra_coords=extra, **kw)
     _FIXED[key] = (sc, g)
     return g, g.build_sec
 
@@ -366,8 +384,13 @@ def line_support(F, sc, pipe) -> LineSupport:
             y0, y1, z0, z1 = layer[1:]
             r = pipe.radius
             fixed.append((0, (y0 + r, y1 - r), (z0 + r, z1 - r), bp.center(sc)))
+        from . import internal
+        anchors = ()
+        if internal.has_internal(sc):   # D113: 판 관통부 = 서포트 고정점, supportable 장애물 면 = 지지면
+            fixed += internal.fixed_points(sc, pipe)
+            anchors = ss_anchors(sc)
         cache[key] = LineSupport(std, sc.block.extent, blo, bhi, pipe.nominal_size, pipe.od,
-                                 SUPPORT_SPACING[pipe.nominal_size], sp=bp.walls(sc), fixed=fixed)
+                                 SUPPORT_SPACING[pipe.nominal_size], sp=bp.walls(sc), fixed=fixed, anchors=anchors)
     return cache[key]
 
 
@@ -444,6 +467,8 @@ class LayeredGraph:
     _pipe_groups = EscapeGraph._pipe_groups
     _point_clearance = EscapeGraph._point_clearance
     _segments_clear = EscapeGraph._segments_clear
+    nb_for = EscapeGraph.nb_for
+    _boxes = EscapeGraph._boxes
 
     def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0,
                  incremental: bool = True, support_lines: bool = True, members=()):
@@ -476,7 +501,7 @@ class LayeredGraph:
         self.kg_per_m = pipe.kg_per_m
         self.lmax = gravity_lmax(pipe.nominal_size) if pipe.gravity_pipe else 0.0   # D62
         self.box_lo, self.box_hi = F.box_lo, F.box_hi
-        self.n_hard, self.soft_axis = F.n_hard, F.soft_axis   # D76 창 패치 (x 축 엣지만 통과)
+        self.n_hard, self.soft_axis, self.soft_axes = F.n_hard, F.soft_axis, F.soft_axes   # D76 창 패치·D113 판
         self.dom_lo, self.dom_hi = F.dom_lo, F.dom_hi
         self.pipe_groups = self._pipe_groups(list(others) + list(reserved) + list(members))
         self.n_reserved = len(reserved)
@@ -663,7 +688,7 @@ class LayeredGraph:
             rest = np.nonzero(~adj)[0]
             if len(rest):
                 free[rest] = self._segments_clear(P0[rest], P1[rest], o1,
-                                                  self.n_hard if ax == self.soft_axis else None)
+                                                  self.nb_for(ax))
             sel = np.nonzero(free)[0]
             a, b, adj = a[sel], b[sel], adj[sel]
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
@@ -675,8 +700,13 @@ class LayeredGraph:
                 sp_[adj] = self._sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
                 r_ = np.nonzero(~adj)[0]
                 sc_[r_], sp_[r_] = support_edge_model(self._ls, self.pos[a[r_]], self.pos[b[r_]])
-            axis.append({"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
-                         "sc": sc_, "sp": sp_})
+            e = {"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
+                 "sc": sc_, "sp": sp_}
+            pen = self._plate_penetration(ax, self.pos[a], self.pos[b])   # D113·D95 내부 판 관통 (없으면 None)
+            if pen is not None:
+                e["sc"] = sc_ + pen
+                e["pen"] = pen
+            axis.append(e)
         diag = {}
         for d in range(6, 18):
             vec = DIRS[d]
@@ -697,6 +727,23 @@ class LayeredGraph:
                        "sp": self._sup[1][d][1][src] if self._sup is not None else np.zeros(len(s_id), np.int64)}
         cache[key] = {"axis": axis, "diag": diag}
         return cache[key]
+
+    def _plate_penetration(self, ax: int, P0: np.ndarray, P1: np.ndarray):
+        """D113·D95: 내부 판 (관통 축 = ax) 중심면을 지나는 엣지 = 관통 피스 무게 kg/m × 두께. 판이 없으면 None.
+        엣지는 P0[ax] < P1[ax] (고정층 순서), 중심면 c 는 반열린 구간 (P0, P1] — 노드가 중심면에 있어도 한 번만."""
+        from . import internal
+        ps = [p for p in internal.plates(self._sc) if p.axis == ax]
+        if not ps:
+            return None
+        pen = np.zeros(len(P0))
+        for p in ps:
+            c = p.center
+            o = [q for q in range(3) if q != ax]
+            hit = (P0[:, ax] < c) & (P1[:, ax] >= c)
+            for q in o:
+                hit &= (P0[:, q] >= p.lo[q]) & (P0[:, q] <= p.hi[q])
+            pen = pen + np.where(hit, self.pipe.kg_per_m * p.thickness / 1000, 0.0)
+        return pen if pen.any() else None
 
     def _composite_template(self, F) -> dict:
         """D91 합성 층의 엣지 목록 — _edge_template 와 같은 형식. 노드 후보(F.member) 격자선 위 연속한 후보 사이가
@@ -722,7 +769,7 @@ class LayeredGraph:
             rest = np.nonzero(~adj)[0]
             if len(rest):
                 obs[rest] = F.obstacle_trim_mask(self.pos[a[rest]], self.pos[b[rest]],
-                                                 self.n_hard if ax == self.soft_axis else None)
+                                                 self.nb_for(ax))
             sel = np.nonzero(obs != 0)[0]
             a, b = a[sel], b[sel]
             P0, P1 = self.pos[a], self.pos[b]
@@ -982,7 +1029,7 @@ class LayeredGraph:
             rest = np.nonzero(~adj)[0]
             if len(rest):
                 free[rest] = self._segments_clear(P0[rest], P1[rest], o1,
-                                                  self.n_hard if ax == self.soft_axis else None)
+                                                  self.nb_for(ax))
             sel = np.nonzero(free)[0]
             em = self._pipes_mask(P0[sel], P1[sel]) & obs[sel]
             sel, em = sel[em != 0], em[em != 0]

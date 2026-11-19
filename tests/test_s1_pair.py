@@ -186,11 +186,14 @@ class D93LoaderTest(unittest.TestCase):
         o = sc.obstacles[0]
         self.assertFalse(o.supportable or o.penetrable)
         self.assertEqual(o.pen_axis(), 1)   # 가장 짧은 변 축 (y)
-        for attr in ("supportable", "penetrable"):   # S2 예정 — 미지원 (M27)
-            with self.assertRaises(ScenarioError) as cm:
-                from_dict({**base, "obstacles": [{"id": "O", "type": "plate", "min": [0, 0, 0], "max": [5000, 20, 3000],
-                                                  attr: True}]})
-            self.assertIn("S2", str(cm.exception))
+        box = {"id": "O", "type": "plate", "min": [0, 0, 0], "max": [5000, 20, 3000]}
+        # D113 (S2-1): 판 = supportable·penetrable, 필라·스티프너 = supportable 만, (false, true) 조합 없음
+        for attrs in ({"supportable": True}, {"supportable": True, "penetrable": True}):
+            o = from_dict({**base, "obstacles": [{**box, **attrs}]}).obstacles[0]
+            self.assertEqual((o.supportable, o.penetrable), (True, attrs.get("penetrable", False)))
+        with self.assertRaises(ScenarioError) as cm:
+            from_dict({**base, "obstacles": [{**box, "penetrable": True}]})
+        self.assertIn("D113", str(cm.exception))
 
     def test_wall_thickness(self):
         sc = thick_pair([pdict("X", [0, 20000, 5000], [2 * S + T, 20000, 5000], [1, 0, 0], [1, 0, 0], win=WIN)])

@@ -19,6 +19,8 @@ def _pt(p):
 def _obstacle_hits(ctx: Context, A, B, slack, r, module, pid, what):
     out = []
     for o in ctx.scenario.obstacles:
+        if o.penetrable or o.access:   # D113 판은 crossing 모듈 (관통 규칙), D119 접근 구역은 access 모듈
+            continue
         if not len(A):
             break
         d, at = segment_box_distance(A, B, o.box.min, o.box.max)
@@ -141,7 +143,8 @@ def crossing(ctx: Context, pr: PipeRoute):
     ≥ crossing_straight (D76 ④ r, D94 max(3D, r)). 라우터와 같은 판정 기하 (crossing_zone)."""
     sc = ctx.scenario
     if not bp.walls(sc):
-        return None
+        from .. import internal
+        return _plate_crossing(ctx, pr) if internal.plates(sc) else None
     (wa, wb), = bp.walls(sc)
     s = bp.center(sc)
     pipe = ctx.pipes[pr.pipe_id]
@@ -381,23 +384,25 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
     box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
     od = pipe.od
+    anchors = ss.anchors_of(ctx.scenario)   # D113 supportable 장애물 면 (없으면 이전과 같다)
     res = []
     for k0 in range(0, len(pts), _CHUNK):
         P = pts[k0:k0 + _CHUNK]
         U = dirs[k0:k0 + _CHUNK]
         ev = ss.evaluate(std, ext, box_lo, box_hi, pipe.nominal_size, od, P, U, others=(oA, oB, oR, oS), exact=True,
-                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario))
+                         trace=ctx.cache.setdefault(("support_trace", pid), []), sp=bp.splits(ctx.scenario),
+                         anchors=anchors)
         for i in range(len(P)):
             o = int(ev["opt"][i])
             if o < 0:
                 res.append(None)
                 continue
-            face, frm = ss.OPTIONS[o]
+            label, frm, face = ss.option_label(o, anchors)
             L = float(ev["L"][i])
             reinf = bool(ev["reinf"][i])
             ang = std.angle_of(frm, pipe.nominal_size, int(ev["k"][i]))
             mem = ss.members(frm, P[i], U[i], face, L, od, reinf)
-            res.append({"form": frm, "variant": "reinforced" if reinf else "standard", "face": face,
+            res.append({"form": frm, "variant": "reinforced" if reinf else "standard", "face": label,
                         "section": ang, "L": round(L, 1), "dims": {"L": round(L, 1)},
                         "members": [{"a": _pt(a), "b": _pt(b), "role": role} for a, b, role in mem],
                         "member_length_mm": round(float(ss.member_length(frm, np.array([L]), od,
@@ -457,6 +462,11 @@ def support_fixed_points(ctx: Context, pid: str) -> list:
             P = ctx.centerlines[pid][0].points
             cum = np.concatenate([[0], np.cumsum(np.linalg.norm(P[1:] - P[:-1], axis=1))])
             out = [float(cum[i] + np.linalg.norm(q - P[i])) for i, q in bp.crossing_points(sc, pipe, P)]
+        from .. import internal
+        if internal.plates(sc):   # D113: 내부 판 관통부 = 서포트 고정점 (판 중심면)
+            P = ctx.centerlines[pid][0].points
+            cum = np.concatenate([[0], np.cumsum(np.linalg.norm(P[1:] - P[:-1], axis=1))])
+            out += [float(cum[i] + np.linalg.norm(q - P[i])) for i, q, _ in internal.crossings(sc, pipe, P)]
         ctx.cache[key] = sorted(out)
     return ctx.cache[key]
 
@@ -545,4 +555,76 @@ def support(ctx: Context, pr: PipeRoute):
         s_last = s
     ctx.cache[("supports", pipe.id)] = supports
     ctx.cache[("support_gaps", pipe.id)] = gaps
+    return out
+
+
+def _plate_crossing(ctx: Context, pr: PipeRoute):
+    """D113 내부 판 관통 (D94 일반화 — 블록 쌍 crossing 과 같은 기하, 창 대신 면 전체, §7 Q13).
+    판마다: 관통 직관 = 관통 축과 평행하고 판 중심면을 지나는 직관 조각 — 그 조각은 판 가장자리 박스 (옆면) 와 r 이상
+    (관통 구멍이 면 안). 그 밖의 모든 조각 (엘보 호·다른 직관) 은 관통 구역 (판을 축 방향으로 max(3D, r) − r 늘린 박스)
+    과 r 이상 — 따라서 판 면에서 인접 엘보 접점까지 직관 ≥ max(3D, r). 라우터와 같은 판정 기하 (internal.router_boxes)."""
+    from .. import internal
+    sc = ctx.scenario
+    pipe = ctx.pipes[pr.pipe_id]
+    r = pipe.radius
+    e = internal.straight_min(pipe) - r
+    out = []
+    for p in internal.plates(sc):
+        zlo, zhi = p.zone(e)
+        for cl in ctx.centerlines[pipe.id]:
+            A, B, S, pieces = cl.arrays()
+            if not len(A):
+                continue
+            through = np.zeros(len(A), dtype=bool)
+            for k, pc in enumerate(pieces):
+                if pc.kind != "straight":
+                    continue
+                d = B[k] - A[k]
+                if np.count_nonzero(np.abs(d) > 1e-6) == 1 and abs(d[p.axis]) > 1e-6 \
+                        and (A[k][p.axis] - p.center) * (B[k][p.axis] - p.center) < 0:
+                    through[k] = True
+            for k in np.nonzero(through)[0]:
+                for lo, hi in p.edges():
+                    dd, at = segment_box_distance(A[k:k + 1], B[k:k + 1], lo, hi)
+                    if dd[0] - S[k] < r - EPS:
+                        out.append(Violation("crossing", pipe.id, _pt(at[0]),
+                                             f"판 {p.id} 관통 구멍이 면 안 (가장자리에서 유효 반경 {r:.2f} 이상) 이 아님 "
+                                             f"({dd[0] - S[k]:.1f})", float(dd[0] - S[k]), p.id))
+                        break
+            keep = np.nonzero(~through)[0]
+            if len(keep):
+                dd, at = segment_box_distance(A[keep], B[keep], zlo, zhi)
+                dd = dd - S[keep]
+                k = int(dd.argmin())
+                if dd[k] < r - EPS:
+                    pc = pieces[keep[k]]
+                    what = "엘보" if pc.kind == "arc" else "직관"
+                    out.append(Violation("crossing", pipe.id, _pt(at[k]),
+                                         f"판 {p.id}: 관통 직관 밖의 {what}이 관통 구역까지 {dd[k]:.1f} < 유효 반경 {r:.2f} "
+                                         f"(판 면에서 접점까지 직관 ≥ {internal.straight_min(pipe):.0f}, D94·D113)",
+                                         float(dd[k]), p.id))
+    return out
+
+
+@register("access")
+def access(ctx: Context, pr: PipeRoute):
+    """D119 접근 구역: 배관 중심선 (직관 + 엘보 호) 이 접근 구역 박스와 유효 반경 r 이상. 서포트 부재는 support 모듈이
+    접근 구역을 장애물로 보고 놓지 않는다 (부재 반폭). 접근 구역이 없는 시나리오는 이 모듈을 부르지 않는다."""
+    from .. import internal
+    pipe = ctx.pipes[pr.pipe_id]
+    r = pipe.radius
+    out = []
+    for o in ctx.scenario.obstacles:
+        if not o.access:
+            continue
+        for cl in ctx.centerlines[pipe.id]:
+            A, B, S, pieces = cl.arrays()
+            if not len(A):
+                continue
+            d, at = segment_box_distance(A, B, o.box.min, o.box.max)
+            d = d - S
+            k = int(d.argmin())
+            if d[k] < r - EPS:
+                out.append(Violation("access", pipe.id, _pt(at[k]),
+                                     f"접근 구역 {o.id} 까지 {d[k]:.1f} < 유효 반경 {r:.2f} (D119)", float(d[k]), o.id))
     return out

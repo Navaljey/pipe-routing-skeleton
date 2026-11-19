@@ -73,7 +73,16 @@ def add_obstacles(fig: go.Figure, sc: Scenario) -> None:
         i, j, k = zip(*_TRIS)
         hover = (f"<b>{o.id}</b> ({o.type})<br>min {list(map(int, o.box.min))}"
                  f"<br>max {list(map(int, o.box.max))}")
-        fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color="#8a8f98", opacity=0.35,
+        # D113·D119: 판 (관통 가능) = 노랑 반투명, 필라·스티프너 (지지면) = 갈색, 접근 구역 = 초록 반투명, 장비 = 회색
+        if o.access:
+            col, op, hover = "#2ca02c", 0.15, hover + "<br>접근 구역 (D119): 배관·서포트 부재 진입 금지"
+        elif o.penetrable:
+            col, op, hover = "#e5c100", 0.18, hover + "<br>판 (D113): 지지면 · 관통 가능 (관통 축 직관만)"
+        elif o.supportable:
+            col, op, hover = "#8c564b", 0.6, hover + "<br>지지면 (D113)"
+        else:
+            col, op = "#8a8f98", 0.35
+        fig.add_trace(go.Mesh3d(x=x, y=y, z=z, i=i, j=j, k=k, color=col, opacity=op,
                                 flatshading=True, name=o.id, legendgroup="obstacles",
                                 showlegend=False, hovertext=hover, hoverinfo="text"))
     xs, ys, zs = _edge_lines([o.box for o in sc.obstacles])

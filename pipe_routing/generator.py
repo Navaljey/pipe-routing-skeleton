@@ -41,11 +41,122 @@ class GeneratorConfig:
     d94_rule: bool = False                       # D107: 경계 단자 직진 구간 ≥ max(3D, r) + t₁₃₅ (D94·D96) — 새 세트에만
     exclude_faces: tuple = ()                    # 경계 단자를 두지 않을 면 [(축, -1|+1)] — 블록 쌍 공유 격벽 (D76)
     services: bool = False                       # D116·D117: 배관마다 서비스 (→ class·보온) — 별도 난수열, 기본 꺼짐
+    internal: bool = False                       # D113: 내부 격벽·데크·필라·스티프너 — 별도 난수열, 기본 꺼짐
+    access: bool = False                         # D119: 주 통로 + 장비 정비 공간 — 별도 난수열, 기본 꺼짐
+    stiffeners: tuple = (10, 20)                 # D113 스티프너 개수 범위 (internal 일 때만) — 기능 시험용 작은 세트 (4, 8) (D123 ②)
+    maint_ratio: float = 1.0                     # D119 정비 공간을 두는 장비 비율 (access 일 때만) — 작은 세트 0.3 (D123 ②)
 
 
 # S2 생성 옵션 (D115 보완): 꺼져 있으면 meta.config 에 쓰지 않는다 — 기본 출력 비트 동일
-OPTION_KEYS = ("services",)
+OPTION_KEYS = ("services", "internal", "access")
+SUB_OPTIONS = {"stiffeners": "internal", "maint_ratio": "access"}   # 부모 옵션이 꺼져 있으면 meta 에 쓰지 않는다
 SERVICE_SALT = 0x5E5   # `추정:` 서비스 난수열 = Random(seed ^ SERVICE_SALT) — 기본 난수열 소비 불변
+INTERNAL_SALT = 0x1A7  # `추정:` 내부 구조재 난수열 (D113)
+ACCESS_SALT = 0xACC    # `추정:` 접근 구역 난수열 (D119)
+PLATE_T = 20           # `추정:` 격벽·데크 두께 mm — s2_plan §2 의 12 mm 강판은 10 mm 격자 (D5) 밖이라 20 으로 올림
+PILLAR_MM = 300        # `추정:` 필라 단면
+STIFF_W, STIFF_T = 150, 20   # `추정:` 스티프너 평판 150 × 12 → 10 mm 격자에 맞춰 두께 20
+PASSAGE_W, PASSAGE_H, MAINT_D = 800, 2000, 800   # D119 `추정:` 주 통로 폭·높이, 정비 공간 깊이
+
+
+def _overlap(a: Box, b: Box) -> bool:
+    return all(a.min[k] < b.max[k] and b.min[k] < a.max[k] for k in range(3))
+
+
+def gen_passage(arng: random.Random) -> Box:
+    """D119 주 통로: 데크 상면 (z 0 ~ 2,000), 폭 800, x 또는 y 방향 블록 관통, 위치 균등 (`추정:`)."""
+    ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
+    ax = arng.randrange(2)
+    o = 1 - ax
+    c = _rand_snapped(arng, 2000, ext[o] - 2000 - PASSAGE_W)
+    lo, hi = [0.0, 0.0, 0.0], [float(ext[0]), float(ext[1]), float(PASSAGE_H)]
+    lo[o], hi[o] = float(c), float(c + PASSAGE_W)
+    return Box(tuple(lo), tuple(hi))
+
+
+def gen_plates(irng: random.Random) -> list:
+    """D113 판 (`추정:` s2_plan §2): 격벽 2~3 (x 또는 y 법선, 블록 전폭·전고, 같은 방향끼리 4 m 이상 떨어짐),
+    데크 0~1 (z 3,000~7,000 전면). 장비보다 먼저 놓고 장비가 판을 피한다. 반환 [(종류, 박스, 관통 축)]."""
+    W, L, H = BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT
+    out = []
+    for _ in range(irng.randint(2, 3)):
+        ax = irng.randrange(2)
+        for _try in range(50):
+            c = _rand_snapped(irng, 6000, (W if ax == 0 else L) - 6000)
+            if all(abs(c - b.min[a]) >= 4000 for k, b, a in out if a == ax):
+                lo = [0.0, 0.0, 0.0]; hi = [float(W), float(L), float(H)]
+                lo[ax], hi[ax] = float(c), float(c + PLATE_T)
+                out.append(("bulkhead", Box(tuple(lo), tuple(hi)), ax)); break
+    if irng.random() < 0.5:
+        z = _rand_snapped(irng, 3000, 7000)
+        out.append(("deck", Box((0.0, 0.0, float(z)), (float(W), float(L), float(z + PLATE_T))), 2))
+    return out
+
+
+def gen_internal(irng: random.Random, plates: list, equip: list, avoid: list, stiff=(10, 20)) -> list:
+    """D113 판 + 필라 4~8 (300 × 300, 전고) + 스티프너 10~20 (격벽·블록 벽 면에 붙은 평판 150 × 20, 길이 2~6 m)
+    (`추정:` s2_plan §2). 필라·스티프너는 장비·접근 구역·(필라는) 격벽과 겹치지 않게."""
+    W, L, H = BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT
+    solid = [o.box for o in equip] + list(avoid)
+    bulk = [b for k, b, a in plates if k == "bulkhead"]
+    out = [(k, b, a) for k, b, a in plates]
+
+    def free(b, against):
+        return not any(_overlap(b, a) for a in against)
+    for _ in range(irng.randint(4, 8)):
+        for _try in range(50):
+            x = _rand_snapped(irng, 1000, W - 1000 - PILLAR_MM); y = _rand_snapped(irng, 1000, L - 1000 - PILLAR_MM)
+            b = Box((float(x), float(y), 0.0), (float(x + PILLAR_MM), float(y + PILLAR_MM), float(H)))
+            if free(b, solid + bulk):
+                out.append(("pillar", b, None)); break
+    walls = [(0, 0.0, +1), (0, float(W), -1), (1, 0.0, +1), (1, float(L), -1)]
+    walls += [(a, b.min[a], -1) for b, a in ((b, a) for k, b, a in plates if k == "bulkhead")]
+    walls += [(a, b.max[a], +1) for b, a in ((b, a) for k, b, a in plates if k == "bulkhead")]
+    for _ in range(irng.randint(*stiff)):
+        for _try in range(50):
+            wa, wc, sgn = irng.choice(walls)
+            o = 1 - wa
+            ln = _snap(irng.uniform(2000, 6000))
+            vertical = irng.random() < 0.5
+            s0 = _rand_snapped(irng, 500, (L if o == 1 else W) - 500 - (STIFF_W if vertical else ln))
+            z0 = _rand_snapped(irng, 500, H - 500 - (ln if vertical else STIFF_W))
+            lo = [0.0, 0.0, 0.0]; hi = [0.0, 0.0, 0.0]
+            lo[wa], hi[wa] = (wc, wc + STIFF_T) if sgn > 0 else (wc - STIFF_T, wc)
+            lo[o], hi[o] = float(s0), float(s0 + (STIFF_W if vertical else ln))
+            lo[2], hi[2] = float(z0), float(z0 + (ln if vertical else STIFF_W))
+            b = Box(tuple(lo), tuple(hi))
+            if free(b, solid):
+                out.append(("stiffener", b, None)); break
+    obs = []
+    for k, (kind, b, ax) in enumerate(out):
+        pen = kind in ("bulkhead", "deck")
+        obs.append(Obstacle(f"INT_{k + 1:03d}", kind, b, True, pen, ax if pen else None))
+    return obs
+
+
+def gen_maintenance(arng: random.Random, equip: list, solid: list, ratio: float = 1.0) -> list:
+    """D119 장비 정비 공간: 장비마다 수평 4면 중 하나 (균등 `추정:`) 앞 깊이 800 × 장비 높이 × 면 폭. 블록 밖은 잘라내고,
+    다른 장비·내부 구조재와 겹치면 건너뛴다."""
+    out = []
+    ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
+    for o in equip:
+        if ratio < 1.0 and arng.random() >= ratio:   # 비율 1 이면 난수를 쓰지 않는다 (기존 세트 비트 동일)
+            continue
+        ax = arng.randrange(2)
+        side = arng.choice((-1, 1))
+        lo, hi = list(o.box.min), list(o.box.max)
+        if side > 0:
+            lo[ax], hi[ax] = o.box.max[ax], min(float(ext[ax]), o.box.max[ax] + MAINT_D)
+        else:
+            lo[ax], hi[ax] = max(0.0, o.box.min[ax] - MAINT_D), o.box.min[ax]
+        if hi[ax] - lo[ax] < 100:
+            continue
+        b = Box(tuple(lo), tuple(hi))
+        if any(_overlap(b, s) for s in solid if s is not o.box):
+            continue
+        out.append(Obstacle(f"ACC_{len(out) + 2:03d}", "maintenance", b, access=True))
+    return out
+
 
 
 def _config_meta(cfg) -> dict:
@@ -53,6 +164,11 @@ def _config_meta(cfg) -> dict:
     for k in OPTION_KEYS:
         if k in d and not d[k]:
             del d[k]
+    for k, parent in SUB_OPTIONS.items():
+        if parent not in d:
+            d.pop(k, None)
+        elif k in d and isinstance(d[k], tuple):
+            d[k] = list(d[k])
     return d
 
 
@@ -80,7 +196,8 @@ def _rand_snapped(rng: random.Random, lo: float, hi: float) -> Optional[int]:
     return rng.randrange(lo_s, hi_s + 1, SNAP_MM)
 
 
-def gen_obstacles(rng: random.Random, cfg: GeneratorConfig) -> list[Obstacle]:
+def gen_obstacles(rng: random.Random, cfg: GeneratorConfig, avoid=()) -> list[Obstacle]:
+    """avoid = 겹치면 안 되는 박스 (D119 주 통로) — 겹친 후보는 버린다 (난수는 같은 순서로 쓴다, avoid 가 없으면 이전과 같음)."""
     ext = (BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
     target = cfg.obstacle_fill * math.prod(ext)
     boxes: list[Box] = []
@@ -91,7 +208,10 @@ def gen_obstacles(rng: random.Random, cfg: GeneratorConfig) -> list[Obstacle]:
         size = (_snap(rng.uniform(*cfg.box_xy_mm)), _snap(rng.uniform(*cfg.box_xy_mm)),
                 _snap(rng.uniform(*cfg.box_z_mm)))
         lo = tuple(_rand_snapped(rng, 0, e - s) for e, s in zip(ext, size))
-        boxes.append(Box(lo, tuple(l + s for l, s in zip(lo, size))))
+        cand = Box(lo, tuple(l + s for l, s in zip(lo, size)))
+        if avoid and any(_overlap(cand, a) for a in avoid):
+            continue
+        boxes.append(cand)
         filled = union_volume(boxes)
     return [Obstacle(f"OBS_{i + 1:03d}", "box", b) for i, b in enumerate(boxes)]
 
@@ -147,8 +267,9 @@ def _sample_boundary(rng, which, size, cfg, gravity, r=None) -> Optional[Termina
 
 
 def _sample_terminal(rng, which, size, cfg, obstacles, gravity, r=None):
-    if obstacles and rng.random() < cfg.nozzle_ratio:
-        return _sample_nozzle(rng, which, size, obstacles, r)
+    hosts = [o for o in obstacles if not (o.supportable or o.penetrable or o.access)]   # 노즐은 장비에만 (D113·D119)
+    if hosts and rng.random() < cfg.nozzle_ratio:
+        return _sample_nozzle(rng, which, size, hosts, r)
     return _sample_boundary(rng, which, size, cfg, gravity, r)
 
 
@@ -221,7 +342,18 @@ def _clashes(pipe: Pipe, placed: list[Pipe]) -> bool:
 def generate(cfg: GeneratorConfig, name: str = "") -> Scenario:
     rng = random.Random(cfg.seed)
     block = Block(BLOCK_WIDTH, BLOCK_LENGTH, BLOCK_HEIGHT)
-    obstacles = gen_obstacles(rng, cfg)
+    arng = random.Random(cfg.seed ^ ACCESS_SALT) if cfg.access else None
+    irng = random.Random(cfg.seed ^ INTERNAL_SALT) if cfg.internal else None
+    passage = gen_passage(arng) if arng is not None else None
+    plates = gen_plates(irng) if irng is not None else []
+    avoid = ([passage] if passage else []) + [b for _k, b, _a in plates]
+    obstacles = gen_obstacles(rng, cfg, avoid=tuple(avoid))
+    equip = list(obstacles)
+    if irng is not None:
+        obstacles += gen_internal(irng, plates, equip, [passage] if passage else [], tuple(cfg.stiffeners))
+    if arng is not None:
+        obstacles += [Obstacle("ACC_001", "passage", passage, access=True)]
+        obstacles += gen_maintenance(arng, equip, [o.box for o in obstacles], cfg.maint_ratio)
     svc_rng = random.Random(cfg.seed ^ SERVICE_SALT) if cfg.services else None
     pipes: list[Pipe] = []
     for _ in range(cfg.n_pipes):
@@ -251,13 +383,23 @@ def main(argv=None) -> int:
     ap.add_argument("--prefix", default="proc", help="시나리오 이름 앞부분 (밀집 세트 등, D58)")
     ap.add_argument("--stair-rule", action="store_true",
                     help="중력관 낙차를 계단식 하향 규칙(D61) 하한 이상으로 보장 (D64, 새 세트용)")
+    ap.add_argument("--d94-rule", action="store_true",
+                    help="경계 단자 직진 구간 ≥ max(3D, r) + t₁₃₅ 보장 (D107, 새 세트용)")
     ap.add_argument("--services", action="store_true", help="배관마다 유체 서비스 (D116·D117, 새 세트용)")
+    ap.add_argument("--internal", action="store_true", help="내부 격벽·데크·필라·스티프너 (D113, 새 세트용)")
+    ap.add_argument("--access", action="store_true", help="주 통로·장비 정비 공간 (D119, 새 세트용)")
+    ap.add_argument("--stiffeners", type=int, nargs=2, default=list(GeneratorConfig.stiffeners),
+                    help="스티프너 개수 범위 (D113, 기능 시험용 작은 세트 4 8 — D123 ②)")
+    ap.add_argument("--maint-ratio", type=float, default=GeneratorConfig.maint_ratio,
+                    help="정비 공간을 두는 장비 비율 (D119, 작은 세트 0.3 — D123 ②)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
-                              stair_rule=args.stair_rule, services=args.services)
+                              stair_rule=args.stair_rule, d94_rule=args.d94_rule, services=args.services, internal=args.internal,
+                              access=args.access, stiffeners=tuple(args.stiffeners),
+                              maint_ratio=args.maint_ratio)
         name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")

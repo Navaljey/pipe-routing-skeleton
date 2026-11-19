@@ -92,7 +92,7 @@ class EscapeGraph:
     def __init__(self, scenario: Scenario, pipe: Pipe, allow_45: bool = True, others=(), fast_build: bool = True,
                  extra_terminals=(), pipe_grid_lines: bool = True, corner_arc: bool = False, extra_coords=None,
                  walls=(), soft=(), domain=None, obstacles=None, coords=None, own_terminals: bool = True,
-                 node_filter=None):
+                 node_filter=None, soft_axes=None):
         """allow_45=False 는 45° 엣지를 만들지 않는다 — M9 비교 실험 전용 (D15 기본은 True).
 
         others: 이미 놓인 배관 [(Pipe, waypoints), ...] — 직관 + 엘보 호를 장애물로 본다. 이격 r + r_other (D50②).
@@ -148,6 +148,8 @@ class EscapeGraph:
                                dtype=float).reshape(-1, 3)
         self.n_hard = len(self.box_lo) - len(soft)   # 앞쪽 n_hard 개 = 장애물 + 격벽, 뒤쪽 = 창 패치 (soft)
         self.soft_axis = 0
+        # D113: 판마다 관통 축 (블록 쌍 창 패치는 모두 x — soft_axes 없음, 이전과 같은 경로)
+        self.soft_axes = list(soft_axes) if soft_axes is not None else [0] * len(soft)
         self.pipe_groups = self._pipe_groups(others)   # D50②: [(A, B, slack, r_other, lo, hi)]
 
         # 1) 축별 좌표
@@ -229,6 +231,23 @@ class EscapeGraph:
         X, Y, Z = self._axes_f
         return (X[node[0]], Y[node[1]], Z[node[2]])
 
+    def nb_for(self, ax: int):
+        """축 ax 엣지가 보는 박스 선택: None = 전부, 정수 = 앞쪽 n 개 (블록 쌍 — 이전과 같음), 배열 = 박스 번호.
+        soft 박스는 자기 관통 축 방향 엣지에는 장애물이 아니다 (D76 창 패치, D113 판 관통 구역)."""
+        if self.n_hard == len(self.box_lo):
+            return None
+        if all(a == self.soft_axes[0] for a in self.soft_axes):
+            return self.n_hard if ax == self.soft_axes[0] else None
+        keep = [i for i in range(len(self.box_lo)) if i < self.n_hard or self.soft_axes[i - self.n_hard] != ax]
+        return np.array(keep, dtype=np.int64)
+
+    def _boxes(self, nb):
+        if nb is None:
+            return self.box_lo, self.box_hi
+        if isinstance(nb, (int, np.integer)):
+            return self.box_lo[:nb], self.box_hi[:nb]
+        return self.box_lo[nb], self.box_hi[nb]
+
     def _grid_clearance(self, pts: np.ndarray, nb=None) -> np.ndarray:
         """격자점(pts = 격자 순서) ↔ 장애물 최소거리. fast_build 면 박스에서 r + t_135 + 10mm 보다 먼 격자점은 그 박스를
         계산하지 않는다 (M10). 이 값은 판정(≥ r, ≥ r + t)에만 쓰이고 판정 문턱은 모두 그 거리 이하라 판정 결과는 같다 —
@@ -238,7 +257,7 @@ class EscapeGraph:
         best = np.full(self.shape, np.inf)
         P = pts.reshape(self.shape + (3,))
         reach = self.r + self.tangent[135] + 10.0
-        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
+        for lo, hi in zip(*self._boxes(nb)):
             sl = tuple(self._span(k, lo[k], hi[k], reach, reach) for k in range(3))
             g = np.maximum(0.0, np.maximum(lo - P[sl], P[sl] - hi))
             best[sl] = np.minimum(best[sl], np.sqrt((g * g).sum(-1)))
@@ -246,7 +265,7 @@ class EscapeGraph:
 
     def _point_clearance(self, pts: np.ndarray, nb=None) -> np.ndarray:
         best = np.full(len(pts), np.inf)
-        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
+        for lo, hi in zip(*self._boxes(nb)):
             g = np.maximum(0.0, np.maximum(lo - pts, pts - hi))
             best = np.minimum(best, np.sqrt((g * g).sum(1)))
         return best
@@ -430,8 +449,8 @@ class EscapeGraph:
         nxt = np.meshgrid(*[self.axes[i][1:] if i == ax else self.axes[i] for i in range(3)], indexing="ij")
         hi_pts[..., ax] = nxt[ax]
         best = np.full(lo_pts.shape[:-1], np.inf)
-        nb = self.n_hard if ax == self.soft_axis else None   # 창 패치는 x 축 엣지가 지나간다 (D76)
-        for blo, bhi in zip(self.box_lo[:nb], self.box_hi[:nb]):
+        nb = self.nb_for(ax)   # 창 패치·판 관통 구역은 그 축 엣지가 지나간다 (D76·D113)
+        for blo, bhi in zip(*self._boxes(nb)):
             if self.fast_build:
                 # M10: 박스에서 r 보다 먼 엣지는 판정(≥ r)에 영향이 없다 → 박스 근처 인덱스 범위만 계산 (결과 같음)
                 sl = tuple(self._span(k, blo[k], bhi[k], self.r, self.r) for k in range(3))
@@ -541,7 +560,7 @@ class EscapeGraph:
         U = D / np.where(L > 0, L, 1)[:, None]
         slo, shi = np.minimum(P0, P1), np.maximum(P0, P1)
         E, LO, HI = [], [], []
-        for lo, hi in zip(self.box_lo[:nb], self.box_hi[:nb]):
+        for lo, hi in zip(*self._boxes(nb)):
             near = np.nonzero(np.all((slo < hi + self.r) & (shi > lo - self.r), 1))[0]
             if len(near):
                 E.append(near)
@@ -575,7 +594,7 @@ class EscapeGraph:
         free = np.ones(len(p0), dtype=bool)
         seg_lo = np.minimum(p0, p1) - self.r
         seg_hi = np.maximum(p0, p1) + self.r
-        for blo, bhi in zip(self.box_lo[:nb], self.box_hi[:nb]):
+        for blo, bhi in zip(*self._boxes(nb)):
             cand = np.nonzero(free & np.all((seg_lo < bhi) & (seg_hi > blo), 1))[0]
             if len(cand):
                 dist = planar_segment_box_distance(p0[cand], p1[cand], blo, bhi, const_axis)

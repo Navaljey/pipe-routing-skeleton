@@ -321,10 +321,104 @@ def members_blocked(A, B, valid, half: float, ext, box_lo, box_hi, others=None, 
     return bad
 
 
+# --------------------------------------------------------------------------- D113 supportable 장애물 면 (앵커)
+
+@dataclass(frozen=True)
+class Anchor:
+    """supportable 장애물의 면 하나 (D113). face = 블록 면과 같은 의미의 이름 (배관 → 면 방향):
+    윗면 = floor (배관이 위), 아랫면 = ceiling, x 최대면 = wall_x0 (배관이 +x 쪽), x 최소면 = wall_x1 …
+    box = evaluate 에 넘기는 장애물 목록에서 그 장애물 번호 (자기 자신과의 부재 간섭은 보지 않는다)."""
+    obs_id: str
+    box: int
+    face: str
+    lo: tuple
+    hi: tuple
+
+    @property
+    def axis(self) -> int:
+        return FACE_AXIS[self.face][0]
+
+    @property
+    def plane(self) -> float:
+        ax, side = FACE_AXIS[self.face]
+        return float(self.hi[ax] if side == 0 else self.lo[ax])
+
+    @property
+    def label(self) -> str:
+        return f"{self.face}@{self.obs_id}"
+
+    def forms(self) -> tuple:
+        return DECK_FORMS if self.face in ("floor", "ceiling") else WALL_FORMS
+
+
+def anchors_of(sc) -> tuple:
+    """시나리오의 supportable 장애물 면 (D113). 장애물 순서 · FACE_ORDER 순서 (동률 깨기 `추정:`)."""
+    out = []
+    ext = sc.block.extent
+    wmin = 2 * min(ANGLE_HALF.values())
+    for i, o in enumerate(sc.obstacles):
+        if not o.supportable:
+            continue
+        for face in FACE_ORDER:
+            a = Anchor(o.id, i, face, tuple(map(float, o.box.min)), tuple(map(float, o.box.max)))
+            # 쓸 수 없는 면은 뺀다 (판정 결과 같음): 면 폭이 앵글 두 반폭보다 좁으면 부재 끝점이 면 안에 들어갈 수 없고
+            # (anchor_contacts_ok 가 늘 거부), 블록 경계 위의 면은 그 바깥에 배관이 있을 수 없다
+            if any(a.hi[q] - a.lo[q] < wmin for q in range(3) if q != a.axis):
+                continue
+            if a.plane <= 0 or a.plane >= ext[a.axis]:
+                continue
+            out.append(a)
+    return tuple(out)
+
+
+def anchor_distance(a: Anchor, X: np.ndarray, U: np.ndarray) -> np.ndarray:
+    """배관 중심 → 앵커 면 거리 (면 바깥쪽에 있을 때만, 배관 축이 법선과 평행하면 inf)."""
+    ax, side = FACE_AXIS[a.face]
+    L = (X[:, ax] - a.plane) if side == 0 else (a.plane - X[:, ax])
+    ok = (np.abs(U[:, ax]) < 1 - 1e-9) & (L > _EPS)
+    return np.where(ok, L, np.inf)
+
+
+def anchor_contacts_ok(a: Anchor, A, B, valid, half) -> np.ndarray:
+    """부재가 면에 닿는 끝점 (면 평면 위 끝점) 이 면 사각형 안 (가장자리에서 반폭 안쪽) — D113 `추정:`.
+    A, B (N, M, 3), valid (N, M), half (N,). 닿는 끝점이 없으면 False."""
+    ax = a.axis
+    pl = a.plane
+    q = [k for k in range(3) if k != ax]
+    ok = np.ones(A.shape[0], dtype=bool)
+    any_c = np.zeros(A.shape[0], dtype=bool)
+    hv = np.asarray(half, float)[:, None]
+    for E in (A, B):
+        c = valid & (np.abs(E[..., ax] - pl) <= 1e-6)
+        any_c |= c.any(1)
+        for k in q:
+            inside = (E[..., k] >= a.lo[k] + hv - 1e-6) & (E[..., k] <= a.hi[k] - hv + 1e-6)
+            ok &= ~(c & ~inside).any(1)
+    return ok & any_c
+
+
+def option_list(anchors=()) -> list:
+    """[(면 이름 (기하용), 형식, 앵커 또는 None)] — 블록 면 OPTIONS 뒤에 앵커 면 (동률은 앞쪽)."""
+    out = [(f, frm, None) for f, frm in OPTIONS]
+    for a in anchors:
+        out += [(a.face, frm, a) for frm in a.forms()]
+    return out
+
+
+def option_label(o: int, anchors=()) -> tuple:
+    """evaluate 의 opt 번호 → (출력 면 이름, 형식, 기하용 면 이름)."""
+    face, frm, a = option_list(anchors)[o]
+    return (a.label if a is not None else face), frm, face
+
+
 def evaluate(std: Standard, ext, box_lo, box_hi, nd: str, od: float, X: np.ndarray, U: np.ndarray,
-             others=None, exact=True, prefer_ceiling=True, trace=None, sp=()) -> dict:
+             others=None, exact=True, prefer_ceiling=True, trace=None, sp=(), anchors=()) -> dict:
     """서포트 후보 점들 → 가장 가벼운 가능한 (면, 형식) (D80 ③). 반환 배열 dict:
-    kg (불가 = inf), opt (OPTIONS 번호, 불가 = -1), L, k (앵글 구간), reinf."""
+    kg (불가 = inf), opt (option_list 번호 — 앵커가 없으면 OPTIONS 번호, 불가 = -1), L, k (앵글 구간), reinf.
+    anchors = supportable 장애물 면 (D113) — 없으면 이전과 같은 연산."""
+    if anchors:
+        return _evaluate_anchors(std, ext, box_lo, box_hi, nd, od, X, U, others, exact, prefer_ceiling, trace, sp,
+                                 anchors)
     N = len(X)
     dist = face_distances(ext, X, U, sp)
     if sp:   # 블록 쌍 (D76): 면 거리·부재 범위는 점이 속한 블록 기준
@@ -396,7 +490,7 @@ def band_lmax(std: Standard, nd: str) -> dict:
     return {f: (deck if f in ("floor", "ceiling") else wall) for f in FACE_ORDER}
 
 
-def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
+def support_feasibility(pipe, ext, std: Standard, sp=(), anchors=()) -> dict:
     """규칙상 서포트 불가 (D80 ⑩, D64 방식의 장애물 무시 하한): 어느 단자에서든 최대 간격 안에 서포트 가능 띠(어느 면에서든
     표 범위 안)에 닿을 수 없고 다른 단자도 그 거리 밖이면 불가.
 
@@ -458,8 +552,93 @@ def support_feasibility(pipe, ext, std: Standard, sp=()) -> dict:
             else:
                 u = 0.0
         ulb.append(u)
+    for k, t in enumerate(T):   # D113 앵커 면: 단자에서 면 사각형까지 유클리드 거리 − 표 끝 (하한, 장애물 무시)
+        for a in anchors:
+            g = np.maximum(0.0, np.maximum(np.asarray(a.lo) - t, t - np.asarray(a.hi)))
+            ulb[k] = min(ulb[k], max(0.0, float(np.sqrt((g * g).sum())) - lm[a.face] + 1.0) / smax)
     span = float(np.linalg.norm(T[0] - T[1]))
     bad = [u > 1 + 1e-9 and span > smax for u in ulb]
     return {"feasible": not any(bad), "band_gap_mm": [round(g, 1) for g in gap], "smax_mm": smax,
             "u_lower_bound": [round(u, 3) for u in ulb],
             "blocked_terminal": [n for n, b in zip(("start", "end"), bad) if b]}
+
+def _evaluate_anchors(std, ext, box_lo, box_hi, nd, od, X, U, others, exact, prefer_ceiling, trace, sp, anchors):
+    """evaluate 의 D113 판 — 블록 면 옵션 + 앵커 면 옵션. 블록 면 옵션은 evaluate 와 같은 규칙.
+    앵커 옵션: 거리 = anchor_distance, 부재가 면 사각형 안에 닿아야 하고 (anchor_contacts_ok), 부재 간섭에서 그 장애물
+    자체는 뺀다. 천장 선호 (D79 ④) = 가장 가벼운 것이 바닥형 C (블록 바닥 또는 장애물 윗면) 이면 천장형 C 중
+    무게 ≤ 1.05 × 그 무게인 것을 (무게, 번호) 순서로 시도."""
+    N = len(X)
+    opts = option_list(anchors)
+    no = len(opts)
+    bd = face_distances(ext, X, U, sp)
+    if sp:
+        from .blockpair import local_bounds
+        bnd = local_bounds(ext, X, sp)
+    D = np.full((N, no), np.inf)
+    for o, (face, frm, a) in enumerate(opts):
+        D[:, o] = bd[:, FACE_ORDER.index(face)] if a is None else anchor_distance(a, X, U)
+    KG = np.full((N, no), np.inf)
+    K = np.full((N, no), -1)
+    RF = np.zeros((N, no), dtype=bool)
+    for o, (face, frm, a) in enumerate(opts):
+        Lf = D[:, o]
+        fin = np.isfinite(Lf)
+        if not fin.any():
+            continue
+        kg, k, rf = form_weight(std, frm, nd, od, np.where(fin, Lf, -1.0))
+        KG[:, o] = np.where(fin, kg, np.inf)
+        K[:, o], RF[:, o] = k, rf
+    blo_all = np.asarray(box_lo, dtype=float).reshape(-1, 3)
+    bhi_all = np.asarray(box_hi, dtype=float).reshape(-1, 3)
+    order = np.lexsort((np.broadcast_to(np.arange(no), (N, no)), KG), axis=1)
+    best = np.full(N, -1)
+
+    def blocked(rows, o):
+        face, frm, a = opts[o]
+        Lr = D[rows, o]
+        A, B, v = member_arrays(frm, X[rows], U[rows], face, Lr, od, RF[rows, o])
+        halves = np.array([ANGLE_HALF[std.angle_of(frm, nd, int(k))] for k in K[rows, o]])
+        res = np.zeros(len(rows), dtype=bool)
+        if trace is not None and v.any():
+            trace.append((np.minimum(A, B)[v].min(0), np.maximum(A, B)[v].max(0), float(halves.max())))
+        if a is not None:
+            res |= ~anchor_contacts_ok(a, A, B, v, halves)
+            keep = np.ones(len(blo_all), dtype=bool)
+            if 0 <= a.box < len(keep):
+                keep[a.box] = False
+            bl, bh = blo_all[keep], bhi_all[keep]
+        else:
+            bl, bh = blo_all, bhi_all
+        for hv in np.unique(halves):
+            m = (halves == hv) & ~res
+            if not m.any():
+                continue
+            res[m] = members_blocked(A[m], B[m], v[m], float(hv), ext, bl, bh, others, exact,
+                                     bounds=(bnd[0][rows][m], bnd[1][rows][m]) if sp else None)
+        return res
+
+    for r in range(no):
+        todo = np.nonzero((best < 0) & np.isfinite(KG[np.arange(N), order[:, r]]))[0]
+        if not len(todo):
+            continue
+        oo = order[todo, r]
+        for o in np.unique(oo):
+            rows = todo[oo == o]
+            ok = ~blocked(rows, o)
+            best[rows[ok]] = o
+    if prefer_ceiling:
+        floor_c = np.array([f == "floor" and frm == "C" for f, frm, _ in opts])
+        ceil_c = [o for o, (f, frm, _) in enumerate(opts) if f == "ceiling" and frm == "C"]
+        rows = np.nonzero((best >= 0) & floor_c[np.maximum(best, 0)])[0]
+        for i in rows:
+            cands = sorted((KG[i, o], o) for o in ceil_c if KG[i, o] <= CEILING_PREFER * KG[i, best[i]] + 1e-12)
+            for _, o in cands:
+                if not blocked(np.array([i]), o)[0]:
+                    best[i] = o
+                    break
+    sel = best >= 0
+    ar = np.arange(N)
+    bo = np.where(sel, best, 0)
+    return {"kg": np.where(sel, KG[ar, bo], np.inf), "opt": best,
+            "L": np.where(sel, D[ar, bo], np.nan),
+            "k": np.where(sel, K[ar, bo], -1), "reinf": np.where(sel, RF[ar, bo], False)}
