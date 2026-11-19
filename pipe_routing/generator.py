@@ -383,6 +383,8 @@ def main(argv=None) -> int:
     ap.add_argument("--prefix", default="proc", help="시나리오 이름 앞부분 (밀집 세트 등, D58)")
     ap.add_argument("--stair-rule", action="store_true",
                     help="중력관 낙차를 계단식 하향 규칙(D61) 하한 이상으로 보장 (D64, 새 세트용)")
+    ap.add_argument("--d94-rule", action="store_true",
+                    help="경계 단자 직진 구간 ≥ max(3D, r) + t₁₃₅ 보장 (D107, 새 세트용)")
     ap.add_argument("--services", action="store_true", help="배관마다 유체 서비스 (D116·D117, 새 세트용)")
     ap.add_argument("--internal", action="store_true", help="내부 격벽·데크·필라·스티프너 (D113, 새 세트용)")
     ap.add_argument("--access", action="store_true", help="주 통로·장비 정비 공간 (D119, 새 세트용)")
@@ -395,7 +397,7 @@ def main(argv=None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     for i in range(args.n):
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
-                              stair_rule=args.stair_rule, services=args.services, internal=args.internal,
+                              stair_rule=args.stair_rule, d94_rule=args.d94_rule, services=args.services, internal=args.internal,
                               access=args.access, stiffeners=tuple(args.stiffeners),
                               maint_ratio=args.maint_ratio)
         name = f"{args.prefix}_{i:03d}"
