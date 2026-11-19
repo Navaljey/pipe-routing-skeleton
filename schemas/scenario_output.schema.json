@@ -30,7 +30,7 @@
               "type": "object", "required": ["pos", "face", "angle_length_mm", "kg"],
               "properties": {
                 "pos": {"$ref": "#/$defs/vec3"},
-                "face": {"enum": ["floor", "ceiling", "wall_x0", "wall_x1", "wall_y0", "wall_y1"]},
+                "face": {"anyOf": [{"enum": ["floor", "ceiling", "wall_x0", "wall_x1", "wall_y0", "wall_y1"]}, {"type": "string", "pattern": "^(floor|ceiling|wall_x0|wall_x1|wall_y0|wall_y1)@.+$", "description": "D113 지지 가능 장애물 면 (면@장애물 id)"}]},
                 "angle_length_mm": {"type": "number", "minimum": 0},
                 "kg": {"type": "number", "minimum": 0},
                 "form": {"enum": ["A", "B", "C", "D"], "description": "D80 서포트 형식"},

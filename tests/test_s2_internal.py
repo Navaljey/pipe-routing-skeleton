@@ -179,6 +179,18 @@ class AccessTest(unittest.TestCase):
         out = run(sc, solo_ref=False)
         validate_output(out)
         self.assertIn("access", out["routes"][0]["layer0"])
+        # D113 장애물 면 서포트 (면@장애물 id) 도 스키마를 통과하고, 모르는 면은 거부한다
+        import copy
+        import jsonschema
+        r0 = out["routes"][0]
+        self.assertTrue(r0["supports"])
+        ok = copy.deepcopy(out)
+        ok["routes"][0]["supports"][0]["face"] = "ceiling@INT_004"
+        validate_output(ok)
+        bad = copy.deepcopy(out)
+        bad["routes"][0]["supports"][0]["face"] = "roof@INT_004"
+        with self.assertRaises(jsonschema.ValidationError):
+            validate_output(bad)
 
 
 class GeneratorTest(unittest.TestCase):
