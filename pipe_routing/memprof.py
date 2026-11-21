@@ -223,8 +223,8 @@ def _astar_generic(space, pipe, time_limit, h_start, expand_limit=None):
     P = space.pos
     T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node),
-         af._DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, af._lmax(pipe)]), space.spack, space.smax_dir,
-         space.bend_u)
+         af._DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, af._lmax(pipe), 0.0]), space.spack, space.smax_dir,
+         space.bend_u, np.zeros(1))   # D126 휴리스틱 인자 없음 (astar_route_generic 과 같은 T)
     _, C = af._consts(space, pipe, goal)
     G = af._arc_tables(space)
     af._CURRENT.update(space=space)
