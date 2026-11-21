@@ -214,17 +214,19 @@ def layer_inventory(sc, grid=None) -> list:
 
 
 # ---------------------------------------------------------------- A* (astar_fast.astar_route_generic 과 같은 코드)
-def _astar_generic(space, pipe, time_limit, h_start, expand_limit=None):
+def _astar_generic(space, pipe, time_limit, h_start, expand_limit=None, scost=None, h_lower=None):
     from . import astar_fast as af
     from numba import types
     from numba.typed import Dict
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
     P = space.pos
-    T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
+    T = (space.step, space.elen, space.scost if scost is None else scost, space.emask, np.ascontiguousarray(P[:, 0]),
+         np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node),
-         af._DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, af._lmax(pipe), 0.0]), space.spack, space.smax_dir,
-         space.bend_u, np.zeros(1))   # D126 휴리스틱 인자 없음 (astar_route_generic 과 같은 T)
+         af._DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, af._lmax(pipe), 0.0 if h_lower is None else 1.0]),
+         space.spack, space.smax_dir, space.bend_u,
+         np.zeros(1) if h_lower is None else h_lower)   # astar_route_generic 과 같은 T (D126 인자 포함)
     _, C = af._consts(space, pipe, goal)
     G = af._arc_tables(space)
     af._CURRENT.update(space=space)
@@ -412,15 +414,15 @@ def install(grid_name: str = "g0") -> None:
                     edges=int(self.n_edges), F=self.fixed)
     LayeredGraph.__init__ = init
 
-    def astar(space, pipe, time_limit, h_start, expand_limit=None):
+    def astar(space, pipe, time_limit, h_start, expand_limit=None, **kw):
         with phase("search"):
-            return _astar_generic(space, pipe, time_limit, h_start, expand_limit)
+            return _astar_generic(space, pipe, time_limit, h_start, expand_limit, **kw)
     astar_fast.astar_route_generic = astar
 
     orig_route = layered._route
 
-    def route(g, pipe, time_limit, expand_limit=None):
-        r = orig_route(g, pipe, time_limit, expand_limit)
+    def route(g, pipe, time_limit, expand_limit=None, **kw):
+        r = orig_route(g, pipe, time_limit, expand_limit, **kw)   # D126 인자 (extra_cost·h_lower) 그대로
         F = _CUR.pop("F", None)
         if RG:
             with phase("rg_measure"):
