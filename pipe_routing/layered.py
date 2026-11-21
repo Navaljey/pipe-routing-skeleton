@@ -464,6 +464,10 @@ class _Scratch:
     """EscapeGraph._pipe_groups 를 항목 하나에 부를 때 쓰는 빈 객체 (그 함수가 속성을 기록한다)."""
 
 
+# D126 지도 조회 API — 선수가 읽어도 되는 LayeredGraph 배열 (`docs/verifier_api.md` §6). 그 밖의 속성은 비공개.
+PUBLIC_ARRAYS = ("step", "elen", "emask", "scost", "spack", "pos", "hdist")
+
+
 class LayeredGraph:
     """SpaceRepresentation (§4.1) — 노드 = 정수 id. 엘보·도착·직관 규칙은 EscapeGraph 와 같은 함수를 빌려 쓴다."""
 
@@ -492,6 +496,7 @@ class LayeredGraph:
         self.grid = grid
         self.fixed = F
         self.pipe = pipe
+        self.sc = sc   # D126 route_graph 의 세트 상한 (default_budget) 용
         self.r = pipe.radius
         self.L = pipe.min_straight
         self.tangent = {a: elbow_tangent(pipe.nominal_size, a) for a in (0, 45, 90, 135)}
@@ -592,6 +597,8 @@ class LayeredGraph:
         goal = np.array(pipe.end.pos, dtype=float)
         self.hdist = np.sqrt(((self.pos - goal) ** 2).sum(1))
         self._window_bound(sc, pipe, goal)
+        for name in PUBLIC_ARRAYS:   # D126: 공개 읽기 배열은 읽기 전용 — 제자리 쓰기는 즉시 오류 (지도 공유 캐시 오염 방지)
+            getattr(self, name).flags.writeable = False
         self.build_sec = time.perf_counter() - t0 + fixed_sec
         self.fixed_sec = fixed_sec
 
@@ -1229,11 +1236,48 @@ class LayeredGraph:
                 "fixed_grid": list(self.fixed.shape)}
 
 
-def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
+def _check_extra(g, extra_cost, h_lower):
+    """D126 인자 확인 — 모양·유한·0 이상. 반환 (탐색용 scost 또는 None, h_lower 또는 None)."""
+    sc = None
+    if extra_cost is not None:
+        x = np.asarray(extra_cost, dtype=np.float64)
+        if x.shape != g.scost.shape:
+            raise ValueError(f"extra_cost 모양 {x.shape} ≠ 지도 엣지 표 {g.scost.shape} (D126)")
+        if not np.isfinite(x).all() or (x < 0).any():
+            raise ValueError("extra_cost 는 유한하고 0 이상이어야 한다 (D126 — 음수면 A* 최적성이 깨진다)")
+        sc = g.scost + x
+    hl = None
+    if h_lower is not None:
+        hl = np.ascontiguousarray(h_lower, dtype=np.float64)
+        if hl.shape != (len(g.pos),):
+            raise ValueError(f"h_lower 모양 {hl.shape} ≠ 노드 수 ({len(g.pos)},) (D126)")
+        if not np.isfinite(hl).all() or (hl < 0).any():
+            raise ValueError("h_lower 는 유한하고 0 이상이어야 한다 (D126)")
+    return sc, hl
+
+
+def route_graph(g: "LayeredGraph", pipe, time_limit: float = 60.0, expand_limit="default", extra_cost=None,
+                h_lower=None) -> RouteResult:
+    """D126 공식 라우팅 호출 — 지도 g 위 기준선 A* (컴파일, D53).
+
+    extra_cost = 엣지별 추가 비용 (N, 18), 0 이상 — 탐색 비용에만 더한다 (지도·J·support_est 는 그대로, 협상 가격용).
+    h_lower = 노드별 하한 (N,), 0 이상 — h = max(D41 h, h_lower[노드]). 남은 비용 (extra_cost 포함) 의 하한이어야
+    최적성이 보존된다 (admissible·consistent 는 부르는 쪽 책임, D40 ①). 둘 다 None 이면 결과는 기준선과 비트 동일.
+    expand_limit = "default" 이면 세트 상한 (D73·D92 ③), None 이면 벽시계 time_limit."""
+    if expand_limit == "default":
+        expand_limit = default_budget(g.sc)
+    return _route(g, pipe, time_limit, expand_limit, extra_cost=extra_cost, h_lower=h_lower)
+
+
+def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None, extra_cost=None, h_lower=None) -> RouteResult:
     from .astar_fast import astar_route_generic
     t0 = time.perf_counter()
     h = heuristic_factory(g, pipe)
-    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h(g.start_state(pipe)), expand_limit)
+    sc, hl = _check_extra(g, extra_cost, h_lower)
+    s0 = g.start_state(pipe)
+    h0 = h(s0) if hl is None else max(h(s0), float(hl[s0.node]))
+    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h0, expand_limit, scost=sc,
+                                                             h_lower=hl)
     if status != "ok":
         return RouteResult(pipe.id, status, expanded=expanded, generated=generated,
                            search_sec=time.perf_counter() - t0)
@@ -1308,14 +1352,17 @@ class SupportMembers:
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
                         diagnostic: bool = True, support_lines: bool = True, member_reserve: bool = True,
-                        _members: "SupportMembers | None" = None, _diag: bool = False):
+                        _members: "SupportMembers | None" = None, _diag: bool = False,
+                        extra_cost=None, h_lower=None):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
     expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
     diagnostic = D74 진단용 라우터(예산 = diag_limit(라우팅 예산), D127)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
     member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다.
-    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²). _diag = 진단 라우터 (상한 = diag_limit)."""
+    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²). _diag = 진단 라우터 (상한 = diag_limit).
+    extra_cost·h_lower = D126 공식 인자 — 함수 (g, pipe, placed) → 배열 또는 None (route_graph 와 같은 뜻). 하위 라우터
+    (진단·예약 없음) 에도 같은 함수를 넘긴다. 없으면 결과는 기준선과 비트 동일."""
     auto = expand_limit == "default"
 
     def limit_for(sc):
@@ -1330,7 +1377,9 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
         members = _members(sc, placed) if member_reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
                          grid=grid, incremental=incremental, support_lines=support_lines, members=members)
-        r = _route(g, pipe, time_limit, limit_for(sc))
+        r = _route(g, pipe, time_limit, limit_for(sc),
+                   extra_cost=None if extra_cost is None else extra_cost(g, pipe, placed),
+                   h_lower=None if h_lower is None else h_lower(g, pipe, placed))
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
@@ -1364,14 +1413,14 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                                                           incremental=incremental, expand_limit=expand_limit,
                                                           diagnostic=False, support_lines=support_lines,
                                                           member_reserve=member_reserve, _members=_members,
-                                                          _diag=_diag)
+                                                          _diag=_diag, extra_cost=extra_cost, h_lower=h_lower)
     if with_diag:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
                                                 incremental=incremental,
                                                 expand_limit=expand_limit,
                                                 diagnostic=False, support_lines=support_lines,
                                                 member_reserve=member_reserve, _members=_members,
-                                                _diag=True)
+                                                _diag=True, extra_cost=extra_cost, h_lower=h_lower)
         router.search_budget["diagnosis_limit"] = diag_limit(router.search_budget["limit"])
     return router
 

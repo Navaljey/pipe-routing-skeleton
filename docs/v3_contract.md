@@ -134,7 +134,7 @@ V3 결과는 반드시 이 검증기로 판정한 출력 JSON 이어야 한다. 
 skeleton 지도 (`LayeredGraph` 등) 를 읽거나 비용·휴리스틱을 넣는 선수는 **공개 API 만** 쓴다 — 공개 목록과 자료형은 `docs/verifier_api.md` "지도 조회" 절.
 - **공개 읽기 배열** (`step`·`elen`·`emask`·`scost`·`spack`, L3 후 이름은 그 절) 만 읽는다. 목록에 없는 속성 (`_item_cache` 등) 은 비공개 — 예고 없이 바뀐다.
 - 노출 배열은 **읽기 전용** (`writeable=False`) — 제자리 쓰기 (예: `g.scost[...] += 가격`) 는 즉시 오류다.
-- 협상 가격 같은 엣지별 추가 비용은 **공식 비용 덧셈 인자**로, 하한 (rg 등) 은 **공식 휴리스틱 인자**로 라우터에 넘긴다. `astar_fast` 소스 패치는 쓰지 않는다. 두 인자를 쓰지 않으면 결과는 기준선과 비트 동일.
+- 협상 가격 같은 엣지별 추가 비용은 **공식 비용 덧셈 인자**로, 하한 (rg 등) 은 **공식 휴리스틱 인자**로 라우터에 넘긴다 — `layered.route_graph(g, pipe, extra_cost=, h_lower=)` 또는 `make_layered_router(extra_cost=f, h_lower=h)`. `astar_fast` 소스 패치는 쓰지 않는다. 두 인자를 쓰지 않으면 결과는 기준선과 비트 동일.
 - 순서: API 병합 → 사양 세션이 V3 에 통보 → V3 이전 확인 → L3 (저장 형식 축소) 병합. L3 는 공개 배열의 자료형을 바꿀 수 있다 — 바뀌는 것은 그 절의 표에 미리 적는다.
 - 서포트 막힘의 책임 배관은 힌트 `SupportHint.support_blockers` (D128) 로 묻는다. 그것이 나온 뒤 `support_diag._support_of`·`verifier.session._reach`·`_segs` 는 공개 약속 대상이 아니다.
 
