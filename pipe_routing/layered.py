@@ -44,6 +44,13 @@ def default_budget(sc) -> int:
     """세트별 배관당 확장 상한 (D73·D92 ③): 블록 쌍 = 2²³, 그 밖 = 2²²."""
     return EXPAND_BUDGET_PAIR if getattr(sc, "block_pair", None) else EXPAND_BUDGET
 DIAG_FACTOR = 4             # D74: 실패 분류용 진단 단독 재라우팅 예산 = 라우팅 예산 × 4 (16,777,216)
+DIAG_CAP = 33_554_432       # = 2²⁵ (D127)
+
+
+def diag_limit(limit: int) -> int:
+    """D127 진단 상한 = min(4 × 라우팅 상한, max(라우팅 상한, 2²⁵)).
+    단일 블록 2²² → 2²⁴, 블록 쌍 2²³ → 2²⁵ (D74 와 같음), 참조 품질선 2²⁵ → 2²⁵ (이전 2²⁷)."""
+    return min(DIAG_FACTOR * limit, max(limit, DIAG_CAP))
 
 _FIXED: "OrderedDict" = OrderedDict()   # (id(scenario), 구경, 중력관 층 여부, 격자 변형[, 블록 쌍 층]) → (scenario, 고정 레이어)
 PAIR_MAX_LAYERS = 4   # 블록 쌍 시나리오에서 메모리에 두는 고정 층 수 (LRU, D76 — 2배 맵 층은 약 0.5 GB)
@@ -1301,18 +1308,19 @@ class SupportMembers:
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
                         diagnostic: bool = True, support_lines: bool = True, member_reserve: bool = True,
-                        _members: "SupportMembers | None" = None, _factor: int = 1):
+                        _members: "SupportMembers | None" = None, _diag: bool = False):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
     expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
-    diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
+    diagnostic = D74 진단용 라우터(예산 = diag_limit(라우팅 예산), D127)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
     member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다.
-    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²) × _factor (진단 4)."""
+    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²). _diag = 진단 라우터 (상한 = diag_limit)."""
     auto = expand_limit == "default"
 
     def limit_for(sc):
-        return default_budget(sc) * _factor if auto else expand_limit
+        lim = default_budget(sc) if auto else expand_limit
+        return diag_limit(lim) if _diag and lim is not None else lim
 
     if member_reserve and _members is None:
         _members = SupportMembers()
@@ -1343,7 +1351,7 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
         if auto:
             out["set"] = "block_pair" if getattr(sc, "block_pair", None) else "single_block"
         if with_diag:
-            out["diagnosis_limit"] = lim * DIAG_FACTOR
+            out["diagnosis_limit"] = diag_limit(lim)
         return out
 
     router.budget_for = budget_for
@@ -1356,15 +1364,15 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                                                           incremental=incremental, expand_limit=expand_limit,
                                                           diagnostic=False, support_lines=support_lines,
                                                           member_reserve=member_reserve, _members=_members,
-                                                          _factor=_factor)
+                                                          _diag=_diag)
     if with_diag:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
                                                 incremental=incremental,
-                                                expand_limit="default" if auto else expand_limit * DIAG_FACTOR,
+                                                expand_limit=expand_limit,
                                                 diagnostic=False, support_lines=support_lines,
                                                 member_reserve=member_reserve, _members=_members,
-                                                _factor=_factor * DIAG_FACTOR if auto else 1)
-        router.search_budget["diagnosis_limit"] = router.search_budget["limit"] * DIAG_FACTOR
+                                                _diag=True)
+        router.search_budget["diagnosis_limit"] = diag_limit(router.search_budget["limit"])
     return router
 
 
