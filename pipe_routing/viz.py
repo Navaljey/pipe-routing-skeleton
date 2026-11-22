@@ -76,6 +76,8 @@ def add_obstacles(fig: go.Figure, sc: Scenario) -> None:
         # D113·D119: 판 (관통 가능) = 노랑 반투명, 필라·스티프너 (지지면) = 갈색, 접근 구역 = 초록 반투명, 장비 = 회색
         if o.access:
             col, op, hover = "#2ca02c", 0.15, hover + "<br>접근 구역 (D119): 배관·서포트 부재 진입 금지"
+        elif o.type == "tray":
+            col, op, hover = "#ff7f0e", 0.55, hover + "<br>케이블 트레이 (D131): 고정 장애물 · 지지면 아님"
         elif o.penetrable:
             col, op, hover = "#e5c100", 0.18, hover + "<br>판 (D113): 지지면 · 관통 가능 (관통 축 직관만)"
         elif o.supportable:
@@ -89,6 +91,16 @@ def add_obstacles(fig: go.Figure, sc: Scenario) -> None:
     fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="lines", name=f"장애물 ({len(sc.obstacles)})",
                                legendgroup="obstacles", line=dict(color="#4a4f58", width=2),
                                hoverinfo="skip"))
+    for n_f, f in enumerate(getattr(sc, "floor_openings", None) or ()):   # D130 바닥 개구부 (바닥 지지 불가)
+        (x0, y0), (x1, y1) = f["min"], f["max"]
+        fig.add_trace(go.Mesh3d(x=[x0, x1, x1, x0], y=[y0, y0, y1, y1], z=[0, 0, 0, 0], i=[0, 0], j=[1, 2], k=[2, 3],
+                                color="#d62728", opacity=0.35, name=f["id"], legendgroup="openings",
+                                showlegend=False, hoverinfo="text",
+                                hovertext=f"<b>{f['id']}</b> 바닥 개구부 (D130): 바닥 지지 불가<br>"
+                                          f"x {x0:g}~{x1:g} · y {y0:g}~{y1:g}"))
+        fig.add_trace(go.Scatter3d(x=[x0, x1, x1, x0, x0], y=[y0, y0, y1, y1, y0], z=[0] * 5, mode="lines",
+                                   name="바닥 개구부", legendgroup="openings", showlegend=n_f == 0,
+                                   line=dict(color="#d62728", width=5), hoverinfo="skip"))
 
 
 def add_terminals(fig: go.Figure, sc: Scenario, connect: bool = True) -> None:

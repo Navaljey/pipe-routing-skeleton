@@ -149,6 +149,7 @@ class Scenario:
     meta: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     block_pair: Optional[dict] = None   # D76 ①: {"shared_x": x} — 블록 2개를 x 방향으로 이은 합친 맵
+    floor_openings: list = field(default_factory=list)   # D130: [{"id", "min": [x, y], "max": [x, y]}] 바닥 개구부
 
     def summary(self) -> dict:
         vol = self.block.width * self.block.length * self.block.height
@@ -351,6 +352,8 @@ def from_dict(data: dict) -> Scenario:
                for p in data["pipes"]],
         meta=dict(data.get("meta", {})),
         block_pair=dict(data["block_pair"]) if data.get("block_pair") else None,
+        floor_openings=[{"id": f["id"], "min": [float(c) for c in f["min"]], "max": [float(c) for c in f["max"]]}
+                        for f in data.get("floor_openings", [])],
     )
     errors, warnings = validate(sc)
     if errors:
@@ -380,6 +383,17 @@ def validate(sc: Scenario) -> tuple[list[str], list[str]]:
             errors.append(f"{o.id}: min < max 가 아님")
         if any(lo < 0 or hi > e for lo, hi, e in zip(o.box.min, o.box.max, ext)):
             errors.append(f"{o.id}: 블록 범위 밖")
+
+    for f in sc.floor_openings:   # D130 바닥 개구부: 10 mm 격자 · 구역 안 · min < max · id 중복 없음
+        if f["id"] in ids:
+            errors.append(f"id 중복: {f['id']}")
+        ids.add(f["id"])
+        snapped(f"{f['id']}.min", (*f["min"], 0.0))
+        snapped(f"{f['id']}.max", (*f["max"], 0.0))
+        if any(lo >= hi for lo, hi in zip(f["min"], f["max"])):
+            errors.append(f"{f['id']}: min < max 가 아님")
+        if any(lo < 0 or hi > e for lo, hi, e in zip(f["min"], f["max"], ext[:2])):
+            errors.append(f"{f['id']}: 구역 범위 밖")
 
     spec_err = _spec_errors(sc)
     if spec_err:   # 사양을 못 읽으면 단자 규약 (r) 판정을 할 수 없다
@@ -558,6 +572,8 @@ def to_dict(sc: Scenario) -> dict:
                     "height": num(sc.block.height), "unit": "mm"}
     if sc.block_pair:
         out["block_pair"] = {k: num(v) for k, v in sc.block_pair.items()}
+    if sc.floor_openings:
+        out["floor_openings"] = [{"id": f["id"], "min": vec(f["min"]), "max": vec(f["max"])} for f in sc.floor_openings]
     out["obstacles"] = [{"id": o.id, "type": o.type, "min": vec(o.box.min), "max": vec(o.box.max),
                          **({"supportable": True} if o.supportable else {}),
                          **({"penetrable": True} if o.penetrable else {}),
