@@ -1,0 +1,145 @@
+# 구역 배치 설명서 (D124 ③) — 첫 템플릿 (M36) v1
+# 기관실 2nd deck "형" 가상 템플릿 — 실제 도면 좌표를 옮기지 않았다 (D124 ④).
+# 소유자가 보여 준 실제 모델 화면에서 배치 "규칙" 만 읽었다: 구조 반복 · 방 구성 · 케이싱 둘레 고리 통로 ·
+# 장비 묶음 · 배관 흐름 · 케이블 트레이가 통로 위를 따라감. 원본 화면은 이 레포에 두지 않는다.
+# 수치: 2026-11-22 소유자 승인 ("제시한 수치대로") — 경험값, 실제 특정 선박 값 아님.
+# 해석 규칙: D130 (바닥 개구부) · D131 (케이블 트레이) · D132 (깊은 웹) · D133 (구역 높이 범위).
+
+template: ER_2ND_GENERIC_A
+version: 1
+units: mm
+axes: {x: 선미→선수 (길이), y: 좌현→우현 (폭), z: 데크 윗면 → 윗데크 아랫면}
+
+zone:
+  size: [36000, 30000, 5200]        # z = 이 데크 윗면 → 윗데크 판 아랫면 (D133)
+  floor: {supportable: true}         # 이 데크 윗면
+  ceiling: {supportable: true}       # 윗데크 아랫면
+
+# ── 구조 (규칙으로 펼침: 같은 좌표 공유 → 격자선 수 억제) ──────────────
+structure:
+  ceiling_longitudinals:             # 윗데크 아래 종늑골 (D113 스티프너, 지지면)
+    run: x
+    spacing_y: 800
+    section: [250, 90]               # 높이 × 폭
+    hang_from: ceiling
+  ceiling_web_frames:                # 윗데크 아래 트랜스 웹 (깊은 보)
+    run: y
+    spacing_x: 3200                  # 늑골 간격 800 × 4
+    section: [800, 20]
+    face_plate: [150, 20]
+    hang_from: ceiling
+    attributes: {supportable: true, penetrable: false}   # D132: 웹 관통은 M27 (거더·웹 구멍) 전까지 불가
+  side_shell_frames:                 # 양현 외판 쪽 수직 웹 (사진 좌측의 촘촘한 보라색 부재)
+    sides: [port, stbd]
+    band_y: 1500                     # 외판에서 안쪽으로 이 폭 안에만
+    spacing_x: 800
+    section: [300, 15]
+  pillars:                           # D113 필라
+    grid_x: [9600, 25600]
+    grid_y: [7000, 23000]
+    size: [300, 300]
+  bulkheads:                         # 내부 격벽 (D113 판, 관통 가능)
+    - {id: BHD_PUR, axis: x, at: 9600,  span_y: [1500, 11000], thickness: 12}   # 청정기실 벽
+    - {id: BHD_WS,  axis: y, at: 22000, span_x: [24000, 34500], thickness: 12}  # 공작실·창고 벽
+
+# ── 기관 케이싱 개구부 (가운데) ─────────────────────────────────────
+casing:
+  id: ER_CASING
+  box: [[13000, 10500], [23000, 19500]]   # 평면 xy
+  wall: {thickness: 10, supportable: true, penetrable: false}
+  contents:                          # 개구부 안 — 배관 금지 구역으로 본다
+    - {id: ME_TOP, type: equipment, box: [[14000, 12000, 0], [22000, 15500, 3200]]}   # 주기관 상부·배기 리시버 (상자 근사)
+    - {id: UPTAKE_1, type: equipment, box: [[15000, 16000, 0], [17200, 18800, 5200]]}  # 배기 업테이크 (윗데크까지)
+    - {id: UPTAKE_2, type: equipment, box: [[19800, 16500, 0], [21200, 18800, 5200]]}
+  maintenance: {access: true, above: ME_TOP, height_to: ceiling}   # 오버홀 크레인 공간 (D119)
+
+# ── 통로 (D119 접근 구역) ───────────────────────────────────────────
+passages:
+  ring:                              # 케이싱 둘레 고리 통로 (사진의 노란 고리)
+    around: ER_CASING
+    offset: 1200
+    width: 1000
+    height: 2000
+  spokes:                            # 고리 → 계단·문
+    - {from: ring, to: STAIR_P, width: 900}
+    - {from: ring, to: STAIR_S, width: 900}
+    - {from: ring, to: DOOR_PUR, width: 900}
+    - {from: ring, to: DOOR_WS, width: 900}
+  stairs:
+    - {id: STAIR_P, box: [[11000, 4000], [12200, 6500]], to: [lower, upper]}
+    - {id: STAIR_S, box: [[24500, 23500], [25700, 26000]], to: [lower, upper]}
+  hatches:                           # 바닥 개구부 + 난간 (사진 우측 큰 사각 개구부)
+    - {id: HATCH_1, box: [[27000, 4000], [33000, 9000]], floor_opening: true, handrail: 1100}   # D130
+
+# ── 케이블 트레이 (D131 — 먼저 깔린 고정 장애물, 지지면 아님·관통 불가) ──────────
+cable_trays:
+  - {id: TRAY_RING, follow: passages.ring, side: outer, width: 600, height: 150, z_top: 4300}   # 고리 통로 위, 천장 웹 아래
+  - {id: TRAY_SPOKE_P, follow: "passages.spokes[0]", width: 450, height: 120, z_top: 4300}
+  - {id: TRAY_SPOKE_S, follow: "passages.spokes[1]", width: 450, height: 120, z_top: 4300}
+  - {id: TRAY_DROP_ME, from: TRAY_RING, to: ME_TOP, vertical: true, width: 300, depth: 120}       # 기관 쪽 수직 내림
+
+# ── 장비 (상자 근사, 변화 범위 포함) ─────────────────────────────────
+equipment:
+  - {id: FO_SETT_TK, kind: tank, room: open, box: [[2000, 2500, 0], [6000, 6500, 4500]], vary: {pos: 500}}   # 원통 → 상자
+  - {id: FO_SERV_TK, kind: tank, room: open, box: [[2000, 8000, 0], [6000, 12000, 4500]], vary: {pos: 500}}
+  - {id: LO_SETT_TK, kind: tank, room: open, box: [[2000, 14000, 0], [5000, 17000, 3500]], vary: {pos: 500}}
+  - {id: FO_PUR_1, kind: module, room: PUR, box: [[10200, 2000, 0], [12200, 3500, 1800]], vary: {pos: 300}}
+  - {id: FO_PUR_2, kind: module, room: PUR, box: [[10200, 4000, 0], [12200, 5500, 1800]], vary: {pos: 300}}
+  - {id: LO_PUR_1, kind: module, room: PUR, box: [[10200, 7000, 0], [12200, 8500, 1800]], vary: {pos: 300}}
+  - {id: FO_SUPPLY_UNIT, kind: skid, box: [[7000, 20000, 0], [10000, 22500, 2200]], vary: {pos: 500}}
+  - {id: FW_COOLER, kind: hx, box: [[24000, 12000, 0], [25500, 15000, 2000]], vary: {pos: 500}}
+  - {id: SW_PUMP_1, kind: pump, box: [[26000, 13000, 0], [27000, 14000, 1500]], vary: {pos: 300}}
+  - {id: SW_PUMP_2, kind: pump, box: [[26000, 15000, 0], [27000, 16000, 1500]], vary: {pos: 300}}
+  - {id: AIR_RCV_1, kind: vessel, box: [[29000, 18000, 0], [30500, 19500, 3000]], vary: {pos: 500}}
+  - {id: AIR_RCV_2, kind: vessel, box: [[29000, 20500, 0], [30500, 22000, 3000]], vary: {pos: 500}}
+  - {id: AIR_COMP, kind: skid, box: [[31500, 18000, 0], [33500, 20500, 1800]], vary: {pos: 500}}
+  - {id: BLR_FW_PUMP, kind: pump, box: [[8000, 13000, 0], [9000, 14000, 1500]], vary: {pos: 300}}
+  - {id: HOTWELL, kind: tank, box: [[6500, 24000, 0], [9000, 27000, 2500]], vary: {pos: 500}}
+  - {id: WS_CABINETS, kind: store, room: WS, box: [[25000, 23000, 0], [34000, 28500, 2200]]}   # 공작실 선반·캐비닛 묶음
+  # 모든 장비: 노즐 없는 수평 면 하나에 정비 공간 800 (D119, 생성기 규칙)
+
+# ── 배관 목록 (서비스·구경·연결) — 30~50 개로 시작 (D124 ⑤) ────────────
+# 단자: 장비id.면 = 노즐 (D28), DECK_DN/UP(x,y) = 아래·윗데크 관통 경계 단자, BHD = 격벽 관통
+pipes:
+  - {svc: FO, size: 100A, from: FO_SETT_TK.east, to: FO_PUR_1.west}
+  - {svc: FO, size: 100A, from: FO_SETT_TK.east, to: FO_PUR_2.west}
+  - {svc: FO, size: 65A,  from: FO_PUR_1.north,  to: FO_SERV_TK.east}
+  - {svc: FO, size: 65A,  from: FO_PUR_2.north,  to: FO_SERV_TK.east}
+  - {svc: FO, size: 100A, from: FO_SERV_TK.east, to: FO_SUPPLY_UNIT.south}
+  - {svc: FO, size: 100A, from: FO_SUPPLY_UNIT.east, to: ME_TOP.west}          # 기관 공급
+  - {svc: FO, size: 50A,  from: ME_TOP.north,    to: "DECK_DN(12000, 22000)"}    # 리턴 → 아래 데크
+  - {svc: LO, size: 65A,  from: LO_SETT_TK.east, to: LO_PUR_1.west}
+  - {svc: LO, size: 65A,  from: LO_PUR_1.north,  to: "DECK_DN(12500, 9500)"}     # 섬프 쪽
+  - {svc: SW, size: 300A, from: "DECK_DN(26500, 11000)", to: SW_PUMP_1.south}
+  - {svc: SW, size: 300A, from: "DECK_DN(26500, 17000)", to: SW_PUMP_2.north}
+  - {svc: SW, size: 300A, from: SW_PUMP_1.west, to: FW_COOLER.east}
+  - {svc: SW, size: 300A, from: SW_PUMP_2.west, to: FW_COOLER.east}
+  - {svc: SW, size: 300A, from: FW_COOLER.north, to: "DECK_DN(23500, 9000)"}    # 배출
+  - {svc: FW, size: 150A, from: FW_COOLER.west, to: ME_TOP.east}
+  - {svc: FW, size: 150A, from: ME_TOP.east, to: FW_COOLER.south}
+  - {svc: CA, size: 50A,  from: AIR_COMP.west, to: AIR_RCV_1.east}
+  - {svc: CA, size: 50A,  from: AIR_COMP.west, to: AIR_RCV_2.east}
+  - {svc: CA, size: 65A,  from: AIR_RCV_1.south, to: ME_TOP.east}             # 시동 공기
+  - {svc: CA, size: 25A,  from: AIR_RCV_2.north, to: WS_CABINETS.south}        # 작업 공기
+  - {svc: ST, size: 100A, from: "DECK_UP(8000, 18000)", to: FO_SETT_TK.north}   # 탱크 가열 증기
+  - {svc: ST, size: 50A,  from: "DECK_UP(8000, 18000)", to: FO_SERV_TK.north}
+  - {svc: ST, size: 50A,  from: "DECK_UP(8000, 18000)", to: FO_SUPPLY_UNIT.north}
+  - {svc: CN, size: 50A,  from: FO_SETT_TK.south, to: HOTWELL.west}
+  - {svc: CN, size: 50A,  from: FO_SERV_TK.south, to: HOTWELL.west}
+  - {svc: CN, size: 65A,  from: HOTWELL.east, to: BLR_FW_PUMP.south}
+  - {svc: CN, size: 65A,  from: BLR_FW_PUMP.north, to: "DECK_UP(9000, 15000)"}
+  - {svc: FF, size: 150A, from: "DECK_DN(31000, 10000)", to: "BHD(BHD_WS)"}       # 소화 주관 → 격벽 관통
+  - {svc: FF, size: 100A, from: "DECK_DN(31000, 10000)", to: "DECK_UP(4000, 27000)"}
+  - {svc: BG, size: 100A, from: "DECK_DN(18000, 24000)", to: "DECK_DN(5000, 27000)"}
+  - {svc: SD, size: 100A, from: WS_CABINETS.west, to: "DECK_DN(22000, 27500)"}  # 중력 (위→아래)
+  - {svc: DD, size: 65A,  from: "DECK_UP(30000, 27000)", to: "DECK_DN(29000, 26500)"}
+  - {svc: DD, size: 65A,  from: "DECK_UP(3000, 20000)", to: "DECK_DN(2500, 19000)"}
+  # … 생성기가 위 목록을 기준으로 배관 수 30 → 50 까지 늘린다 (같은 서비스 배관 복제 + 단자 흔들기)
+
+# ── 변형 범위 (템플릿 + 시드 → 시나리오) ──────────────────────────────
+variation:
+  equipment_pos: per_item            # 각 장비 vary.pos (mm) 안에서 이동, 통로·케이싱과 겹치면 다시 뽑기
+  equipment_size: 0.10               # ±10 %
+  pipe_count: [30, 50]
+  terminal_jitter: 300               # 데크 관통 단자 위치 흔들기
+  structure: fixed                   # 구조 (늑골 간격 등) 는 흔들지 않음 — 격자선 공유 유지
