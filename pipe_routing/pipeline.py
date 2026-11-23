@@ -75,6 +75,28 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) 
     return {k: round(v, 4) for k, v in J.items()}
 
 
+def tree_fields(p: Pipe, r, v, legs: dict) -> dict:
+    """routes[] 나무 필드: tree {main, legs[{leg_id, nominal_size, flow, found, waypoints (티 → 단자), tee {pos, angle}}],
+    method} (D112 Q9·Q10) · legs_passed / legs_total (D134 보완 3 — 다리 가상 배관 Layer 0 + branch 모듈의 그 다리 위반 없음)."""
+    tr = getattr(r, "tree", None) or {"method": None, "legs": []}
+    bad = {x.message.split(":")[0].replace("다리 ", "").split(" ")[0] for x in v.violations if x.module == "branch"}
+    passed = 0
+    legs_out = []
+    byleg = {lg["leg_id"]: lg for lg in tr.get("legs", [])}
+    for b in p.branches:
+        lg = byleg.get(b.id) or {"leg_id": b.id, "nominal_size": b.nominal_size, "flow": b.flow, "found": False,
+                                  "waypoints": [], "tee": None}
+        rep = legs.get(f"{p.id}.{b.id}")
+        ok = bool(lg.get("found")) and rep is not None and rep.success and b.id not in bad
+        passed += ok
+        legs_out.append({"leg_id": b.id, "nominal_size": b.nominal_size, "flow": b.flow, "found": bool(lg.get("found")),
+                         "waypoints": [[round(c, 3) for c in w] for w in lg.get("waypoints", [])],
+                         "tee": lg.get("tee")})
+    main = [[round(c, 3) for c in w] for w in r.waypoints] if r.status == "ok" else []
+    return {"tree": {"main": main, "legs": legs_out, "method": tr.get("method")},
+            "legs_passed": int(passed), "legs_total": len(p.branches)}
+
+
 def tree_j(sc, pipe: Pipe, route, rep, legs: dict) -> dict:
     """D134 분기 계통 J = 주관 (주관 구경) + 다리마다 (다리 구경, 흐름 순서) 의 j_breakdown 합. 티 무게 0 (D112).
     rep = 합친 계통 보고 (main_fittings·main_supports 를 가진다), legs = {다리 가상 id: 다리 보고}."""
@@ -134,15 +156,21 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
     results = plan.routes
     route_sec = time.perf_counter() - t0
     std = load_standard()   # D78·D80 서포트 표준 (비공개 표 또는 공개 임시 표)
-    rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else []) for pid, r in results.items()], std=std)
+    rep = verify(sc, [PipeRoute(pid, r.waypoints if r.status == "ok" else [],
+                                getattr(r, "branches", []) if r.status == "ok" else [])
+                      for pid, r in results.items()], std=std)
     ext = np.array(sc.block.extent, dtype=float)
+    legs_rep = rep.get("legs", {})
 
     routes = []
     from .pipe_spec import line_numbers
     names = line_numbers(sc)
     for p in sc.pipes:
         r, v = results[p.id], rep["pipes"][p.id]
-        J = j_breakdown(p, r.waypoints, v.fittings, v.supports, sc) if v.routed else None
+        if v.routed and p.branches:   # D134 분기 계통: 주관 + 다리 J 합
+            J = tree_j(sc, p, PipeRoute(p.id, r.waypoints, getattr(r, "branches", [])), v, legs_rep.get(p.id, {}))
+        else:
+            J = j_breakdown(p, r.waypoints, v.fittings, v.supports, sc) if v.routed else None
         tries = plan.attempts.get(p.id, [])
         entry = {
             "pipe_id": p.id,
@@ -174,6 +202,8 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
                        "graph_sec_total": round(sum(a["graph_sec"] for a in tries), 3),
                        "search_sec_total": round(sum(a["search_sec"] for a in tries), 3)},
         }
+        if p.branches:   # D112·D134 출력 나무 (S2-0 스키마) + 보완 3 통과 다리 수 (보조 지표)
+            entry.update(tree_fields(p, r, v, legs_rep.get(p.id, {})))
         routes.append(entry)
     total_sec = time.perf_counter() - t0
     g = global_summary(routes, total_sec, route_sec, rep["sec"])
@@ -205,6 +235,9 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         "fixed_layers": fixed_layer_stats(sc),   # D66: 구경별 고정 레이어 격자·노드·생성 시간
         "terminal_rules": _terminal_rules(),     # D94·D96 관통·경계 단자 직관 규칙
     })
+    if any(p.branches for p in sc.pipes):
+        g["legs_passed_total"] = sum(x.get("legs_passed", 0) for x in routes)   # D134 보완 3 (판정에 안 씀)
+        g["legs_total"] = sum(x.get("legs_total", 0) for x in routes)
     if any(p.service is not None or p.pipe_class is not None for p in sc.pipes):
         from . import pipe_spec
         g["pipe_class_standard"] = pipe_spec.standard_info()   # D117 (D78 방식)

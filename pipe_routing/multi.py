@@ -69,6 +69,22 @@ def _pieces(pipe: Pipe, wps):
     return A, B, S
 
 
+def system_parts(pipe: Pipe, r) -> list:
+    """D134 계통의 놓인 조각 [(배관, 흐름 순서 꺾임점)] — 주관 + 찾은 다리 (다리 가상 배관). 분기 없는 배관 = [(배관, 경로)]."""
+    out = [(pipe, r.waypoints)]
+    if getattr(pipe, "branches", None):
+        from .tree import leg_flow, leg_flow_pipe
+        for b, g in zip(pipe.branches, getattr(r, "branches", None) or []):
+            if g and len(g) >= 2:
+                out.append((leg_flow_pipe(pipe, b, g), leg_flow(g, b.flow)))
+    return out
+
+
+def systems_conflict(p1: Pipe, r1, p2: Pipe, r2) -> bool:
+    """계통 단위 충돌 (D134 ③) — 조각 어느 쌍이든 routes_conflict. 분기 없으면 routes_conflict 그대로."""
+    return any(routes_conflict(a, wa, b, wb) for a, wa in system_parts(p1, r1) for b, wb in system_parts(p2, r2))
+
+
 def routes_conflict(p1: Pipe, w1, p2: Pipe, w2) -> bool:
     """두 배관 중심선(직관 + 엘보 호)이 r₁ + r₂ 안으로 들어오는가 (검증기 _pipe_hits 와 같은 식)."""
     A1, B1, S1 = _pieces(p1, w1)
@@ -104,7 +120,7 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
     res = PlanResult(routes={}, order=order, planner="sequential_ripup")
 
     def placed_items(placed: dict, exclude=None):
-        return [(pipes[pid], placed[pid].waypoints) for pid in order if pid in placed and pid != exclude]
+        return [it for pid in order if pid in placed and pid != exclude for it in system_parts(pipes[pid], placed[pid])]
 
     def lay(seq, placed: dict, routes: dict):
         for pid in seq:
@@ -134,7 +150,7 @@ def sequential_ripup_planner(sc: Scenario, router: Callable = astar_router, time
             res.events.append(f"{f}: 단독 실패({s.status}) — rip-up 대상 아님")
             continue
         blockers = [pid for pid in order if pid in placed
-                    and routes_conflict(pipes[f], s.waypoints, pipes[pid], placed[pid].waypoints)]
+                    and systems_conflict(pipes[f], s, pipes[pid], placed[pid])]
         if not blockers:
             res.events.append(f"{f}: 단독 경로와 충돌하는 배관 없음 — rip-up 생략")
             continue
@@ -195,7 +211,7 @@ def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limi
             s = diag_solo(pid)
             blockers = [] if s.status != "ok" else [
                 q for q in order if q in placed
-                and routes_conflict(pipes[pid], s.waypoints, pipes[q], placed[q].waypoints)]
+                and systems_conflict(pipes[pid], s, pipes[q], placed[q])]
             seq = routes[pid].status
             if s.status == "timeout" and diag is not None:
                 cls = "diagnosis_inconclusive"      # D74: 진단 예산도 소진 — 개별/간섭을 가릴 수 없다

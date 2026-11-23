@@ -101,7 +101,9 @@
               },
               "method": {"enum": ["exact", "exact_retry", "sequential"], "description": "§7 Q9"}
             }
-          }
+          },
+          "legs_passed": {"type": "integer", "minimum": 0, "description": "D134 보완 3 (보조 지표, 판정에 안 씀): Layer 0 통과 다리 수"},
+          "legs_total": {"type": "integer", "minimum": 0}
         }
       }
     },

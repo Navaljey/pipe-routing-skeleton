@@ -204,11 +204,14 @@ def _same(sc, pipe) -> list:
     return [p for p in sc.pipes if layer_id(p) == lid]
 
 
-def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True):
+def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True, partners=()):
     """구경별 고정 레이어 (캐시). 반환: (그래프, 이번 호출에서 쓴 구성 시간).
     D66 G1 이면 중력관은 같은 구경 압력관과 따로 중력관 층을 쓴다. support_lines = D80 ⑨ 서포트 보조 격자선.
-    블록 쌍 (D91): 한 블록 안 배관 = 그 블록만의 층 (단일 블록과 같은 정의), 관통 배관 = 양쪽 블록 층을 창에서 잇는 합성 층."""
+    블록 쌍 (D91): 한 블록 안 배관 = 그 블록만의 층 (단일 블록과 같은 정의), 관통 배관 = 양쪽 블록 층을 창에서 잇는 합성 층.
+    partners = D134 분기 계통의 짝 배관 (주관이면 다리 탐색 배관들, 다리면 주관) — 있으면 계통 합집합 층 (system_layer)."""
     from .blockpair import block_of, crossing, walls
+    if partners:
+        return system_layer(sc, pipe, tuple(partners), grid, support_lines)
     if walls(sc):
         if crossing(sc, pipe):
             return _crossing_layer(sc, pipe, grid, support_lines)
@@ -232,6 +235,75 @@ def fixed_layer(sc, pipe, grid: GridSpec = G0, support_lines: bool = True):
         kw = dict(obstacles=obs, walls=hard, soft=soft, soft_axes=axes)
     g = EscapeGraph(sc, same[0], extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
                     extra_coords=extra, **kw)
+    _FIXED[key] = (sc, g)
+    return g, g.build_sec
+
+
+def _layer_parts(sc, pipe, same, grid: GridSpec, support_lines: bool):
+    """fixed_layer 본문의 좌표·장애물 인자 (같은 식) — 계통 합집합 층이 다시 쓴다."""
+    gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
+    extra = grid_extra_coords(sc, pipe.nominal_size, gravity_layer, grid, pipes=same)
+    if support_lines:
+        sl = support_extra_coords(sc, pipe.nominal_size, pipes=same)
+        extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], sl)]
+    kw = {}
+    from . import internal
+    if internal.has_internal(sc):
+        obs, hard, soft, axes = internal.router_boxes(sc, same[0])
+        fb = internal.first_bend_coords(sc, same[0])
+        extra = [list(a) + list(b) for a, b in zip(extra or [[], [], []], fb)]
+        kw = dict(obstacles=obs, walls=hard, soft=soft, soft_axes=axes)
+    return extra, kw
+
+
+def _plain_axes(sc, q, grid: GridSpec, support_lines: bool) -> list:
+    """배관 q 가 계통 밖에서 쓸 층 (q 가 시나리오 배관이면 fixed_layer 그대로, 다리 탐색 배관이면 그 구경 층 +
+    다리 단자) 의 축 좌표 — 계통 합집합 층에 더한다."""
+    key = ("plain_axes", id(sc), layer_id(q), tuple(q.start.pos), bool(grid.g1 and q.gravity_pipe), grid.g2,
+           support_lines)
+    hit = _PLAIN.get(key)
+    if hit is not None and hit[0] is sc:
+        return hit[1]
+    if any(p is q for p in sc.pipes):
+        F, _ = fixed_layer(sc, q, grid, support_lines)
+        axes = [list(map(float, a)) for a in F.axes]
+    else:
+        same = [q] + _same(sc, q)
+        extra, kw = _layer_parts(sc, q, same, grid, support_lines)
+        g = EscapeGraph(sc, q, extra_terminals=[t for p in same for t in (p.start, p.end)], corner_arc=True,
+                        extra_coords=extra, **kw)
+        axes = [list(map(float, a)) for a in g.axes]
+    _PLAIN[key] = (sc, axes)
+    return axes
+
+
+_PLAIN = {}
+
+
+def system_layer(sc, pipe, partners: tuple, grid: GridSpec, support_lines: bool):
+    """D134 구현 결정 (가) 계통 합집합 층 (`추정:`): 이 배관의 층 좌표 + 짝 배관 층 좌표 — 주관 지도와 다리 지도가 같은 격자
+    좌표를 가져 티 후보 (주관 노드) 가 다리 지도의 노드가 된다 (D118 리듀서·D91 블록 쌍과 같은 방식). 캐시 키가 따로라
+    분기 없는 배관의 층은 그대로 (D134 ⑥). 블록 쌍 계통은 S2-3 범위 밖."""
+    from .blockpair import walls
+    if walls(sc):
+        raise NotImplementedError("블록 쌍 안 분기 계통은 S2-3 범위 밖")
+    gravity_layer = bool(grid.g1 and pipe.gravity_pipe)
+    pk = tuple((layer_id(q), tuple(q.start.pos), tuple(q.end.pos)) for q in partners)
+    key = (id(sc), layer_id(pipe), gravity_layer, grid.g2, support_lines, ("system", tuple(pipe.start.pos)) + pk)
+    hit = _FIXED.get(key)
+    if hit is not None and hit[0] is sc:
+        return hit[1], 0.0
+    own = any(p is pipe for p in sc.pipes)
+    same = _same(sc, pipe) if own else [pipe] + _same(sc, pipe)
+    extra, kw = _layer_parts(sc, pipe, same, grid, support_lines)
+    extra = [list(a) for a in (extra or [[], [], []])]
+    terms = [t for p in same for t in (p.start, p.end)]
+    for q in partners:
+        ax = _plain_axes(sc, q, grid, support_lines)
+        for k in range(3):
+            extra[k] += ax[k]
+        terms += [q.start, q.end]
+    g = EscapeGraph(sc, same[0], extra_terminals=terms, corner_arc=True, extra_coords=extra, **kw)
     _FIXED[key] = (sc, g)
     return g, g.build_sec
 
@@ -328,6 +400,7 @@ def _crossing_layer(sc, pipe, grid: GridSpec, support_lines: bool):
 
 def clear_cache():
     _FIXED.clear()
+    _PLAIN.clear()
 
 
 def fixed_layer_stats(sc) -> list:
@@ -370,6 +443,16 @@ def terminal_reservations(sc, exclude=()) -> list:
             a = np.array(term.pos, dtype=float)
             b = a + sgn * L * np.array(term.dir, dtype=float)
             out.append((p, [a.tolist(), b.tolist()]))
+        for br in getattr(p, "branches", None) or ():   # D134 ③: 놓이지 않은 계통의 다리 단자도 (길이·이격 D59 그대로)
+            from .scenario import leg_pipe
+            lp = leg_pipe(p, br)
+            t90 = elbow_tangent(lp.nominal_size, 90)
+            term = br.terminal
+            sgn = 1.0 if br.flow == "in" else -1.0   # in = start 규약 (dir 쪽), out = end 규약 (dir 반대쪽)
+            L = (boundary_straight(lp) + t90) if term.kind == "boundary" else max(lp.min_straight, t90)
+            a = np.array(term.pos, dtype=float)
+            b = a + sgn * L * np.array(term.dir, dtype=float)
+            out.append((lp, [a.tolist(), b.tolist()]))
     return out
 
 
@@ -482,7 +565,7 @@ class LayeredGraph:
     _boxes = EscapeGraph._boxes
 
     def __init__(self, sc, pipe, others=(), local_lines=False, support_cost=True, reserved=(), grid: GridSpec = G0,
-                 incremental: bool = True, support_lines: bool = True, members=()):
+                 incremental: bool = True, support_lines: bool = True, members=(), partners=()):
         """support_cost: D57 추정 서포트를 엣지 비용에 넣는다 (기본). False = M4 이전 비용 (비교용).
         reserved: D59 단자 예약 구역 [(배관, [a, b])] — 놓인 배관과 같이 이격 r₁ + r₂ 로 피한다 (격자선은 만들지 않음).
         grid: D66 고정층 격자 보강 변형 (기본 G0).
@@ -492,7 +575,7 @@ class LayeredGraph:
         members: D90 (a1) 놓인 배관 서포트 부재 예약 [(부재 op, [a, b])] — op.radius = 앵글 반폭, 이격 r + 반폭 으로
         피한다 (검증기 D80 ⑧ 과 같은 문턱). 예약 구역과 같이 격자선은 만들지 않고 D67 항목 캐시에 들어간다."""
         t0 = time.perf_counter()
-        F, fixed_sec = fixed_layer(sc, pipe, grid, support_lines=support_cost and support_lines)
+        F, fixed_sec = fixed_layer(sc, pipe, grid, support_lines=support_cost and support_lines, partners=partners)
         self.grid = grid
         self.fixed = F
         self.pipe = pipe
@@ -1326,9 +1409,17 @@ class SupportMembers:
         self.routes = {}
 
     def __call__(self, sc, placed) -> list:
-        want = {p.id: [list(map(float, w)) for w in wps] for p, wps in placed if wps}
+        want = {p.id: [list(map(float, w)) for w in wps] for p, wps in placed if wps and not hasattr(p, "parent")}
         if not want:
             return []
+        # D134: 다리 가상 배관 (parent 속성) 은 계통의 branches 로 (기하 순서, pipe.branches 순서)
+        legs = {}
+        for p, wps in placed:
+            if wps and hasattr(p, "parent"):
+                g = [list(map(float, w)) for w in wps]
+                legs.setdefault(p.parent, {})[p.leg.id] = g if p.leg.flow == "out" else g[::-1]
+        pipes = {p.id: p for p in sc.pipes}
+        br = {pid: [legs.get(pid, {}).get(b.id, []) for b in pipes[pid].branches] for pid in want if pipes[pid].branches}
         from .verifier import Session
         if self.sc is not sc:
             self.sc, self.sess, self.routes = sc, Session(sc), {}
@@ -1336,11 +1427,12 @@ class SupportMembers:
             self.sess.remove(pid)
             del self.routes[pid]
         for pid, w in want.items():
+            key = (w, br.get(pid)) if pid in br else w
             if pid not in self.routes:
-                self.sess.add(pid, w)
-            elif self.routes[pid] != w:
-                self.sess.replace(pid, w)
-            self.routes[pid] = w
+                self.sess.add(pid, w, br.get(pid, ()))
+            elif self.routes[pid] != key:
+                self.sess.replace(pid, w, br.get(pid, ()))
+            self.routes[pid] = key
         out = []
         for pid, rep in self.sess.reports().items():
             for s in rep.supports:
@@ -1375,6 +1467,18 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
     def router(sc, pipe, time_limit, placed=()):
         reserved = terminal_reservations(sc, exclude={pipe.id} | {p.id for p, _ in placed}) if reserve else []
         members = _members(sc, placed) if member_reserve else []
+        if getattr(pipe, "branches", None):   # D112·D134 분기 계통 — 계통 예산 = 배관 상한 × (다리 수 + 1) (Q6)
+            from .tree_router import route_tree
+            lim = limit_for(sc)
+
+            def make_graph(p, partners):
+                return LayeredGraph(sc, p, placed, local_lines=local_lines, support_cost=support_cost,
+                                    reserved=reserved, grid=grid, incremental=incremental,
+                                    support_lines=support_lines, members=members, partners=partners)
+            r = route_tree(sc, pipe, make_graph, lim * (len(pipe.branches) + 1))
+            r.graph_sec = 0.0
+            r.graph_stats = {}
+            return r
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
                          grid=grid, incremental=incremental, support_lines=support_lines, members=members)
         r = _route(g, pipe, time_limit, limit_for(sc),
