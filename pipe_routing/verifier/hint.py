@@ -27,13 +27,13 @@ class SupportHint:
         from . import modules as _  # noqa: F401  (모듈 등록)
         self.scenario = scenario
         self.std = std or ss.load_standard()
-        self.pipes = {p.id: p for p in scenario.pipes}
         if isinstance(routes, dict):
             routes = [PipeRoute(k, v) for k, v in routes.items()]
-        given = {r.pipe_id: r for r in routes if r.waypoints}
-        rmap = {pid: given[pid] for pid in self.pipes if pid in given}   # 시나리오 순서 (검증기와 같음)
+        from .core import expand_trees
+        # 시나리오 순서 (검증기와 같음). D134 분기 계통: 다리는 가상 배관 "<계통>.<다리>" 로 묻는다
+        self.pipes, rmap, _, self.family, self.trees = expand_trees(scenario, list(routes))
         cls = {pid: centerlines_of(self.pipes[pid], r) for pid, r in rmap.items()}
-        self.ctx = Context(scenario, self.pipes, rmap, cls, std=self.std)
+        self.ctx = Context(scenario, self.pipes, rmap, cls, std=self.std, family=self.family, trees=self.trees)
         self._rmap, self._cls = rmap, cls
 
     @classmethod
@@ -56,7 +56,7 @@ class SupportHint:
         from .. import blockpair as bp
         pipe = self.pipes[pid]
         ext = np.array(self.scenario.block.extent, dtype=float)
-        oA, oB, oR, oS, _ = self.ctx.others(pid)
+        oA, oB, oR, oS, _ = self.ctx.others(pid, family=True)
         holes = bp.hole_boxes(self.scenario)
         box_lo = [o.box.min for o in self.scenario.obstacles] + [h[0] for h in holes]
         box_hi = [o.box.max for o in self.scenario.obstacles] + [h[1] for h in holes]
@@ -180,14 +180,16 @@ class SupportHint:
         if key in self.ctx.cache:
             return self.ctx.cache[key]
         pr = self._rmap[pipe_id]
-        solo = Context(self.scenario, self.pipes, {pipe_id: pr}, {pipe_id: self._cls[pipe_id]}, std=self.std)
+        solo = Context(self.scenario, self.pipes, {pipe_id: pr}, {pipe_id: self._cls[pipe_id]}, std=self.std,
+                       family=self.family, trees=self.trees)
         MODULES["support"](solo, pr)
-        here = Context(self.scenario, self.pipes, self._rmap, self._cls, std=self.std)   # self.ctx 캐시를 건드리지 않게
+        here = Context(self.scenario, self.pipes, self._rmap, self._cls, std=self.std, family=self.family,
+                       trees=self.trees)   # self.ctx 캐시를 건드리지 않게
         gaps = []
         for v in MODULES["support"](here, pr):
             m = re.match(r"([\d.]+)~([\d.]+) m", v.message)
             gaps.append((float(m.group(1)) * 1000, float(m.group(2)) * 1000))
-        oA, oB, oR, oS, ids = self.ctx.others(pipe_id)
+        oA, oB, oR, oS, ids = self.ctx.others(pipe_id, family=True)
         ids = np.array(ids, dtype=object)
         out = []
         if not len(ids):

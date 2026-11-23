@@ -75,6 +75,21 @@ def j_breakdown(pipe: Pipe, waypoints, fittings: list, supports: list, sc=None) 
     return {k: round(v, 4) for k, v in J.items()}
 
 
+def tree_j(sc, pipe: Pipe, route, rep, legs: dict) -> dict:
+    """D134 분기 계통 J = 주관 (주관 구경) + 다리마다 (다리 구경, 흐름 순서) 의 j_breakdown 합. 티 무게 0 (D112).
+    rep = 합친 계통 보고 (main_fittings·main_supports 를 가진다), legs = {다리 가상 id: 다리 보고}."""
+    from .tree import leg_flow, leg_flow_pipe
+    J = j_breakdown(pipe, route.waypoints, getattr(rep, "main_fittings", rep.fittings),
+                    getattr(rep, "main_supports", rep.supports), sc)
+    byid = {f"{pipe.id}.{b.id}": (b, g) for b, g in zip(pipe.branches, route.branches) if g and len(g) >= 2}
+    for vid, lr in sorted(legs.items()):
+        b, g = byid[vid]
+        Jl = j_breakdown(leg_flow_pipe(pipe, b, g), leg_flow(g, b.flow), lr.fittings, lr.supports, sc)
+        for k, v in Jl.items():
+            J[k] = round(J.get(k, 0.0) + v, 4)
+    return J
+
+
 def real_weight(pipe: Pipe, waypoints, J: dict) -> dict:
     """D49 보완 — 보조 지표 실중량: 직관 = (꺾임점 사이 길이 − 엘보마다 접선 2t) × kg/m + 엘보·티·밸브·서포트.
     J 계산과 최적화에는 쓰지 않는다."""
