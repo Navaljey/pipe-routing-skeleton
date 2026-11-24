@@ -547,6 +547,28 @@ class _Scratch:
     """EscapeGraph._pipe_groups 를 항목 하나에 부를 때 쓰는 빈 객체 (그 함수가 속성을 기록한다)."""
 
 
+def _and_items(obs, parts):
+    """D67 합성: 고정 마스크 AND 항목별 희소 마스크. D126 L3 (c): 항목이 없으면 템플릿 배열을 그대로 (복사 없음),
+    있으면 uint16 사본 하나에서 (이전 int64 사본과 같은 값 — 마스크는 16 비트)."""
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return obs
+    em = obs.copy()
+    for idx, val in parts:
+        em[idx] &= val
+    return em
+
+
+def _keep(em):
+    """0 이 아닌 엣지 번호 — 모두 0 이 아니면 None (복사 없이 그대로 쓴다, L3 (c))."""
+    nz = em != 0
+    return None if nz.all() else np.nonzero(nz)[0]
+
+
+def _take(a, keep):
+    return a if keep is None else a[keep]
+
+
 # D126 지도 조회 API — 선수가 읽어도 되는 LayeredGraph 배열 (`docs/verifier_api.md` §6). 그 밖의 속성은 비공개.
 PUBLIC_ARRAYS = ("step", "elen", "emask", "scost", "spack", "pos", "hdist")
 
@@ -646,8 +668,12 @@ class LayeredGraph:
         self.use_support_cost = support_cost
         self._ext = np.array(sc.block.extent, dtype=float)
         self._sc = sc
-        self._sup = _fixed_support(F, sc, pipe) if support_cost else None
         self._ls = line_support(F, sc, pipe) if support_cost else None
+        # D126 L3 (a): 밀집 서포트 표 (격자 전체, 240 B/격자점) 는 엣지 목록 (템플릿) 을 만들 때만 쓴다 — 증분 표시 (변형 A)
+        # 는 템플릿이 캐시돼 있으면 만들지 않고, 템플릿을 만든 뒤에는 고정층 캐시에서 내려놓는다 (값은 같은 함수라 같다)
+        self._sup = None
+        if support_cost and not (incremental and not patches):
+            self._sup = _fixed_support(F, sc, pipe)
         hm, vm = SUPPORT_SPACING[pipe.nominal_size]
         self.smax_dir = np.array([vm if (DIRS[d][0] == 0 and DIRS[d][1] == 0) else hm for d in range(18)], float)
         # 꺾임 등급(0/45/90/135)별 u 추가 = 2·t_θ / 수평 간격 (support_router.support_step)
@@ -665,11 +691,11 @@ class LayeredGraph:
         self.end_node = self._id_of(pipe.end.pos)
 
         # 3) 엣지 → 이웃 표
-        self.step = np.full((N, 18), -1, dtype=np.int64)
+        self.step = np.full((N, 18), -1, dtype=np.int32)   # D126 L3 (b): 노드 번호 int32 (노드 수 < 2³¹)
         self.elen = np.zeros((N, 18))
         self.scost = np.zeros((N, 18))
         self.spack = np.zeros((N, 18), dtype=np.int64)   # D80 ⑨ 서포트 가능 구간 요약 (0 = 제약 없음)
-        self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
+        self.emask = np.zeros((N, 18), dtype=np.uint16)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j), 16 비트 (L3 (b))
         self._pen = {}   # D95 관통 엣지 (노드, 방향) → 관통 피스 kg (scost 에 더해 둔다)
         if self.incremental:
             self.n_edges = self._incremental_edges(F, is_base, bi, first)
@@ -767,6 +793,7 @@ class LayeredGraph:
             return cache[key]
         bi = np.nonzero(F.node_ok)
         Fidx = np.stack(bi, -1)   # 변형 A: 노드 = 고정 레이어 노드 (같은 순서)
+        sup = self._sup if self._sup is not None or not self.use_support_cost else _fixed_support(F, self._sc, self.pipe)
         axis = []
         for ax in range(3):
             o1, o2 = [k for k in range(3) if k != ax]
@@ -791,10 +818,10 @@ class LayeredGraph:
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
             sc_ = np.zeros(len(a))
             sp_ = np.zeros(len(a), dtype=np.int64)
-            if self._sup is not None:
+            if sup is not None:
                 ia = Fidx[a[adj]]
-                sc_[adj] = self._sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
-                sp_[adj] = self._sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sc_[adj] = sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sp_[adj] = sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
                 r_ = np.nonzero(~adj)[0]
                 sc_[r_], sp_[r_] = support_edge_model(self._ls, self.pos[a[r_]], self.pos[b[r_]])
             e = {"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
@@ -820,9 +847,11 @@ class LayeredGraph:
             obs = F.diag_mask[d][src] if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.uint16)
             diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": obs.astype(np.uint16),
                        "L": np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1),
-                       "sc": self._sup[1][d][0][src] if self._sup is not None else np.zeros(len(s_id)),
-                       "sp": self._sup[1][d][1][src] if self._sup is not None else np.zeros(len(s_id), np.int64)}
+                       "sc": sup[1][d][0][src] if sup is not None else np.zeros(len(s_id)),
+                       "sp": sup[1][d][1][src] if sup is not None else np.zeros(len(s_id), np.int64)}
         cache[key] = {"axis": axis, "diag": diag}
+        if self.incremental and sup is not None and self._sup is None:   # D126 L3 (a): 템플릿에 값이 옮겨졌다
+            F.__dict__.get("_support_cache", {}).pop((self.pipe.nominal_size, self._ls.std.sha256), None)
         return cache[key]
 
     def _plate_penetration(self, ax: int, P0: np.ndarray, P1: np.ndarray):
@@ -940,41 +969,37 @@ class LayeredGraph:
         contribs = [self._item_contrib(F, key, op, w) for key, op, w in self._items]
         n = 0
         for ax, e in enumerate(tmpl["axis"]):
-            em = e["obs"].astype(np.int64)
-            for c in contribs:
-                idx, val = c["axis"][ax]
-                em[idx] &= val
-            keep = np.nonzero(em != 0)[0]
-            a, b, em = e["a"][keep], e["b"][keep], em[keep]
+            em = _and_items(e["obs"], [c["axis"][ax] for c in contribs])
+            keep = _keep(em)
+            a, b, em = _take(e["a"], keep), _take(e["b"], keep), _take(em, keep)
             dp, dm = 2 * ax, 2 * ax + 1
-            self.step[a, dp], self.elen[a, dp] = b, e["L"][keep]
-            self.step[b, dm], self.elen[b, dm] = a, e["L"][keep]
+            L = _take(e["L"], keep)
+            self.step[a, dp], self.elen[a, dp] = b, L
+            self.step[b, dm], self.elen[b, dm] = a, L
             self.emask[a, dp] = em
             self.emask[b, dm] = swap_mask(em)
-            if self._sup is not None:
-                self.scost[a, dp] = e["sc"][keep]
-                self.scost[b, dm] = e["sc"][keep]
-                self.spack[a, dp] = e["sp"][keep]
-                self.spack[b, dm] = reverse_support(e["sp"][keep])
+            if self.use_support_cost:
+                sc_, sp_ = _take(e["sc"], keep), _take(e["sp"], keep)
+                self.scost[a, dp] = sc_
+                self.scost[b, dm] = sc_
+                self.spack[a, dp] = sp_
+                self.spack[b, dm] = reverse_support(sp_)
             if "pen" in e:   # D95 (관통 엣지 — scost 에 이미 더함)
-                pen = e["pen"][keep]
+                pen = _take(e["pen"], keep)
                 for i in np.nonzero(pen)[0]:
                     self._pen[(int(a[i]), dp)] = self._pen[(int(b[i]), dm)] = float(pen[i])
             n += len(a)
         nd = 0
         for d, e in tmpl["diag"].items():
-            em = e["obs"].astype(np.int64)
-            for c in contribs:
-                idx, val = c["diag"][d]
-                em[idx] &= val
-            keep = np.nonzero(em != 0)[0]
-            s_id = e["a"][keep]
-            self.step[s_id, d] = e["b"][keep]
-            self.emask[s_id, d] = em[keep]
-            self.elen[s_id, d] = e["L"][keep]
-            if self._sup is not None:
-                self.scost[s_id, d] = e["sc"][keep]
-                self.spack[s_id, d] = e["sp"][keep]
+            em = _and_items(e["obs"], [c["diag"][d] for c in contribs])
+            keep = _keep(em)
+            s_id = _take(e["a"], keep)
+            self.step[s_id, d] = _take(e["b"], keep)
+            self.emask[s_id, d] = _take(em, keep)
+            self.elen[s_id, d] = _take(e["L"], keep)
+            if self.use_support_cost:
+                self.scost[s_id, d] = _take(e["sc"], keep)
+                self.spack[s_id, d] = _take(e["sp"], keep)
             nd += len(s_id)
         return n + nd // 2
 
@@ -1301,7 +1326,7 @@ class LayeredGraph:
                     continue
                 hz = round(h2, 6)
             su, ok = support_step(state.su, int(self.spack[state.node, d]), length, float(self.smax_dir[d]),
-                                  float(self.bend_u[ANG_INDEX[defl]]) if self._sup is not None else 0.0)
+                                  float(self.bend_u[ANG_INDEX[defl]]) if self.use_support_cost else 0.0)
             if not ok:   # D80 ⑨: 최대 간격 안에 서포트 가능 지점이 없다
                 continue
             if defl:
