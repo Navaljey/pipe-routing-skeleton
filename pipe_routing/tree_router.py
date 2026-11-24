@@ -57,9 +57,12 @@ def _state_arrays(cap, tee=False):
     return H, tuple(S), tuple(K)
 
 
-def leg_table(g, lp: Pipe, b, budget: int):
-    """다리 단자에서 한 점 전 탐색. 반환 dict: status (done/budget), expanded, cand = {(노드, 도착 방향): (g, 상태 id)},
-    S (상태 배열 — 사슬 복원용)."""
+def leg_table(g, lp: Pipe, b, budget: int, bound_keys=None):
+    """다리 단자에서 한 점 전 탐색. 반환 dict: status (done/bounded/budget), expanded, cand = {(노드, 도착 방향): (g, 상태 id)},
+    S (상태 배열 — 사슬 복원용).
+    bound_keys = 주관 단독 경로 위 티 후보의 다리 지도 키 (노드·18 + 도착 방향) 집합 — 주면 그 키에 닿은 가장 싼 다리 비용
+    c 를 찾은 뒤 g > c 인 상태를 꺼낼 차례가 되면 멈춘다 (bounded). 정확: 정확 나무의 다리 비용 ≤ (순차 나무 비용 −
+    주관 단독 비용) = c — 티가 든 주관 ≥ 주관 단독 (제약만 더함)."""
     if not HAVE_NUMBA:
         raise RuntimeError("분기 계통 라우터는 numba 가 필요하다")
     P = g.pos
@@ -81,6 +84,8 @@ def leg_table(g, lp: Pipe, b, budget: int):
     C[3] = np.maximum(C[3], need_tee)           # run_cap 이 티 조건에 닿게
     C[9] = 0.0                                   # e45 = 0 (휴리스틱 0 → Dijkstra)
     C[10] = -1                                   # end_dir 없음
+    if bound_keys is not None:
+        C[11] = 1024                             # 확인 주기만 바꾼다 (탐색 순서 불변)
     C = tuple(C)
     G = _arc_tables(g)
     _CURRENT.update(space=g)
@@ -97,12 +102,26 @@ def leg_table(g, lp: Pipe, b, budget: int):
     ctr = np.array([0, 0, 1, -1, 1, -1, 1, 0], dtype=np.int64)
     fctr = np.zeros(1)
     status = "done"
+    keys = None if bound_keys is None else np.fromiter(bound_keys, dtype=np.int64)
+    c_hat = INF
+    scanned = 0
     while True:
         code = af._search_generic(Tt, C, G, ctr, fctr, H, S, K, open_head, closed_head, arc)
         if code == 4:
             H, S, K = _grow(H, ctr[4] + 18), _grow(S, ctr[6] + 18), _grow(K, ctr[7] + 1)
             continue
         if code == af._CHECK_TIME:
+            if keys is not None and len(keys):
+                n1 = int(ctr[6])
+                sl = slice(scanned, n1)
+                kk = S[0][sl] * 18 + S[1][sl]
+                hit = np.isin(kk, keys) & (S[2][sl] >= need_tee[S[3][sl]] - EPS) & ((S[7][sl] & 1) == 1)
+                if hit.any():
+                    c_hat = min(c_hat, float(S[4][sl][hit].min()))
+                scanned = n1
+                if fctr[0] > c_hat + 1e-9:
+                    status = "bounded"
+                    break
             if int(ctr[0]) >= budget:
                 status = "budget"
                 break
@@ -296,32 +315,43 @@ def main_tee_candidates(gm, pipe, chain) -> list:
 
 
 def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = False) -> RouteResult:
-    """분기 계통 한 개. make_graph(배관, partners) → LayeredGraph. 다리 1 개 = 정확 풀이, 2 개 이상 = 순차 근사 (D112)."""
+    """분기 계통 한 개. make_graph(배관, partners) → LayeredGraph. 다리 1 개 = 정확 풀이, 2 개 이상 = 순차 근사 (D112).
+    순서: 주관 단독 A* (순차 근사의 주관·다리 표 한계) → 다리 표 (한계까지) → 주관 + 티 (자기 간섭이면 막고 다시)."""
+    from .astar_fast import astar_route_generic
     t0 = time.perf_counter()
     legs = list(pipe.branches)
     lps = [leg_search_pipe(pipe, b) for b in legs]
     gm = make_graph(pipe, tuple(lps))
     used = 0
+
+    def fail(status, method):
+        r = RouteResult(pipe.id, status, expanded=used, search_sec=time.perf_counter() - t0)
+        r.tree = {"method": method, "legs": []}
+        return r
+    h = heuristic_factory(gm, pipe)
+    st, chain0, exp0, _ = astar_route_generic(gm, pipe, None, h(gm.start_state(pipe)), max(1, budget))
+    used += exp0
+    if st != "ok":
+        return fail(st, "exact" if len(legs) == 1 else "sequential")
+    cands = main_tee_candidates(gm, pipe, chain0)
     tabs = []
     for b, lp in zip(legs, lps):
         gl = make_graph(lp, (pipe,))
-        tab = leg_table(gl, lp, b, max(1, budget - used))
+        keys = _leg_keys(gm, gl, cands, b) if len(legs) == 1 and not sequential_only else None
+        tab = leg_table(gl, lp, b, max(1, budget - used), bound_keys=keys)
         used += tab["expanded"]
         tabs.append(tab)
     method = None
     chosen = None   # (주관 RouteResult, [(Branch, 기하, 다리 RouteResult)])
-    status = "ok"
-    if len(legs) == 1 and not sequential_only and tabs[0]["status"] == "done":
+    if len(legs) == 1 and not sequential_only and tabs[0]["status"] in ("done", "bounded"):
         b, tab = legs[0], tabs[0]
         teec, pick = tee_costs(gm, tab, b)
         for attempt in range(MAX_RETRY + 1):
             if used >= budget:
-                status = "timeout"
                 break
             st, chain, exp = main_with_tee(gm, pipe, teec, budget - used)
             used += exp
             if st != "ok":
-                status = st
                 break
             ti = next(i for i, c in enumerate(chain) if c[1])
             tn, td = chain[ti][0].node, chain[ti][0].dir
@@ -335,15 +365,9 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
                 break
             teec = teec.copy()
             teec[tn * 18 + td] = INF   # 그 티 후보를 막고 다시 (Q9)
-    if chosen is None and status != "timeout" and used < budget:
-        res = _sequential(sc, pipe, gm, legs, tabs, budget - used)
-        used += res[2]
-        status, chosen = res[0], res[1]
+    if chosen is None:   # 순차 근사 — 주관 단독 경로는 이미 있다 (추가 탐색 없음)
+        chosen = _sequential(pipe, gm, legs, tabs, chain0, cands)
         method = "sequential"
-    if status != "ok" or chosen is None:
-        r = RouteResult(pipe.id, status, expanded=used, search_sec=time.perf_counter() - t0)
-        r.tree = {"method": method or ("exact" if len(legs) == 1 else "sequential"), "legs": []}
-        return r
     mr, legres = chosen
     J = mr.J + sum(lr.J for _, _, lr in legres)
     found = {b.id: (geom, lr) for b, geom, lr in legres}
@@ -363,21 +387,37 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
     mr.J_main = mr.J
     mr.J = J
     mr.J_support_est += sum(lr.J_support_est for _, _, lr in legres)
-    mr.tree = {"method": method, "legs": tlegs}
+    mr.tree = {"method": method, "legs": tlegs,
+               "leg_search": [tb["status"] for tb in tabs]}
     mr.branches = [lg["waypoints"] for lg in tlegs]
     return mr
 
 
-def _sequential(sc, pipe, gm, legs, tabs, budget):
-    """D112 순차 근사: 주관 단독 (계통 지도) → 다리를 큰 구경 → 주관까지 먼 것 순으로, 주관 경로 위 티 후보 중 다리 표
-    비용이 작은 순으로 자기 간섭 없는 첫 티 (다른 다리와도). 반환 (status, chosen, expanded)."""
-    from .astar_fast import astar_route_generic
-    h = heuristic_factory(gm, pipe)
-    st, chain, exp, _ = astar_route_generic(gm, pipe, None, h(gm.start_state(pipe)), max(1, budget))
-    if st != "ok":
-        return st, None, exp
-    mr = _finish_chain(gm, pipe, chain, exp, 0, 0.0)
-    cands = main_tee_candidates(gm, pipe, chain)
+def _leg_keys(gm, gl, cands, b) -> set:
+    """주관 단독 경로 위 티 후보 (주관 노드, 주관 방향) → 다리 지도 키 (노드·18 + 분기각이 맞는 도착 방향)."""
+    out = set()
+    for m, cd in cands:
+        try:
+            n = gl._id_of(tuple(gm.pos[m]))
+        except (AssertionError, IndexError, ValueError):
+            continue
+        if not np.array_equal(gl.pos[n], gm.pos[m]):
+            continue
+        for a in range(18):
+            lf = np.asarray(DIRS[a], float)
+            if b.flow == "out":
+                lf = -lf
+            lf = lf / np.linalg.norm(lf)
+            ang = math.degrees(math.acos(float(np.clip(np.dot(DIRS[cd], lf), -1, 1))))
+            if min(abs(ang - 45), abs(ang - 90)) < 1e-6:
+                out.add(n * 18 + a)
+    return out
+
+
+def _sequential(pipe, gm, legs, tabs, chain, cands):
+    """D112 순차 근사: 주관 단독 (계통 지도, 이미 찾은 경로) → 다리를 큰 구경 → 주관 start 에서 먼 것 순으로, 주관 경로
+    위 티 후보 중 다리 표 비용이 작은 순으로 자기 간섭 없는 첫 티 (다른 다리와 3D·간섭도). 반환 (주관 결과, 놓인 다리)."""
+    mr = _finish_chain(gm, pipe, chain, 0, 0, 0.0)
     order = sorted(range(len(legs)), key=lambda k: (-T.nominal_mm(legs[k].nominal_size),
                                                      -sum(abs(a - c) for a, c in zip(legs[k].terminal.pos, pipe.start.pos)),
                                                      k))
@@ -395,4 +435,4 @@ def _sequential(sc, pipe, gm, legs, tabs, budget):
             if not _conflicts(pipe, mr.waypoints, [(bb, gg) for bb, gg, _ in placed] + [(b, geom)]):
                 placed.append((b, geom, lr))
                 break
-    return "ok", (mr, placed), exp
+    return mr, placed

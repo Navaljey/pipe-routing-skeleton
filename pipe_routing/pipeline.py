@@ -596,7 +596,18 @@ def write_report_html(sc: Scenario, out: dict, path, offline: bool = False) -> N
     from .verifier.core import PipeReport, Violation
     from .viz import add_pipe_tubes, add_routes, add_support_members, add_verification, scenario_figure, write_html
     fig = scenario_figure(sc, connect=False)
-    add_pipe_tubes(fig, sc, {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]})   # §0 보고 규칙
+    tubes = {x["pipe_id"]: x["waypoints"] for x in out["routes"] if x["waypoints"]}
+    extra = {}
+    pipes = {p.id: p for p in sc.pipes}
+    for x in out["routes"]:   # D134 다리 (기하 순서 — 굵기 관은 방향과 무관)
+        for b, lg in zip(pipes[x["pipe_id"]].branches, (x.get("tree") or {}).get("legs", [])):
+            if lg.get("waypoints"):
+                from .tree import leg_flow_pipe
+                vp = leg_flow_pipe(pipes[x["pipe_id"]], b, lg["waypoints"])
+                tubes[vp.id], extra[vp.id] = lg["waypoints"], vp
+    add_pipe_tubes(fig, sc, tubes, extra_pipes=extra)   # §0 보고 규칙
+    from .viz import add_tees
+    add_tees(fig, sc, out)
     add_routes(fig, sc, [RouteResult(x["pipe_id"], "ok" if x["waypoints"] else x["router"]["status"],
                                      J=(x["J"] or {}).get("total"), waypoints=x["waypoints"]) for x in out["routes"]],
                line_width=2)   # 중심선은 가늘게 — 관(실제 굵기)이 보이도록

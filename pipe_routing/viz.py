@@ -289,7 +289,7 @@ def _tube_mesh(A, B, radius: float, sides: int = 12):
 
 
 def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: bool = True,
-                   colors: dict = None, opacity: float = 0.55) -> None:
+                   colors: dict = None, opacity: float = 0.55, extra_pipes: dict = None) -> None:
     """배관을 실제 굵기의 관으로 (CLAUDE.md §0 보고 규칙): 반경 = 외경/2 + 보온재. 중심선 = 직관 + 엘보 호 (D44, R = 1.5D).
 
     routes = {pipe_id: waypoints}. show_clearance 면 유효 반경(D17 = 외경/2 + 보온재 + 10mm) 관을 범례에서 켤 수 있게
@@ -299,6 +299,9 @@ def add_pipe_tubes(fig: go.Figure, sc: Scenario, routes: dict, show_clearance: b
     from .verifier.geom import build_centerline
     pipes = {p.id: p for p in sc.pipes}
     color_of = colors or {p.id: pipe_spec.color(p, n, _PALETTE) for n, p in enumerate(sc.pipes)}
+    for vid, vp in (extra_pipes or {}).items():   # D134 다리 가상 배관 — 자기 계통 색
+        pipes[vid] = vp
+        color_of.setdefault(vid, color_of.get(getattr(vp, "parent", ""), "#555"))
     first_clear = True
     names = pipe_spec.line_numbers(sc)
     for pid, wps in routes.items():
@@ -455,3 +458,22 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def add_tees(fig: go.Figure, sc: Scenario, out: dict) -> None:
+    """D112·D134 티 표시 — 출력 routes[].tree 의 티 위치 (hover: 계통·다리·구경·분기각·방법)."""
+    xs, ys, zs, tx = [], [], [], []
+    for r in out.get("routes", []):
+        tr = r.get("tree")
+        if not tr:
+            continue
+        for lg in tr.get("legs", []):
+            if lg.get("tee"):
+                x, y, z = lg["tee"]["pos"]
+                xs.append(x); ys.append(y); zs.append(z)
+                tx.append(f"티 {r['pipe_id']} ↔ {lg['leg_id']} ({lg['nominal_size']}, {lg['flow']})<br>"
+                          f"분기각 {lg['tee']['angle']}° · {tr.get('method')}")
+    if xs:
+        fig.add_trace(go.Scatter3d(x=xs, y=ys, z=zs, mode="markers", name=f"티 ({len(xs)})",
+                                   marker=dict(size=7, color="black", symbol="diamond"), hovertext=tx,
+                                   hoverinfo="text"))

@@ -163,6 +163,27 @@ class SupportHint:
         return sg.together_at(self.ctx, pipe_id, np.asarray(pos, float), np.asarray(axis, float), 0.0)
 
     # ---------------------------------------------------------------- support_blockers (D128)
+    def tee_at(self, pipe_id: str, pos, branch_dir, branch_size: str, flow: str = "out", leg_first_straight=None) -> dict:
+        """D114 티 조회 (D112·D134 규칙, 검증기 branch 모듈과 같은 함수 `tree.tee_check`): 주관 pipe_id 의 지금 경로 위
+        pos 에 분기 구경 branch_size 의 다리를 기하 방향 branch_dir (티 → 다리 쪽) 로 낼 수 있는가.
+        flow = "out" (갈래) / "in" (합류) — 분기각은 흐름 벡터로 잰다. leg_first_straight = 티 → 다리 첫 엘보 접점 길이
+        (모르면 None — 그 항목은 보지 않는다). 같은 주관의 다른 다리 티 (지금 경로에 있으면) 와의 3D 도 본다.
+        반환 {"ok", "reasons", "angle", "segment", "s"}."""
+        from ..tree import tee_check
+        if pipe_id not in self._cls:
+            return {"ok": False, "reasons": ["주관 경로 없음"], "angle": None, "segment": None, "s": None}
+        main = self._cls[pipe_id][0]
+        tr = self.trees.get(pipe_id)
+        others = []
+        if tr is not None:
+            P = np.asarray(pos, float)
+            others = [np.asarray(g[0], float) for g in tr.branches if g and len(g) >= 2
+                      and np.linalg.norm(np.asarray(g[0], float) - P) > 1.0]
+        chk = tee_check(main, self.pipes[pipe_id].nominal_size, pos, branch_dir, flow, branch_size, others,
+                        leg_first_straight, self.ctx.angle_tol)
+        return {"ok": chk.ok, "reasons": chk.reasons, "angle": None if chk.angle != chk.angle else round(chk.angle, 3),
+                "segment": chk.seg if chk.seg >= 0 else None, "s": None if chk.s != chk.s else round(chk.s, 3)}
+
     def support_blockers(self, pipe_id: str) -> list:
         """D128: 그 배관의 서포트 배치에서, 다른 놓인 배관이 없었다면 쓸 수 있었던 (면, 형식) 이 그 배관 때문에 불가가 된
         경우 (부재 간섭, D80 ⑧) — R7 진단 (`docs/reports/s1_6.md` §10) 과 같은 정의.
