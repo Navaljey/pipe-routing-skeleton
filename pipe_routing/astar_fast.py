@@ -444,12 +444,20 @@ def _consts(space, pipe, goal):
     return None, C
 
 
+GROW = 1.25   # D126 L3 (d): 배열 증가 비율 (이전 2배) — 늘리는 순간 옛 배열 + 새 배열이 함께 살아 있어 최대 ≈ (1 + GROW) × 사용량
+
+
 def _grow(arrs, need):
-    """배열 묶음을 need 이상으로 (두 배씩) 늘린다."""
+    """배열 묶음을 need 이상으로 (GROW 배씩) 늘린다. 용량은 탐색 결과에 영향이 없다 (배열 크기만)."""
     cap = len(arrs[0])
     while cap < need:
-        cap *= 2
-    return tuple(np.concatenate([a, np.zeros(cap - len(a), a.dtype)]) for a in arrs)
+        cap = max(cap + 64, int(cap * GROW))
+    out = []
+    for a in arrs:
+        b = np.zeros(cap, a.dtype)
+        b[:len(a)] = a
+        out.append(b)
+    return tuple(out)
 
 
 def budget_over(t0: float, time_limit, expand_limit, expanded: int) -> bool:
@@ -746,6 +754,18 @@ def _dir_kinds():
 _DKIND = _dir_kinds()
 
 
+def _generic_arrays(cap):
+    """범용 탐색의 상태·큐·확정 목록 배열. D126 L3 (d): 노드·방향·편향각·부모·다음·마스크 = int32 (값은 노드 수·상태 수
+    < 2³¹, 마스크 ≤ 15), 큐 삽입 순번은 int64 그대로, 비용·길이는 float64."""
+    i4 = np.int32
+    H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, i4))
+    S = (np.zeros(cap, i4), np.zeros(cap, i4), np.zeros(cap), np.zeros(cap, i4), np.zeros(cap),
+         np.zeros(cap, i4), np.zeros(cap, i4), np.zeros(cap, i4), np.zeros(cap), np.zeros(cap))
+    K = (np.zeros(cap), np.zeros(cap, i4), np.zeros(cap), np.zeros(cap, i4), np.zeros(cap, i4),
+         np.zeros(cap), np.zeros(cap))
+    return H, S, K
+
+
 def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None, scost=None, h_lower=None):
     """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태.
     D126: scost = 엣지 비용 표 대신 쓸 (N, 18) 표 (공식 비용 덧셈 인자를 더한 값, 지도는 그대로), h_lower = 노드별 하한 표
@@ -764,11 +784,7 @@ def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None, sco
     _CURRENT.update(space=space)
     s0 = space.start_state(pipe)
     cap = 1 << 16
-    H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
-    S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
-         np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap))
-    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap, np.int64),
-         np.zeros(cap), np.zeros(cap))
+    H, S, K = _generic_arrays(cap)
     N = len(P)
     open_head = np.full(N * 18, -1, dtype=np.int32)
     closed_head = np.full(N * 18, -1, dtype=np.int32)
