@@ -99,7 +99,8 @@
                   }
                 }
               },
-              "method": {"enum": ["exact", "exact_retry", "sequential"], "description": "§7 Q9"}
+              "method": {"enum": ["exact", "exact_retry", "sequential"], "description": "§7 Q9"},
+              "search": {"type": "object", "description": "S2-3 F4: 확장 수 분해 — main_solo (주관 단독) · leg_tables (다리 표) · tee_search (주관 + 티, 시도별) · leg_rebuild (F1 다리 표 다시 만들기) · leg_search / leg_search_final (다리 표 상태 done·bounded·budget)"}
             }
           },
           "legs_passed": {"type": "integer", "minimum": 0, "description": "D134 보완 3 (보조 지표, 판정에 안 씀): Layer 0 통과 다리 수"},

@@ -331,8 +331,11 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
     h = heuristic_factory(gm, pipe)
     st, chain0, exp0, _ = astar_route_generic(gm, pipe, None, h(gm.start_state(pipe)), max(1, budget))
     used += exp0
+    search = {"main_solo": int(exp0), "leg_tables": [], "tee_search": [], "leg_rebuild": []}   # F4 확장 수 분해
     if st != "ok":
-        return fail(st, "exact" if len(legs) == 1 else "sequential")
+        r = fail(st, "exact" if len(legs) == 1 else "sequential")
+        r.tree["search"] = search
+        return r
     cands = main_tee_candidates(gm, pipe, chain0)
     tabs = []
     for b, lp in zip(legs, lps):
@@ -340,6 +343,7 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
         keys = _leg_keys(gm, gl, cands, b) if len(legs) == 1 and not sequential_only else None
         tab = leg_table(gl, lp, b, max(1, budget - used), bound_keys=keys)
         used += tab["expanded"]
+        search["leg_tables"].append(int(tab["expanded"]))
         tabs.append(tab)
     method = None
     chosen = None   # (주관 RouteResult, [(Branch, 기하, 다리 RouteResult)])
@@ -351,6 +355,7 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
                 break
             st, chain, exp = main_with_tee(gm, pipe, teec, budget - used)
             used += exp
+            search["tee_search"].append(int(exp))
             if st != "ok":
                 break
             ti = next(i for i, c in enumerate(chain) if c[1])
@@ -365,7 +370,17 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
                 break
             teec = teec.copy()
             teec[tn * 18 + td] = INF   # 그 티 후보를 막고 다시 (Q9)
-    if chosen is None:   # 순차 근사 — 주관 단독 경로는 이미 있다 (추가 탐색 없음)
+    leg_search0 = [tb["status"] for tb in tabs]
+    if chosen is None:   # 순차 근사 — 주관 단독 경로는 이미 있다
+        # F1 (2026-11-24 사양 검토): 다리 표가 bounded (정확 풀이용 한계 c 에서 멈춤) 이면 c 보다 비싼 티 후보가 표에
+        # 없다 — 남은 예산으로 한계 없이 끝까지 다시 만든 뒤 순차 근사 (가장 싼 티가 자기 간섭으로 막힌 경우)
+        for k, (b, lp) in enumerate(zip(legs, lps)):
+            if tabs[k]["status"] != "bounded" or used >= budget:
+                continue
+            tab = leg_table(make_graph(lp, (pipe,)), lp, b, max(1, budget - used), bound_keys=None)
+            used += tab["expanded"]
+            search["leg_rebuild"].append(int(tab["expanded"]))
+            tabs[k] = tab
         chosen = _sequential(pipe, gm, legs, tabs, chain0, cands)
         method = "sequential"
     mr, legres = chosen
@@ -388,7 +403,7 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
     mr.J = J
     mr.J_support_est += sum(lr.J_support_est for _, _, lr in legres)
     mr.tree = {"method": method, "legs": tlegs,
-               "leg_search": [tb["status"] for tb in tabs]}
+               "leg_search": leg_search0, "leg_search_final": [tb["status"] for tb in tabs], "search": search}
     mr.branches = [lg["waypoints"] for lg in tlegs]
     return mr
 

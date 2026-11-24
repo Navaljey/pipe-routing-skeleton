@@ -180,6 +180,62 @@ class ExactTest(unittest.TestCase):
         self.assertEqual(outs[0], outs[1])
 
 
+class BoundedRebuildTest(unittest.TestCase):
+    def test_sequential_rebuilds_bounded_leg_table(self):
+        """F1 (2026-11-24 사양 검토): 한계 c 까지의 다리 표 (bounded) 에 든 티가 모두 자기 간섭으로 막히고 c 보다 비싼 티만
+        가능하면, 순차 근사 전에 다리 표를 끝까지 다시 만들어 다리를 찾는다. 자기 간섭은 _conflicts 를 바꿔 강제한다 —
+        bounded 표에 든 다리 끝 (티 위치 + 티에 닿는 방향) 은 모두 간섭."""
+        from pipe_routing import tree_router as TR
+        orig_table, orig_conf = TR.leg_table, TR._conflicts
+        cheap = set()   # (티 위치, 다리 마지막 구간 방향) — 비용 ≤ c
+
+        def key(pos, d):
+            v = np.asarray(d, float)
+            return tuple(map(float, pos)), tuple(np.round(v / np.linalg.norm(v), 6))
+
+        def table(g, lp, b, budget, bound_keys=None):
+            tab = orig_table(g, lp, b, budget, bound_keys)
+            if bound_keys is not None and tab["status"] == "bounded":
+                cheap.update(key(g.pos[n], DIRS[d]) for n, d in tab["cand"])   # 한계 c 까지 닿은 다리 끝 전부
+            return tab
+
+        def conflicts(pipe, main_wps, legs):
+            for _, geom in legs:
+                if key(geom[0], np.subtract(geom[0], geom[1])) in cheap:
+                    return ["강제 간섭"]
+            return orig_conf(pipe, main_wps, legs)
+
+        TR.leg_table, TR._conflicts = table, conflicts
+        try:
+            # 긴 주관 (40 m) — 한계 c 안의 다리 표는 다리 단자 근처 주관만 덮는다
+            # 작은 장애물 열 — 격자선이 늘어 다리 표가 한계 c 에서 멈춘다 (bounded)
+            obs = [{"id": f"O{k}", "type": "box", "min": [10000 + 3000 * k, 7000, 3000],
+                    "max": [11000 + 3000 * k, 8000, 4000]} for k in range(9)]
+            sc = from_dict({"block": {"width": 40000, "length": 12000, "height": 6000, "unit": "mm"}, "obstacles": obs,
+                            "pipes": [{"id": "P", "type_id": "T3", "nominal_size": "100A", "gravity_pipe": False,
+                                       "min_slope": None,
+                                       "start": {"pos": [0, 4000, 1000], "kind": "boundary", "dir": [1, 0, 0]},
+                                       "end": {"pos": [40000, 4000, 1000], "kind": "boundary", "dir": [1, 0, 0]},
+                                       "branches": [{"id": "B1", "nominal_size": "50A", "pos": [6000, 12000, 1000],
+                                                     "kind": "boundary", "dir": [0, 1, 0], "flow": "out"}]}]})
+            clear_cache()
+            r = make_layered_router(support_cost=False, reserve=False, member_reserve=False, diagnostic=False)(
+                sc, sc.pipes[0], 60, [])
+            ok_after = r
+        finally:
+            TR.leg_table, TR._conflicts = orig_table, orig_conf
+        self.assertTrue(cheap)
+        r = ok_after
+        self.assertEqual(r.status, "ok")
+        self.assertEqual(r.tree["method"], "sequential")
+        self.assertEqual(r.tree["leg_search"], ["bounded"])
+        self.assertEqual(r.tree["leg_search_final"], ["done"])
+        self.assertTrue(r.tree["search"]["leg_rebuild"])
+        leg = r.tree["legs"][0]
+        self.assertTrue(leg["found"])
+        self.assertNotIn(key(leg["waypoints"][0], np.subtract(leg["waypoints"][0], leg["waypoints"][1])), cheap)
+
+
 # --------------------------------------------------------------------------- 검증기 나무 규칙
 
 MAIN = [[0, 4000, 1000], [12000, 4000, 1000]]

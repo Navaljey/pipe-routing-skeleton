@@ -93,7 +93,11 @@ def tree_fields(p: Pipe, r, v, legs: dict) -> dict:
                          "waypoints": [[round(c, 3) for c in w] for w in lg.get("waypoints", [])],
                          "tee": lg.get("tee")})
     main = [[round(c, 3) for c in w] for w in r.waypoints] if r.status == "ok" else []
-    return {"tree": {"main": main, "legs": legs_out, "method": tr.get("method")},
+    out = {"main": main, "legs": legs_out, "method": tr.get("method")}
+    if "search" in tr:   # F4: 확장 수 분해 (주관 단독 · 다리 표 · 티 탐색 시도별 · 다리 표 재작성) · 다리 표 상태
+        out["search"] = {**tr["search"], "leg_search": tr.get("leg_search"),
+                         "leg_search_final": tr.get("leg_search_final")}
+    return {"tree": out,
             "legs_passed": int(passed), "legs_total": len(p.branches)}
 
 
