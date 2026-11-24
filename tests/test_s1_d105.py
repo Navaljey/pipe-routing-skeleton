@@ -42,14 +42,14 @@ class D105Test(unittest.TestCase):
 
 class D106Test(unittest.TestCase):
     def test_terminal_straight_blocked(self):
-        # 경계 start (x=0, +x) 앞 600 mm 에 장애물: 강제 직관 max(3D, r) + t₉₀ = 300 + 150 = 450 → 막히지 않음,
-        # 장애물을 400 mm 로 당기면 막힘 (r = 117.15)
+        # 경계 start (x=0, +x): 반드시 곧은 구간 max(3D, r) = 300 (D135 — 정정 전 + t₉₀).
+        # 장애물 x ≥ 500 → 이격 200 ≥ r 막히지 않음, x ≥ 400 → 이격 100 < r = 117.15 막힘
         p = pdict("A", [0, 20000, 5000], [40000, 20000, 5000], [1, 0, 0], [1, 0, 0])
         L = terminal_straight_length(scen([p]).pipes[0], "start")
-        self.assertAlmostEqual(L, 300 + elbow_tangent("100A", 90))
-        ok = scen([p], [([700, 19000, 4000], [2000, 21000, 6000])])
+        self.assertAlmostEqual(L, 300)
+        ok = scen([p], [([500, 19000, 4000], [2000, 21000, 6000])])
         self.assertTrue(terminal_straight_blocked(ok.pipes[0], ok.obstacles)["feasible"])
-        bad = scen([p], [([500, 19000, 4000], [2000, 21000, 6000])])
+        bad = scen([p], [([400, 19000, 4000], [2000, 21000, 6000])])
         tb = terminal_straight_blocked(bad.pipes[0], bad.obstacles)
         self.assertFalse(tb["feasible"])
         self.assertEqual(tb["blocked"][0]["terminal"], "start")
