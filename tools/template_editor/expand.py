@@ -146,7 +146,6 @@ for s_ in systems:
         q = [t_["pos"][i] + t_["dir"][i] * L for i in range(3)]
         for b in boxes:
             if b["id"] == t_["host"] or b["key"] in ("floor_openings",): continue
-            if b["key"] in ("ceiling_longitudinals", "ceiling_web_frames") and t_["host"] == "DECK_UP": continue   # 관통 단자는 천장 구조 사이로
             dd = segbox(t_["pos"], q, b)
             lim = 0 if b["attrs"]["access"] else r
             if dd < lim - 1e-6 or (b["attrs"]["access"] and dd <= 0):

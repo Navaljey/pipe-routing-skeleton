@@ -23,12 +23,12 @@ zone:
 attribute_defaults:
   ceiling_longitudinals: {supportable: true,  penetrable: false}
   ceiling_web_frames:    {supportable: true,  penetrable: false}   # D132 — 웹 구멍 관통은 M27
-  side_shell_frames:     {supportable: true,  penetrable: false}
+  side_shell_frames:     {supportable: true,  penetrable: false}   # 2026-11-24 소유자 확인
   pillars:               {supportable: true,  penetrable: false}
   bulkheads:             {supportable: true,  penetrable: true}    # D113 내부 격벽
   casing_wall:           {supportable: true,  penetrable: true}    # v2 변경 (v1 = 관통 불가)
   casing_contents:       {supportable: false, penetrable: false}
-  stairs:                {supportable: false, penetrable: false}
+  stairs:                {access: true}                            # 2026-11-24 소유자: 계단 = 접근 구역 (D119)
   equipment:             {supportable: false, penetrable: false}
   cable_trays:           {supportable: false, penetrable: false}   # D131
   passages:              {access: true}                            # D119
@@ -198,8 +198,8 @@ pipes:
   - {svc: FO, size: 50A,  from: ME_TOP.FO_RET, to: "DECK_DN(12000, 22000)"}
   - {svc: LO, size: 65A,  from: LO_SETT_TK.OUT, to: LO_PUR_1.IN}
   - {svc: LO, size: 65A,  from: LO_PUR_1.OUT, to: "DECK_DN(12500, 9900)"}
-  - {svc: SW, size: 300A, from: "DECK_DN(29300, 10600)", to: SW_PUMP_1.SUC}
-  - {svc: SW, size: 300A, from: "DECK_DN(29300, 16900)", to: SW_PUMP_2.SUC}
+  - {svc: SW, size: 300A, from: "DECK_DN(29300, 10000)", to: SW_PUMP_1.SUC}   # 2026-11-24 소유자: 펌프에서 1.4 m 이상 (흡입 노즐까지 꺾임 공간)
+  - {svc: SW, size: 300A, from: "DECK_DN(29300, 17500)", to: SW_PUMP_2.SUC}   # 〃
   - {svc: SW, size: 300A, from: SW_PUMP_1.DIS, to: FW_COOLER.SW_IN, legs: [{size: 300A, from: SW_PUMP_2.DIS}]}
   - {svc: SW, size: 300A, from: FW_COOLER.SW_OUT, to: "DECK_DN(26350, 16500)"}
   - {svc: FW, size: 150A, from: FW_COOLER.FW_OUT, to: ME_TOP.FW_IN}
@@ -214,8 +214,8 @@ pipes:
   - {svc: FF, size: 150A, from: "DECK_DN(31000, 10000)", to: "BHD(BHD_WS)", legs: [{size: 100A, to: "DECK_UP(4000, 27000)"}]}
   - {svc: BG, size: 100A, from: "DECK_DN(18000, 24000)", to: "DECK_DN(5000, 27000)"}
   - {svc: SD, size: 100A, from: WS_CABINETS.DRN, to: "DECK_DN(22000, 27500)"}              # 중력
-  - {svc: DD, size: 65A,  from: "DECK_UP(35000, 24000)", to: "DECK_DN(35200, 22600)"}      # v2: 캐비닛 안 관통 해소
-  - {svc: DD, size: 65A,  from: "DECK_UP(3000, 20000)", to: "DECK_DN(2500, 19000)"}
+  - {svc: DD, size: 65A,  from: "DECK_UP(35000, 24400)", to: "DECK_DN(35200, 22600)"}      # v2: 캐비닛 안 관통 해소 · 2026-11-24: 종늑골 사이로 (y 24000 → 24400)
+  - {svc: DD, size: 65A,  from: "DECK_UP(3000, 20400)", to: "DECK_DN(2500, 19000)"}   # 2026-11-24: 윗데크 관통을 종늑골 사이로 (y 20000 → 20400)
 
 variation:
   equipment_pos: per_item          # 노즐은 장비와 함께 움직인다
