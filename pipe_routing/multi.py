@@ -203,7 +203,11 @@ def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limi
         if s.status != "timeout" or diag is None:
             return s
         if pid not in res.diag_solo:
-            res.diag_solo[pid] = diag(sc, pipes[pid], time_limit, [])
+            try:
+                res.diag_solo[pid] = diag(sc, pipes[pid], time_limit, [])
+            except MemoryError:     # D134 ⑨ · D123 ③: 진단 재라우팅이 메모리를 넘음 = 자원 초과 (진단 불명으로 센다)
+                from .router_astar import RouteResult
+                res.diag_solo[pid] = RouteResult(pid, "resource_exceeded")
         return res.diag_solo[pid]
 
     for pid in order:
@@ -213,7 +217,7 @@ def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limi
                 q for q in order if q in placed
                 and systems_conflict(pipes[pid], s, pipes[q], placed[q])]
             seq = routes[pid].status
-            if s.status == "timeout" and diag is not None:
+            if s.status in ("timeout", "resource_exceeded") and diag is not None:
                 cls = "diagnosis_inconclusive"      # D74: 진단 예산도 소진 — 개별/간섭을 가릴 수 없다
             elif s.status != "ok":
                 cls = "individual"
@@ -228,9 +232,13 @@ def classify_failures(res: PlanResult, sc: Scenario, router: Callable, time_limi
                 detail["solo_budget"] = "diagnostic"    # D74: 진단 예산으로 다시 판정함
             alt = getattr(diag or router, "without_reservations", None)
             if cls == "individual" and alt is not None:   # D59: 예약을 빼면 단독으로 되는가 = 예약끼리 충돌
-                r2 = alt(sc, pipes[pid], time_limit, [])
-                res.free_solo[pid] = r2
-                detail["reservation_conflict"] = r2.status == "ok"
+                try:
+                    r2 = alt(sc, pipes[pid], time_limit, [])
+                    res.free_solo[pid] = r2
+                    detail["reservation_conflict"] = r2.status == "ok"
+                except MemoryError:   # D123 ③: 예약 없는 진단 재라우팅이 메모리를 넘음 — 예약 충돌은 판정하지 못함
+                    detail["reservation_conflict"] = False
+                    detail["reservation_check"] = "resource_exceeded"
             res.fail_class[pid] = cls
             res.fail_detail[pid] = detail
 

@@ -194,6 +194,32 @@ class RipupTest(unittest.TestCase):
         res = sequential_ripup_planner(sc, router=router)
         self.assertEqual(res.fail_class, {"B": "diagnosis_inconclusive"})
 
+    def test_diagnosis_memory_error(self):
+        """D134 ⑨ · D123 ③: 진단 재라우팅이 메모리를 넘으면 (MemoryError) 멈추지 않고 진단 불명 — solo_status = 자원 초과.
+        경로·rip-up 판단은 라우팅 예산 결과 그대로."""
+        def boom(sc_, pipe, limit, placed=()):
+            raise MemoryError
+        sc, router, mock, calls = self._budget_router(boom)
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.fail_class, {"B": "diagnosis_inconclusive"})
+        self.assertEqual(res.fail_detail["B"]["solo_status"], "resource_exceeded")
+        self.assertEqual(res.routes["B"].status, "timeout")
+        self.assertEqual(res.ripups, 0)
+
+    def test_reservation_check_memory_error(self):
+        """개별 경로 분류의 예약 없는 재라우팅 (D59) 이 메모리를 넘으면 예약 충돌은 판정하지 못함으로 표시하고 계속."""
+        sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 25000)])
+        router = MockRouter({"A": lambda ids, w: SHORT_A, "B": lambda ids, w: None})
+
+        def free(sc_, pipe, limit, placed=()):
+            raise MemoryError
+        router.without_reservations = free
+        res = sequential_ripup_planner(sc, router=router)
+        self.assertEqual(res.fail_class, {"B": "individual"})
+        self.assertEqual(res.fail_detail["B"]["reservation_check"], "resource_exceeded")
+        self.assertFalse(res.fail_detail["B"]["reservation_conflict"])
+        self.assertNotIn("B", res.free_solo)
+
     def test_independent_planner(self):
         sc = scenario([boundary_pipe("A", "100A", 20000), boundary_pipe("B", "50A", 20100)])
         router = MockRouter({"A": lambda ids, w: SHORT_A, "B": lambda ids, w: line(20100)})

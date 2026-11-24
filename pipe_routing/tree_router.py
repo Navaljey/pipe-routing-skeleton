@@ -377,6 +377,7 @@ def route_tree(sc, pipe: Pipe, make_graph, budget: int, sequential_only: bool = 
         for k, (b, lp) in enumerate(zip(legs, lps)):
             if tabs[k]["status"] != "bounded" or used >= budget:
                 continue
+            tabs[k] = None   # 옛 표를 먼저 놓는다 (메모리 — 결과 불변)
             tab = leg_table(make_graph(lp, (pipe,)), lp, b, max(1, budget - used), bound_keys=None)
             used += tab["expanded"]
             search["leg_rebuild"].append(int(tab["expanded"]))

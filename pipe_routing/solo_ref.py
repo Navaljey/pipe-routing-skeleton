@@ -26,11 +26,16 @@ def solo_routes(sc, router, reuse: dict = None) -> tuple:
     out, reused = {}, 0
     for p in sc.pipes:
         r = (reuse or {}).get(p.id)
-        if r is not None and r.status != "timeout" and int(r.expanded or 0) < cap:
+        # 분기 계통 (D134) 의 라우팅 예산 = 상한 × (다리 수 + 1) — 진단 결과가 그 안에서 끝났으면 같은 탐색이다
+        if r is not None and r.status != "timeout" and int(r.expanded or 0) < cap * (len(p.branches) + 1):
             out[p.id] = r
             reused += 1
             continue
-        out[p.id] = alt(sc, p, 60.0, [])
+        try:
+            out[p.id] = alt(sc, p, 60.0, [])
+        except MemoryError:   # D123 ③: 보고용 단독 재라우팅이 메모리를 넘음 = 자원 초과 (단독 실패로 센다)
+            from .router_astar import RouteResult
+            out[p.id] = RouteResult(p.id, "resource_exceeded")
     return out, reused
 
 
@@ -42,7 +47,15 @@ def solo_scores(sc, solo: dict, std) -> dict:
     out = {}
     for pid, r in solo.items():
         row = {"status": r.status, "expanded": int(r.expanded or 0), "pass": False, "J": None}
-        if r.status == "ok":
+        if r.status == "ok" and pipes[pid].branches:
+            # D134 ③: 계통 단독 J = 주관 + 다리 (다리 경로를 함께 검증 — 빼면 branch 위반으로 늘 실패)
+            from .pipeline import tree_j
+            pr = PipeRoute(pid, r.waypoints, getattr(r, "branches", None) or [])
+            rep = verify(sc, [pr], std=std)
+            v = rep["pipes"][pid]
+            row["pass"] = bool(v.success)
+            row["J"] = tree_j(sc, pipes[pid], pr, v, rep.get("legs", {}).get(pid, {}))["total"]
+        elif r.status == "ok":
             v = verify(sc, [PipeRoute(pid, r.waypoints)], std=std)["pipes"][pid]
             row["pass"] = bool(v.success)
             row["J"] = j_breakdown(pipes[pid], r.waypoints, v.fittings, v.supports, sc)["total"]
@@ -71,7 +84,9 @@ def summary(routes: list, scores: dict, shared: bool, sec: float, reused: int) -
                      "negative": sum(1 for x in ratios if x < -1e-9)},
         "solo_fail": sum(1 for s in scores.values() if not s["pass"]),
         "solo_fail_router": sum(1 for s in scores.values() if s["status"] != "ok"),
-        "solo_fail_status": {k: sum(1 for s in scores.values() if s["status"] == k) for k in ("unreachable", "timeout")},
+        "solo_fail_status": {k: sum(1 for s in scores.values() if s["status"] == k)
+                             for k in ("unreachable", "timeout") + (("resource_exceeded",) if any(
+                                 s["status"] == "resource_exceeded" for s in scores.values()) else ())},
         "multi_pass_solo_fail": sum(1 for x in routes if x["success"] and not scores[x["pipe_id"]]["pass"]),
         "sec": round(sec, 3), "reused": reused,
     }

@@ -33,6 +33,8 @@ def scenario_path(stem: str) -> str:
         return f"scenarios/stair/{stem}.json"
     if stem.startswith("pair"):
         return f"scenarios/pair/{stem}.json"
+    if stem.startswith("br"):
+        return f"scenarios/branch/{stem}.json"
     return f"scenarios/procedural/{stem}.json"
 
 

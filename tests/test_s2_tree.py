@@ -179,6 +179,18 @@ class ExactTest(unittest.TestCase):
             outs.append(json.dumps([r.waypoints, r.branches, r.tree], sort_keys=True))
         self.assertEqual(outs[0], outs[1])
 
+    def test_solo_reference_scores_tree(self):
+        """D101·D134 ③: 계통 단독 J 는 주관 + 다리를 함께 검증한다 (다리를 빼면 branch 위반으로 늘 실패)."""
+        from pipe_routing import solo_ref
+        sc = system("out", obstacles=OBS)
+        r = self._route(sc, support=True)
+        row = solo_ref.solo_scores(sc, {"P": r}, None)["P"]
+        self.assertTrue(row["pass"])
+        rep = verify(sc, [PipeRoute("P", r.waypoints, r.branches)])
+        from pipe_routing.pipeline import tree_j
+        J = tree_j(sc, sc.pipes[0], PipeRoute("P", r.waypoints, r.branches), rep["pipes"]["P"], rep["legs"]["P"])
+        self.assertAlmostEqual(row["J"], J["total"])
+
 
 class BoundedRebuildTest(unittest.TestCase):
     def test_sequential_rebuilds_bounded_leg_table(self):
