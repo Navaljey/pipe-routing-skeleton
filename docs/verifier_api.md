@@ -136,7 +136,22 @@ t = h.together_at("P001", pos, axis)    # D89 함께 받치는 D (id·면·규�
 
 ### 4.1 서포트 막힘 조회 — `support_blockers` (D128)
 
-`h.support_blockers(pipe_id)` → [(막는 배관, 서포트 위치, 막힌 부재·형식, 막힘 종류)] — 그 배관의 서포트 배치에서 다른 놓인 배관이 없었다면 쓸 수 있었던 (면, 형식) 이 그 배관 때문에 불가가 된 경우 (부재 간섭, D80 ⑧). R7 진단 (`docs/reports/s1_6.md` §10) 과 같은 정의, 조회 전용. 구현·호출 비용: S2-M2 에서 이 절에 적는다.
+`h.support_blockers(pipe_id)` → [(막는 배관, 서포트 위치, 막힌 부재·형식, 막힘 종류)] — 그 배관의 서포트 배치에서 다른 놓인 배관이 없었다면 쓸 수 있었던 (면, 형식) 이 그 배관 때문에 불가가 된 경우 (부재 간섭, D80 ⑧). R7 진단 (`docs/reports/s1_6.md` §10) 과 같은 정의, 조회 전용.
+
+```python
+rows = h.support_blockers("P010")   # 그 배관의 경로가 힌트에 있어야 한다 (없으면 ValueError)
+# [{"blocker": "P008", "pos": [...], "axis": [...], "s_mm": 6000.0, "face": "floor", "form": "C",
+#   "members": ["leg", "leg"], "kind": "gap"}, ...]   — 막는 배관이 없으면 []
+```
+
+- **묻는 위치** = 그 배관만 놓였을 때 검증기가 서포트를 놓는 위치 (D80 ⑤ 탐욕 — 단독 배치). 위치마다 단독에서 `ok` 인 (면, 형식) 이 지금 배치에서 `blocked` 이면, 놓인 배관을 하나씩만 두고 같은 부재 판정 (`support_std.members_blocked`, D80 ⑧) 을 해 막는 배관과 막힌 부재 역할 (`members`) 을 적는다.
+- **kind**: `gap` = 그 위치가 지금 배치의 서포트 불가 구간 (support 위반, R7) 안 · `displaced` = 지금 배치에서도 서포트는 놓이지만 다른 위치·형식으로 (J 에 무게 차이로 남는다).
+- 위치·축은 출력 좌표 (반올림) 그대로 — 단독·지금 판정이 같은 값으로 묻는다. 막는 배관 둘이 같이 있어야만 막히는 경우 (하나씩은 안 막힘) 는 나오지 않는다.
+- 결과 불변 (`tests/test_d128.py`): 호출 전후 검증·Session 출력 비트 동일. 섹션 3) 의 `support_diag._support_of`·`verifier.session._reach`·`_segs` 사용은 이 함수로 옮긴다 — 옮긴 뒤 세 함수는 공개 약속 대상이 아니다 (D128).
+
+**R7 대조 (`python -m pipe_routing.verifier.blockers_bench`, 비공개 표, E1 첫 해 경로):** support 위반 배관 20 (`docs/reports/r7_cases.md` 첫 해 — 기본 1 · 밀집 30 5 · 밀집 50 13 · 블록 쌍 1) 모두 R7 진단의 막는 배관 = `kind = gap` 막는 배관 (**20/20 같음**). `gap` 인데 support 위반이 아닌 배관 0. 11 시나리오 312 배관 중 막힘이 있는 배관 96 (`gap` 30 행 · `displaced` 160 행).
+
+**호출 비용** (배관 1개, 그 시나리오 경로 전부 놓인 상태, 중앙 / p90 / 최대): 120 / 274 / 802 ms (312 호출, 11 시나리오 — Intel Xeon 2.1 GHz 컨테이너, 다른 측정과 동시 실행이라 단독보다 느릴 수 있다). 힌트 생성 중앙 22 ms. 시간 대부분은 단독·지금 두 번의 서포트 배치 (검증기 support 모듈과 같은 계산).
 
 ## 5. 배관 사양 조회 — `pipe_spec` (S2-0b, D116·D117)
 
@@ -163,8 +178,32 @@ s.source                     # "builtin" (DEFAULT = CLAUDE.md §3.1·§3.2) · "
 
 ## 6. 지도 조회 (D126)
 
-선수가 skeleton 지도를 읽을 때의 규칙 (`docs/v3_contract.md` §c2).
-- **공개 읽기 배열**과 자료형·모양·뜻은 아래 표 (S2-M3 에서 채움). 목록에 없는 속성은 비공개 — 예고 없이 바뀔 수 있다.
-- 노출 배열은 **읽기 전용** (`numpy writeable=False`) — 제자리 쓰기는 즉시 오류.
-- **공식 비용 덧셈 인자** (엣지별 추가 비용 ≥ 0, 협상 가격용 — 지도는 바꾸지 않음) · **공식 휴리스틱 인자** (상태·노드별 하한 표, D125 `--heuristic` 과 같은 자리). 두 인자를 쓰지 않으면 결과는 비트 동일.
-- L3 (D126 ①) 로 자료형·모양이 바뀌는 배열은 병합 전에 이 절의 표에 적는다.
+선수가 skeleton 지도를 읽을 때의 규칙 (`docs/v3_contract.md` §c2). 지도 = `layered.LayeredGraph(sc, pipe, placed, reserved=..., members=...)` — 기준선 라우터 (`make_layered_router`) 가 배관마다 만드는 것과 같다.
+
+**공개 읽기 배열** (`layered.PUBLIC_ARRAYS`). N = 노드 수, 18 = 방향 (축 6 + 평면 내 45° 12, `space.DIRS` 순서). 모두 **읽기 전용** (`writeable=False`) — 제자리 쓰기 (예: `g.scost[...] += 가격`) 는 즉시 `ValueError`. 목록에 없는 속성 (`_item_cache`·`fixed`·`clearance` 등) 은 비공개 — 예고 없이 바뀔 수 있다.
+
+| 이름 | 모양 · 자료형 (2026-11-21) | 뜻 |
+|---|---|---|
+| `step` | (N, 18) int64 | 노드 n 에서 방향 d 로 가는 엣지의 끝 노드, 없으면 −1 |
+| `elen` | (N, 18) float64 | 그 엣지 길이 mm |
+| `emask` | (N, 18) int64 (값은 16 비트) | D60·D65 꺾임 등급 마스크 — 비트 (시작 등급 i × 4 + 끝 등급 j), 등급 0/45/90/135 → 0~3. 0 = 어떤 꺾임 조합으로도 못 씀 |
+| `scost` | (N, 18) float64 | 엣지 추정 서포트 kg (D80 ⑨) + 관통비 (D95·D113) — 직관 kg 은 `elen / 1000 × pipe.kg_per_m` 따로 |
+| `spack` | (N, 18) int64 | D80 ⑨ 서포트 가능 구간 요약 (가능 점 이전 a · 이후 b · 안쪽 불가 최대 g, mm 올림 묶음, 0 = 제약 없음) |
+| `pos` | (N, 3) float64 | 노드 좌표 mm |
+| `hdist` | (N,) float64 | 목표까지 휴리스틱 거리 mm (D41, 블록 쌍 관통 배관은 창 경유 하한 D76) |
+
+L3 (D126 ①, S2-M4) 로 자료형·모양이 바뀌는 배열은 병합 전에 이 표에 적는다.
+
+**공식 라우팅 호출 — `layered.route_graph`**
+
+```python
+from pipe_routing.layered import LayeredGraph, route_graph, make_layered_router
+g = LayeredGraph(sc, pipe, placed)                       # 지도 (읽기 전용 배열)
+r = route_graph(g, pipe, extra_cost=None, h_lower=None)   # 기준선 A* (컴파일, D53), 세트 상한 (D73·D92 ③)
+r.status, r.waypoints, r.J, r.expanded, r.states          # RouteResult — J 는 지도 비용 (extra_cost 제외)
+```
+
+- `extra_cost` = (N, 18) float, 유한·0 이상 — 탐색 비용에만 더한다 (협상 가격용). 지도·`r.J`·`support_est` 는 그대로. 엣지 (n, d) 의 비용 = `elen/1000·kg/m + 엘보 + scost + extra_cost`.
+- `h_lower` = (N,) float, 유한·0 이상 — 휴리스틱 h = max(D41 h, `h_lower[노드]`). **남은 비용 (extra_cost 포함) 의 하한**이어야 최적성이 보존된다 (admissible·consistent 는 부르는 쪽 책임, D40 ①). D125 rg 가 같은 자리를 쓴다 — `astar_fast` 소스 패치는 필요 없다.
+- 두 인자가 None (또는 0 배열) 이면 경로·J·확장 수·확장 순서가 기준선과 **비트 동일** (`tests/test_d126_api.py`). extra_cost 가 있으면 가지치기 없는 파이썬 Dijkstra 와 같은 비용, 허용 하한 h_lower 는 같은 최적 비용 (확장 수 ≤).
+- 다중 배관 슬롯에서는 `make_layered_router(extra_cost=f, h_lower=h)` — f, h = 함수 (g, pipe, placed) → 배열 또는 None. 하위 라우터 (진단·예약 없음) 에도 같은 함수가 쓰인다.

@@ -44,6 +44,13 @@ def default_budget(sc) -> int:
     """세트별 배관당 확장 상한 (D73·D92 ③): 블록 쌍 = 2²³, 그 밖 = 2²²."""
     return EXPAND_BUDGET_PAIR if getattr(sc, "block_pair", None) else EXPAND_BUDGET
 DIAG_FACTOR = 4             # D74: 실패 분류용 진단 단독 재라우팅 예산 = 라우팅 예산 × 4 (16,777,216)
+DIAG_CAP = 33_554_432       # = 2²⁵ (D127)
+
+
+def diag_limit(limit: int) -> int:
+    """D127 진단 상한 = min(4 × 라우팅 상한, max(라우팅 상한, 2²⁵)).
+    단일 블록 2²² → 2²⁴, 블록 쌍 2²³ → 2²⁵ (D74 와 같음), 참조 품질선 2²⁵ → 2²⁵ (이전 2²⁷)."""
+    return min(DIAG_FACTOR * limit, max(limit, DIAG_CAP))
 
 _FIXED: "OrderedDict" = OrderedDict()   # (id(scenario), 구경, 중력관 층 여부, 격자 변형[, 블록 쌍 층]) → (scenario, 고정 레이어)
 PAIR_MAX_LAYERS = 4   # 블록 쌍 시나리오에서 메모리에 두는 고정 층 수 (LRU, D76 — 2배 맵 층은 약 0.5 GB)
@@ -457,6 +464,32 @@ class _Scratch:
     """EscapeGraph._pipe_groups 를 항목 하나에 부를 때 쓰는 빈 객체 (그 함수가 속성을 기록한다)."""
 
 
+def _and_items(obs, parts):
+    """D67 합성: 고정 마스크 AND 항목별 희소 마스크. D126 L3 (c): 항목이 없으면 템플릿 배열을 그대로 (복사 없음),
+    있으면 uint16 사본 하나에서 (이전 int64 사본과 같은 값 — 마스크는 16 비트)."""
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return obs
+    em = obs.copy()
+    for idx, val in parts:
+        em[idx] &= val
+    return em
+
+
+def _keep(em):
+    """0 이 아닌 엣지 번호 — 모두 0 이 아니면 None (복사 없이 그대로 쓴다, L3 (c))."""
+    nz = em != 0
+    return None if nz.all() else np.nonzero(nz)[0]
+
+
+def _take(a, keep):
+    return a if keep is None else a[keep]
+
+
+# D126 지도 조회 API — 선수가 읽어도 되는 LayeredGraph 배열 (`docs/verifier_api.md` §6). 그 밖의 속성은 비공개.
+PUBLIC_ARRAYS = ("step", "elen", "emask", "scost", "spack", "pos", "hdist")
+
+
 class LayeredGraph:
     """SpaceRepresentation (§4.1) — 노드 = 정수 id. 엘보·도착·직관 규칙은 EscapeGraph 와 같은 함수를 빌려 쓴다."""
 
@@ -485,6 +518,7 @@ class LayeredGraph:
         self.grid = grid
         self.fixed = F
         self.pipe = pipe
+        self.sc = sc   # D126 route_graph 의 세트 상한 (default_budget) 용
         self.r = pipe.radius
         self.L = pipe.min_straight
         self.tangent = {a: elbow_tangent(pipe.nominal_size, a) for a in (0, 45, 90, 135)}
@@ -551,8 +585,12 @@ class LayeredGraph:
         self.use_support_cost = support_cost
         self._ext = np.array(sc.block.extent, dtype=float)
         self._sc = sc
-        self._sup = _fixed_support(F, sc, pipe) if support_cost else None
         self._ls = line_support(F, sc, pipe) if support_cost else None
+        # D126 L3 (a): 밀집 서포트 표 (격자 전체, 240 B/격자점) 는 엣지 목록 (템플릿) 을 만들 때만 쓴다 — 증분 표시 (변형 A)
+        # 는 템플릿이 캐시돼 있으면 만들지 않고, 템플릿을 만든 뒤에는 고정층 캐시에서 내려놓는다 (값은 같은 함수라 같다)
+        self._sup = None
+        if support_cost and not (incremental and not patches):
+            self._sup = _fixed_support(F, sc, pipe)
         hm, vm = SUPPORT_SPACING[pipe.nominal_size]
         self.smax_dir = np.array([vm if (DIRS[d][0] == 0 and DIRS[d][1] == 0) else hm for d in range(18)], float)
         # 꺾임 등급(0/45/90/135)별 u 추가 = 2·t_θ / 수평 간격 (support_router.support_step)
@@ -570,11 +608,11 @@ class LayeredGraph:
         self.end_node = self._id_of(pipe.end.pos)
 
         # 3) 엣지 → 이웃 표
-        self.step = np.full((N, 18), -1, dtype=np.int64)
+        self.step = np.full((N, 18), -1, dtype=np.int32)   # D126 L3 (b): 노드 번호 int32 (노드 수 < 2³¹)
         self.elen = np.zeros((N, 18))
         self.scost = np.zeros((N, 18))
         self.spack = np.zeros((N, 18), dtype=np.int64)   # D80 ⑨ 서포트 가능 구간 요약 (0 = 제약 없음)
-        self.emask = np.zeros((N, 18), dtype=np.int64)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j)
+        self.emask = np.zeros((N, 18), dtype=np.uint16)   # D60 엣지 꺾임 등급 마스크 (start i × 4 + end j), 16 비트 (L3 (b))
         self._pen = {}   # D95 관통 엣지 (노드, 방향) → 관통 피스 kg (scost 에 더해 둔다)
         if self.incremental:
             self.n_edges = self._incremental_edges(F, is_base, bi, first)
@@ -585,6 +623,8 @@ class LayeredGraph:
         goal = np.array(pipe.end.pos, dtype=float)
         self.hdist = np.sqrt(((self.pos - goal) ** 2).sum(1))
         self._window_bound(sc, pipe, goal)
+        for name in PUBLIC_ARRAYS:   # D126: 공개 읽기 배열은 읽기 전용 — 제자리 쓰기는 즉시 오류 (지도 공유 캐시 오염 방지)
+            getattr(self, name).flags.writeable = False
         self.build_sec = time.perf_counter() - t0 + fixed_sec
         self.fixed_sec = fixed_sec
 
@@ -670,6 +710,7 @@ class LayeredGraph:
             return cache[key]
         bi = np.nonzero(F.node_ok)
         Fidx = np.stack(bi, -1)   # 변형 A: 노드 = 고정 레이어 노드 (같은 순서)
+        sup = self._sup if self._sup is not None or not self.use_support_cost else _fixed_support(F, self._sc, self.pipe)
         axis = []
         for ax in range(3):
             o1, o2 = [k for k in range(3) if k != ax]
@@ -694,10 +735,10 @@ class LayeredGraph:
             L = np.abs(self.pos[b, ax] - self.pos[a, ax])
             sc_ = np.zeros(len(a))
             sp_ = np.zeros(len(a), dtype=np.int64)
-            if self._sup is not None:
+            if sup is not None:
                 ia = Fidx[a[adj]]
-                sc_[adj] = self._sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
-                sp_[adj] = self._sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sc_[adj] = sup[0][ax][0][ia[:, 0], ia[:, 1], ia[:, 2]]
+                sp_[adj] = sup[0][ax][1][ia[:, 0], ia[:, 1], ia[:, 2]]
                 r_ = np.nonzero(~adj)[0]
                 sc_[r_], sp_[r_] = support_edge_model(self._ls, self.pos[a[r_]], self.pos[b[r_]])
             e = {"a": a.astype(np.int32), "b": b.astype(np.int32), "obs": obs[sel].astype(np.uint16), "L": L,
@@ -723,9 +764,11 @@ class LayeredGraph:
             obs = F.diag_mask[d][src] if d in F.diag_mask else np.full(len(s_id), 0xFFFF, np.uint16)
             diag[d] = {"a": s_id.astype(np.int32), "b": d_id.astype(np.int32), "obs": obs.astype(np.uint16),
                        "L": np.linalg.norm(self.pos[d_id] - self.pos[s_id], axis=1),
-                       "sc": self._sup[1][d][0][src] if self._sup is not None else np.zeros(len(s_id)),
-                       "sp": self._sup[1][d][1][src] if self._sup is not None else np.zeros(len(s_id), np.int64)}
+                       "sc": sup[1][d][0][src] if sup is not None else np.zeros(len(s_id)),
+                       "sp": sup[1][d][1][src] if sup is not None else np.zeros(len(s_id), np.int64)}
         cache[key] = {"axis": axis, "diag": diag}
+        if self.incremental and sup is not None and self._sup is None:   # D126 L3 (a): 템플릿에 값이 옮겨졌다
+            F.__dict__.get("_support_cache", {}).pop((self.pipe.nominal_size, self._ls.std.sha256), None)
         return cache[key]
 
     def _plate_penetration(self, ax: int, P0: np.ndarray, P1: np.ndarray):
@@ -843,41 +886,37 @@ class LayeredGraph:
         contribs = [self._item_contrib(F, key, op, w) for key, op, w in self._items]
         n = 0
         for ax, e in enumerate(tmpl["axis"]):
-            em = e["obs"].astype(np.int64)
-            for c in contribs:
-                idx, val = c["axis"][ax]
-                em[idx] &= val
-            keep = np.nonzero(em != 0)[0]
-            a, b, em = e["a"][keep], e["b"][keep], em[keep]
+            em = _and_items(e["obs"], [c["axis"][ax] for c in contribs])
+            keep = _keep(em)
+            a, b, em = _take(e["a"], keep), _take(e["b"], keep), _take(em, keep)
             dp, dm = 2 * ax, 2 * ax + 1
-            self.step[a, dp], self.elen[a, dp] = b, e["L"][keep]
-            self.step[b, dm], self.elen[b, dm] = a, e["L"][keep]
+            L = _take(e["L"], keep)
+            self.step[a, dp], self.elen[a, dp] = b, L
+            self.step[b, dm], self.elen[b, dm] = a, L
             self.emask[a, dp] = em
             self.emask[b, dm] = swap_mask(em)
-            if self._sup is not None:
-                self.scost[a, dp] = e["sc"][keep]
-                self.scost[b, dm] = e["sc"][keep]
-                self.spack[a, dp] = e["sp"][keep]
-                self.spack[b, dm] = reverse_support(e["sp"][keep])
+            if self.use_support_cost:
+                sc_, sp_ = _take(e["sc"], keep), _take(e["sp"], keep)
+                self.scost[a, dp] = sc_
+                self.scost[b, dm] = sc_
+                self.spack[a, dp] = sp_
+                self.spack[b, dm] = reverse_support(sp_)
             if "pen" in e:   # D95 (관통 엣지 — scost 에 이미 더함)
-                pen = e["pen"][keep]
+                pen = _take(e["pen"], keep)
                 for i in np.nonzero(pen)[0]:
                     self._pen[(int(a[i]), dp)] = self._pen[(int(b[i]), dm)] = float(pen[i])
             n += len(a)
         nd = 0
         for d, e in tmpl["diag"].items():
-            em = e["obs"].astype(np.int64)
-            for c in contribs:
-                idx, val = c["diag"][d]
-                em[idx] &= val
-            keep = np.nonzero(em != 0)[0]
-            s_id = e["a"][keep]
-            self.step[s_id, d] = e["b"][keep]
-            self.emask[s_id, d] = em[keep]
-            self.elen[s_id, d] = e["L"][keep]
-            if self._sup is not None:
-                self.scost[s_id, d] = e["sc"][keep]
-                self.spack[s_id, d] = e["sp"][keep]
+            em = _and_items(e["obs"], [c["diag"][d] for c in contribs])
+            keep = _keep(em)
+            s_id = _take(e["a"], keep)
+            self.step[s_id, d] = _take(e["b"], keep)
+            self.emask[s_id, d] = _take(em, keep)
+            self.elen[s_id, d] = _take(e["L"], keep)
+            if self.use_support_cost:
+                self.scost[s_id, d] = _take(e["sc"], keep)
+                self.spack[s_id, d] = _take(e["sp"], keep)
             nd += len(s_id)
         return n + nd // 2
 
@@ -1204,7 +1243,7 @@ class LayeredGraph:
                     continue
                 hz = round(h2, 6)
             su, ok = support_step(state.su, int(self.spack[state.node, d]), length, float(self.smax_dir[d]),
-                                  float(self.bend_u[ANG_INDEX[defl]]) if self._sup is not None else 0.0)
+                                  float(self.bend_u[ANG_INDEX[defl]]) if self.use_support_cost else 0.0)
             if not ok:   # D80 ⑨: 최대 간격 안에 서포트 가능 지점이 없다
                 continue
             if defl:
@@ -1222,11 +1261,48 @@ class LayeredGraph:
                 "fixed_grid": list(self.fixed.shape)}
 
 
-def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None) -> RouteResult:
+def _check_extra(g, extra_cost, h_lower):
+    """D126 인자 확인 — 모양·유한·0 이상. 반환 (탐색용 scost 또는 None, h_lower 또는 None)."""
+    sc = None
+    if extra_cost is not None:
+        x = np.asarray(extra_cost, dtype=np.float64)
+        if x.shape != g.scost.shape:
+            raise ValueError(f"extra_cost 모양 {x.shape} ≠ 지도 엣지 표 {g.scost.shape} (D126)")
+        if not np.isfinite(x).all() or (x < 0).any():
+            raise ValueError("extra_cost 는 유한하고 0 이상이어야 한다 (D126 — 음수면 A* 최적성이 깨진다)")
+        sc = g.scost + x
+    hl = None
+    if h_lower is not None:
+        hl = np.ascontiguousarray(h_lower, dtype=np.float64)
+        if hl.shape != (len(g.pos),):
+            raise ValueError(f"h_lower 모양 {hl.shape} ≠ 노드 수 ({len(g.pos)},) (D126)")
+        if not np.isfinite(hl).all() or (hl < 0).any():
+            raise ValueError("h_lower 는 유한하고 0 이상이어야 한다 (D126)")
+    return sc, hl
+
+
+def route_graph(g: "LayeredGraph", pipe, time_limit: float = 60.0, expand_limit="default", extra_cost=None,
+                h_lower=None) -> RouteResult:
+    """D126 공식 라우팅 호출 — 지도 g 위 기준선 A* (컴파일, D53).
+
+    extra_cost = 엣지별 추가 비용 (N, 18), 0 이상 — 탐색 비용에만 더한다 (지도·J·support_est 는 그대로, 협상 가격용).
+    h_lower = 노드별 하한 (N,), 0 이상 — h = max(D41 h, h_lower[노드]). 남은 비용 (extra_cost 포함) 의 하한이어야
+    최적성이 보존된다 (admissible·consistent 는 부르는 쪽 책임, D40 ①). 둘 다 None 이면 결과는 기준선과 비트 동일.
+    expand_limit = "default" 이면 세트 상한 (D73·D92 ③), None 이면 벽시계 time_limit."""
+    if expand_limit == "default":
+        expand_limit = default_budget(g.sc)
+    return _route(g, pipe, time_limit, expand_limit, extra_cost=extra_cost, h_lower=h_lower)
+
+
+def _route(g: LayeredGraph, pipe, time_limit, expand_limit=None, extra_cost=None, h_lower=None) -> RouteResult:
     from .astar_fast import astar_route_generic
     t0 = time.perf_counter()
     h = heuristic_factory(g, pipe)
-    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h(g.start_state(pipe)), expand_limit)
+    sc, hl = _check_extra(g, extra_cost, h_lower)
+    s0 = g.start_state(pipe)
+    h0 = h(s0) if hl is None else max(h(s0), float(hl[s0.node]))
+    status, chain, expanded, generated = astar_route_generic(g, pipe, time_limit, h0, expand_limit, scost=sc,
+                                                             h_lower=hl)
     if status != "ok":
         return RouteResult(pipe.id, status, expanded=expanded, generated=generated,
                            search_sec=time.perf_counter() - t0)
@@ -1301,18 +1377,22 @@ class SupportMembers:
 def make_layered_router(local_lines: bool = False, support_cost: bool = True, reserve: bool = True,
                         grid: GridSpec = G0, incremental: bool = True, expand_limit="default",
                         diagnostic: bool = True, support_lines: bool = True, member_reserve: bool = True,
-                        _members: "SupportMembers | None" = None, _factor: int = 1):
+                        _members: "SupportMembers | None" = None, _diag: bool = False,
+                        extra_cost=None, h_lower=None):
     """2층 구조 라우터 슬롯 만들기. local_lines = 변형 B, support_cost = D57 추정 서포트 비용,
     reserve = D59 단자 예약 (아직 놓이지 않은 다른 배관의 단자 직진 구간을 피한다), grid = D66 격자 보강 변형,
     incremental = D67 증분 배치층 표시 (False = 매번 전체 재계산, 결과 같음 — 시험·시간 비교용),
     expand_limit = D72·D73 배관당 탐색 예산 (확장 상태 수, 기본 EXPAND_BUDGET). None = 예전 벽시계 time_limit (비교용, 비결정적).
-    diagnostic = D74 진단용 라우터(예산 × DIAG_FACTOR)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
+    diagnostic = D74 진단용 라우터(예산 = diag_limit(라우팅 예산), D127)를 router.diagnostic 으로 단다 — 실패 분류에만 쓴다.
     member_reserve = D90 (a1) 놓인 배관의 서포트 부재를 피한다 (기본). 하위 라우터(진단·예약 없음)는 같은 Session 을 쓴다.
-    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²) × _factor (진단 4)."""
+    expand_limit = "default" 이면 시나리오마다 default_budget (D92 ③ 블록 쌍 2²³, 그 밖 2²²). _diag = 진단 라우터 (상한 = diag_limit).
+    extra_cost·h_lower = D126 공식 인자 — 함수 (g, pipe, placed) → 배열 또는 None (route_graph 와 같은 뜻). 하위 라우터
+    (진단·예약 없음) 에도 같은 함수를 넘긴다. 없으면 결과는 기준선과 비트 동일."""
     auto = expand_limit == "default"
 
     def limit_for(sc):
-        return default_budget(sc) * _factor if auto else expand_limit
+        lim = default_budget(sc) if auto else expand_limit
+        return diag_limit(lim) if _diag and lim is not None else lim
 
     if member_reserve and _members is None:
         _members = SupportMembers()
@@ -1322,7 +1402,9 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
         members = _members(sc, placed) if member_reserve else []
         g = LayeredGraph(sc, pipe, placed, local_lines=local_lines, support_cost=support_cost, reserved=reserved,
                          grid=grid, incremental=incremental, support_lines=support_lines, members=members)
-        r = _route(g, pipe, time_limit, limit_for(sc))
+        r = _route(g, pipe, time_limit, limit_for(sc),
+                   extra_cost=None if extra_cost is None else extra_cost(g, pipe, placed),
+                   h_lower=None if h_lower is None else h_lower(g, pipe, placed))
         r.graph_sec = g.build_sec
         r.graph_stats = g.stats()
         return r
@@ -1343,7 +1425,7 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
         if auto:
             out["set"] = "block_pair" if getattr(sc, "block_pair", None) else "single_block"
         if with_diag:
-            out["diagnosis_limit"] = lim * DIAG_FACTOR
+            out["diagnosis_limit"] = diag_limit(lim)
         return out
 
     router.budget_for = budget_for
@@ -1356,15 +1438,15 @@ def make_layered_router(local_lines: bool = False, support_cost: bool = True, re
                                                           incremental=incremental, expand_limit=expand_limit,
                                                           diagnostic=False, support_lines=support_lines,
                                                           member_reserve=member_reserve, _members=_members,
-                                                          _factor=_factor)
+                                                          _diag=_diag, extra_cost=extra_cost, h_lower=h_lower)
     if with_diag:   # D74: 진단 단독 재라우팅 (분류에만, 결과에는 쓰지 않는다)
         router.diagnostic = make_layered_router(local_lines, support_cost, reserve=reserve, grid=grid,
                                                 incremental=incremental,
-                                                expand_limit="default" if auto else expand_limit * DIAG_FACTOR,
+                                                expand_limit=expand_limit,
                                                 diagnostic=False, support_lines=support_lines,
                                                 member_reserve=member_reserve, _members=_members,
-                                                _factor=_factor * DIAG_FACTOR if auto else 1)
-        router.search_budget["diagnosis_limit"] = router.search_budget["limit"] * DIAG_FACTOR
+                                                _diag=True, extra_cost=extra_cost, h_lower=h_lower)
+        router.search_budget["diagnosis_limit"] = diag_limit(router.search_budget["limit"])
     return router
 
 

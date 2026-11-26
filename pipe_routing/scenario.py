@@ -254,23 +254,27 @@ def terminal_errors(pipe: Pipe, which: str, block: Block, obstacles: list[Obstac
 
 
 def terminal_straight_length(pipe: Pipe, which: str) -> float:
-    """D106 (b) 단자 강제 직관 (가장 짧은 허용 길이, 90° 꺾임 기준): 노즐 = max(§3.3, t₉₀),
-    경계 = max(3D, r) + t₉₀ (D96 — D47 이면 r + t₉₀)."""
+    """D135 (D106 (b) 정정) 단자에서 반드시 곧은 구간 길이 — 꺾는 방향·각도와 무관하게 곧은 부분만.
+    경계 = max(3D, r) (D96 강제 직관, D47 이면 r). 노즐 = min_θ max(§3.3 − t_θ, 0), θ ∈ {45, 90, 135}
+    (노즐 직진 max(§3.3, t_θ) 중 엘보 접선 t_θ 뒤는 엘보 호 — 꺾는 방향을 라우터가 고르므로 증명에 쓰지 않는다).
+    0 이면 판정하지 않는다 (노즐 점의 이격은 D28 이 보장)."""
     from .constants import elbow_tangent
-    t90 = elbow_tangent(pipe.nominal_size, 90)
     t = pipe.start if which == "start" else pipe.end
     if t.kind == "boundary":
         from .blockpair import boundary_straight
-        return boundary_straight(pipe) + t90
-    return max(pipe.min_straight, t90)
+        return boundary_straight(pipe)
+    return min(max(pipe.min_straight - elbow_tangent(pipe.nominal_size, th), 0.0) for th in (45, 90, 135))
 
 
 def terminal_straight_blocked(pipe: Pipe, obstacles: list[Obstacle]) -> dict:
-    """D106 (b) "규칙상 불가능 — 단자 직관 막힘": 단자 강제 직관 구간이 고정 장애물과 r 미만인 단자 목록.
-    D33 로더 경고(terminal_warnings)와 같은 판정 함수 (terminal_stub + obstacle_clearance)."""
+    """D106 (b)·D135 "규칙상 불가능 — 단자 직관 막힘": 단자에서 반드시 곧은 구간 (terminal_straight_length) 이
+    고정 장애물과 r 미만인 단자 목록. 판정 함수 = terminal_stub + obstacle_clearance (D33 로더 경고와 같은 함수,
+    길이는 다르다 — 경고는 §3.3 그대로, D135 ③)."""
     blocked = []
     for which in ("start", "end"):
         L = terminal_straight_length(pipe, which)
+        if L <= 0:
+            continue
         d, who = obstacle_clearance(terminal_stub(pipe, which, L), obstacles)
         if d < pipe.radius - EPS:
             blocked.append({"terminal": which, "length_mm": round(L, 1), "obstacle": who, "clearance_mm": round(d, 1)})

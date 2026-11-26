@@ -3,12 +3,15 @@
 form_at     — 한 위치에서 검증기가 놓을 형식 (D80 ③: `modules.support_candidates` → `support_std.evaluate`)
 groupable   — 두 C 서포트가 D 로 묶일 수 있는가 (D82 조건, `support_group._try`)
 together_at — A·B·C 가 모두 불가할 때 함께 받칠 D (D89, `support_group.together_at`)
+support_blockers — 다른 놓인 배관 때문에 못 쓰게 된 (면, 형식) 과 그 배관 (D128, R7 — `support_std.members_blocked`)
 
 결과 불변: 힌트는 Context(배관 순서 = 시나리오 순서, 놓인 배관 = 주어진 경로) 를 따로 만들어 부를 뿐 검증기·Session 상태를
 바꾸지 않는다. 같은 경로 집합에서 검증기가 실제로 놓은 서포트는 힌트 답과 같다 (`tests/test_s1_hint.py`).
 힌트가 보지 않는 것: 탐욕 배치 순서(D80 ⑤ — 어느 위치에 놓을지는 간격·도달성으로 정해진다), D82 보완 간격 재확인
 (묶인 서포트를 가로대 위치로 옮긴 뒤 앞뒤 간격 — 그 배관의 서포트 목록 전체가 있어야 한다), 묶음 좌표 순서 탐욕.
 """
+import re
+
 import numpy as np
 
 from .. import support_std as ss
@@ -31,6 +34,7 @@ class SupportHint:
         rmap = {pid: given[pid] for pid in self.pipes if pid in given}   # 시나리오 순서 (검증기와 같음)
         cls = {pid: centerlines_of(self.pipes[pid], r) for pid, r in rmap.items()}
         self.ctx = Context(scenario, self.pipes, rmap, cls, std=self.std)
+        self._rmap, self._cls = rmap, cls
 
     @classmethod
     def from_session(cls, session):
@@ -157,3 +161,74 @@ class SupportHint:
         불가한 위치에서만 이 답을 쓴다 — `form_at(...)["chosen"]` 이 None 일 때."""
         from . import support_group as sg
         return sg.together_at(self.ctx, pipe_id, np.asarray(pos, float), np.asarray(axis, float), 0.0)
+
+    # ---------------------------------------------------------------- support_blockers (D128)
+    def support_blockers(self, pipe_id: str) -> list:
+        """D128: 그 배관의 서포트 배치에서, 다른 놓인 배관이 없었다면 쓸 수 있었던 (면, 형식) 이 그 배관 때문에 불가가 된
+        경우 (부재 간섭, D80 ⑧) — R7 진단 (`docs/reports/s1_6.md` §10) 과 같은 정의.
+
+        묻는 위치 = 그 배관만 놓였을 때 검증기가 서포트를 놓는 위치 (D80 ⑤ 탐욕 — 단독 배치). 위치마다 단독에서 ok 인
+        (면, 형식) 이 지금 배치에서 blocked 이면, 놓인 배관 Q 하나씩만 두고 같은 부재 판정 (`support_std.members_blocked`)
+        을 해 막는 Q 를 찾는다. 반환 = [{"blocker": Q, "pos", "axis", "s_mm", "face", "form", "members": [막힌 부재 역할],
+        "kind": "gap" | "displaced"}] (blocker·s_mm·face·form 순). kind = gap: 그 위치가 지금 배치의 서포트 불가 구간
+        (support 위반, R7) 안 / displaced: 지금 배치에서도 서포트는 놓이지만 다른 위치·형식으로. 막는 배관이 없으면 [].
+        그 배관의 경로가 주어져야 한다 (없으면 ValueError). 조회 전용 — 검증기·Session 상태는 바꾸지 않는다."""
+        from .core import MODULES
+        if pipe_id not in self._rmap:
+            raise ValueError(f"{pipe_id}: 경로가 없다 (support_blockers 는 놓인 배관만)")
+        key = ("blockers", pipe_id)
+        if key in self.ctx.cache:
+            return self.ctx.cache[key]
+        pr = self._rmap[pipe_id]
+        solo = Context(self.scenario, self.pipes, {pipe_id: pr}, {pipe_id: self._cls[pipe_id]}, std=self.std)
+        MODULES["support"](solo, pr)
+        here = Context(self.scenario, self.pipes, self._rmap, self._cls, std=self.std)   # self.ctx 캐시를 건드리지 않게
+        gaps = []
+        for v in MODULES["support"](here, pr):
+            m = re.match(r"([\d.]+)~([\d.]+) m", v.message)
+            gaps.append((float(m.group(1)) * 1000, float(m.group(2)) * 1000))
+        oA, oB, oR, oS, ids = self.ctx.others(pipe_id)
+        ids = np.array(ids, dtype=object)
+        out = []
+        if not len(ids):
+            self.ctx.cache[key] = out
+            return out
+        solo_hint = SupportHint.__new__(SupportHint)
+        solo_hint.scenario, solo_hint.std, solo_hint.pipes, solo_hint.ctx = self.scenario, self.std, self.pipes, solo
+        pipe = self.pipes[pipe_id]
+        ext = np.array(self.scenario.block.extent, dtype=float)
+        anchors = ss.anchors_of(self.scenario)
+        opts = ss.option_list(anchors)
+        from .. import blockpair as bp
+        sp = bp.splits(self.scenario)
+        for sup in solo.cache[("supports", pipe_id)]:
+            if sup.get("origin") == "D89":
+                continue
+            P = np.asarray(sup["pos"], dtype=float)[None]
+            U = np.asarray(sup["axis"], dtype=float)[None]
+            s = float(sup["s_mm"])
+            kind = "gap" if any(lo - 1 <= s <= hi + 1 for lo, hi in gaps) else "displaced"
+            before = solo_hint._options(pipe_id, P, U)
+            now = self._options(pipe_id, P, U)
+            for o, (b, n) in enumerate(zip(before, now)):
+                if not (b["status"] == "ok" and n["status"] == "blocked"):
+                    continue
+                face, frm, an = opts[o]
+                L = (float(ss.face_distances(ext, P, U, sp)[0, ss.FACE_ORDER.index(face)]) if an is None
+                     else float(ss.anchor_distance(an, P, U)[0]))   # _options 와 같은 식 (반올림 전)
+                kg, k, rf = ss.form_weight(self.std, frm, pipe.nominal_size, pipe.od, np.array([L]))
+                half = float(ss.ANGLE_HALF[self.std.angle_of(frm, pipe.nominal_size, int(k[0]))])
+                mem = ss.members(frm, P[0], U[0], face, L, pipe.od, bool(rf[0]))
+                A = np.array([[a for a, _, _ in mem]])
+                B = np.array([[bb for _, bb, _ in mem]])
+                for q in sorted(set(ids)):
+                    sel = ids == q
+                    oth = (oA[sel], oB[sel], oR[sel], oS[sel])
+                    hit = [role for j, (_, _, role) in enumerate(mem)
+                           if ss.members_blocked(A[:, j:j + 1], B[:, j:j + 1], np.ones((1, 1), bool), half, ext, [], [],
+                                                 oth, True)[0]]
+                    if hit:
+                        out.append({"blocker": q, "pos": sup["pos"], "axis": sup["axis"], "s_mm": s,
+                                    "face": b["face"], "form": frm, "members": hit, "kind": kind})
+        self.ctx.cache[key] = out
+        return out
