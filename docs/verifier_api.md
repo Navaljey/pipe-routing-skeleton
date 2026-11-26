@@ -161,6 +161,7 @@ rows = h.support_blockers("P010")   # 그 배관의 경로가 힌트에 있어�
 - `reasons` = 걸린 규칙 문장 목록 (ok 이면 빈 목록), `segment`·`s` = 티가 놓인 주관 직관 번호와 그 안 위치 (mm).
 - 보지 않는 것: 다리 자체의 경로·간섭 (collision·bend 등은 다리 경로가 있어야 판정), 티 몸체 구역 예외 (`tree.family_conflicts`, D134 보완 8) 는 검증기 collision 에서.
 - 결과 불변: 조회 전용, 검증기·Session 상태를 바꾸지 않는다 (`tests/test_s2_tree.py`).
+- 호출 비용 (br1_004, 비공개 표, 2026-11-26): 생성 0.01 s, `tee_at` 중앙 0.11 ms · p90 0.15 ms (Layer 0 통과 계통의 실제 티 4 개 × 20 회 = 80 호출, 모두 ok — 검증기 판정과 같음).
 
 ## 5. 배관 사양 조회 — `pipe_spec` (S2-0b, D116·D117)
 
