@@ -153,6 +153,16 @@ rows = h.support_blockers("P010")   # 그 배관의 경로가 힌트에 있어�
 
 **호출 비용** (배관 1개, 그 시나리오 경로 전부 놓인 상태, 중앙 / p90 / 최대): 120 / 274 / 802 ms (312 호출, 11 시나리오 — Intel Xeon 2.1 GHz 컨테이너, 다른 측정과 동시 실행이라 단독보다 느릴 수 있다). 힌트 생성 중앙 22 ms. 시간 대부분은 단독·지금 두 번의 서포트 배치 (검증기 support 모듈과 같은 계산).
 
+### 4.2 티 조회 — `tee_at` (S2-3, D114)
+
+`h.tee_at(pipe_id, pos, branch_dir, branch_size, flow="out", leg_first_straight=None)` → `{"ok", "reasons", "angle", "segment", "s"}` — 주관 `pipe_id` 의 지금 경로 위 `pos` 에 구경 `branch_size` 의 다리를 기하 방향 `branch_dir` (티 → 다리 쪽) 로 낼 수 있는가. 검증기 branch 모듈과 **같은 함수** (`tree.tee_check`).
+
+- 보는 규칙 (D112·D134): 티가 축 정렬 주관 직관 위 · 분기각 ∈ {45, 90} (주관 흐름 벡터 ↔ 다리 흐름 벡터, `flow` 로 방향을 정한다, 135° 금지) · 티 중심 앞뒤 3D_주관 (다음 관이음까지) · 다리 구경 ≤ 주관 · 같은 주관의 다른 다리 티와 3D 구간 겹침 없음. `leg_first_straight` (티 → 다리 첫 엘보 접점 길이) 를 주면 분기 쪽 3D_분기도 본다.
+- `reasons` = 걸린 규칙 문장 목록 (ok 이면 빈 목록), `segment`·`s` = 티가 놓인 주관 직관 번호와 그 안 위치 (mm).
+- 보지 않는 것: 다리 자체의 경로·간섭 (collision·bend 등은 다리 경로가 있어야 판정), 티 몸체 구역 예외 (`tree.family_conflicts`, D134 보완 8) 는 검증기 collision 에서.
+- 결과 불변: 조회 전용, 검증기·Session 상태를 바꾸지 않는다 (`tests/test_s2_tree.py`).
+- 호출 비용 (br1_004, 비공개 표, 2026-11-26): 생성 0.01 s, `tee_at` 중앙 0.11 ms · p90 0.15 ms (Layer 0 통과 계통의 실제 티 4 개 × 20 회 = 80 호출, 모두 ok — 검증기 판정과 같음).
+
 ## 5. 배관 사양 조회 — `pipe_spec` (S2-0b, D116·D117)
 
 배관 하나의 사양 (OD · kg/m · 유효 반경 · 보온 · 관이음 무게) 을 돌려준다. **라우터·검증기·서포트·예약은 모두 이 함수 (와 이를 읽는 `Pipe.od`·`Pipe.kg_per_m`·`Pipe.radius`·`Pipe.elbow_kg`) 로만 읽는다** — 상수 표를 직접 읽는 곳은 없다 (시험 `tests/test_s2_spec.py::NoDirectReadsTest`). V3·최적화 세션도 같은 값을 쓴다.

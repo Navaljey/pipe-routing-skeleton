@@ -85,14 +85,22 @@ class Context:
     angle_tol: float = ANGLE_TOL_DEG
     cache: dict = field(default_factory=dict)
     std: object = None               # 서포트 표준 (D78·D80, support_std.Standard)
+    family: dict = field(default_factory=dict)   # D134 분기 계통: 다리 가상 배관 id → 계통 (주관) id
+    trees: dict = field(default_factory=dict)    # 계통 id → 입력 PipeRoute (주관 + 다리 기하)
 
-    def others(self, pipe_id: str):
-        """다른 배관들의 중심선 조각 배열 (A, B, 반경, slack, id)."""
-        key = ("others", pipe_id)
+    def root(self, pid: str) -> str:
+        return self.family.get(pid, pid)
+
+    def others(self, pipe_id: str, family: bool = False):
+        """다른 배관들의 중심선 조각 배열 (A, B, 반경, slack, id). family=False 면 같은 계통 (주관·다리) 도 뺀다 —
+        collision·bend 의 자기 계통 이격은 tree.family_conflicts 가 티 구역을 빼고 본다 (D134). family=True (서포트 부재)
+        면 자기 자신만 뺀다. 분기 없는 시나리오에서는 둘이 같다."""
+        key = ("others", pipe_id, family)
         if key not in self.cache:
             A, B, R, S, ids = [], [], [], [], []
+            me = self.root(pipe_id)
             for pid, cls in self.centerlines.items():
-                if pid == pipe_id:
+                if pid == pipe_id or (not family and self.root(pid) == me):
                     continue
                 r = self.pipes[pid].radius
                 for cl in cls:
@@ -115,25 +123,92 @@ def verify(scenario: Scenario, routes: list, modules=None, std=None) -> dict:
     from . import modules as _  # noqa: F401  (모듈 등록)
     t0 = time.perf_counter()
     timing = {"centerline": 0.0, **{m: 0.0 for m in (modules or module_order(scenario))}, "group_d": 0.0}   # D84 시간 분해
-    pipes = {p.id: p for p in scenario.pipes}
-    rmap = {r.pipe_id: r for r in routes if r.waypoints}
+    pipes, rmap, order, family, trees = expand_trees(scenario, routes)
     cls = {pid: centerlines_of(pipes[pid], r) for pid, r in rmap.items()}
     timing["centerline"] = time.perf_counter() - t0
     from ..support_std import load_standard
-    ctx = Context(scenario, pipes, rmap, cls, std=std or load_standard())
-    out = {p.id: pipe_report(ctx, p, modules, timing) for p in scenario.pipes}
+    ctx = Context(scenario, pipes, rmap, cls, std=std or load_standard(), family=family, trees=trees)
+    out = {pid: pipe_report(ctx, pipes[pid], modules, timing) for pid in order}
     if modules is None or "support" in modules:
         from .support_group import attach_together, group_d
         t1 = time.perf_counter()
         attach_together(out)   # D89: 함께 얹힌 배관에 D81 몫 사본
         group_d(ctx, out)   # D80 ⑥: 배치 후 병합만 (위치 불변)
         timing["group_d"] = time.perf_counter() - t1
-    return {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info(),
-            "timing": timing}
+    legs = merge_trees(ctx, out)
+    res = {"pipes": out, "sec": time.perf_counter() - t0, "support_standard": ctx.std.info(), "timing": timing}
+    if legs:
+        res["legs"] = legs
+    return res
+
+
+def expand_trees(scenario: Scenario, routes: list):
+    """D134 분기 계통 → 주관 + 다리 가상 배관. 반환 (pipes, rmap, 판정 순서, family, trees).
+    분기 없는 배관은 그대로 (분기 없는 시나리오 = 이전과 같은 사전·순서). 다리 가상 배관은 자기 주관 바로 뒤 순서
+    (`추정:` — 서포트 D89 id·묶음 탐욕 순서에 쓰인다). PipeRoute.branches = pipe.branches 순서의 다리 기하 (티 → 단자),
+    없는 다리는 빈 목록. 분기 단자가 없는 배관의 branches (S0 시험 경로, D44) 는 이전처럼 주관 중심선에 붙인다."""
+    from ..tree import leg_flow, leg_flow_pipe
+    pipes = {p.id: p for p in scenario.pipes}
+    rmap, order, family, trees = {}, [], {}, {}
+    byid = {r.pipe_id: r for r in routes if r.waypoints}
+    for p in scenario.pipes:
+        order.append(p.id)
+        r = byid.get(p.id)
+        if r is None:
+            continue
+        if not p.branches:
+            rmap[p.id] = r
+            continue
+        trees[p.id] = r
+        rmap[p.id] = PipeRoute(p.id, r.waypoints, [])
+        geoms = list(r.branches) + [[]] * (len(p.branches) - len(r.branches))
+        for b, geom in zip(p.branches, geoms):
+            if geom is None or len(geom) < 2:
+                continue
+            vp = leg_flow_pipe(p, b, geom)
+            pipes[vp.id] = vp
+            order.append(vp.id)
+            rmap[vp.id] = PipeRoute(vp.id, leg_flow(geom, b.flow), [])
+            family[vp.id] = p.id
+    return pipes, rmap, order, family, trees
+
+
+def _and(a, b):
+    if a is False or b is False:
+        return False
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return True
+
+
+def merge_trees(ctx: Context, out: dict) -> dict:
+    """다리 가상 배관 보고를 계통 (주관) 보고에 합친다 — Layer 0 = 모두 통과해야 통과 (D112 Q10), 위반·관이음·서포트를
+    더하고 티 관이음 (무게 0, D112) 을 붙인다. 반환 {계통 id: {다리 id: PipeReport}} (J 분해용)."""
+    legs = {}
+    for vid, root in ctx.family.items():
+        rep = out.pop(vid, None)
+        if rep is None:
+            continue
+        legs.setdefault(root, {})[vid] = rep
+        P = out[root]
+        if not hasattr(P, "main_fittings"):   # J 분해용 (주관 몫) — 데이터 필드가 아니라 출력 to_dict 에는 없다
+            P.main_fittings, P.main_supports = list(P.fittings), list(P.supports)
+        for k in P.layer0:
+            P.layer0[k] = _and(P.layer0[k], rep.layer0.get(k))
+        P.violations += rep.violations
+        leg = ctx.pipes[vid].leg
+        geom = ctx.trees[root].branches[ctx.pipes[root].branches.index(leg)]
+        P.fittings += [{"type": "tee", "pos": [float(v) for v in geom[0]], "leg": leg.id}] + rep.fittings
+        P.supports += rep.supports
+        P.support_gaps += rep.support_gaps
+    return legs
 
 
 def centerlines_of(pipe: Pipe, r: PipeRoute) -> list:
-    """주관 + 분기 실제 중심선 (D44)."""
+    """주관 + 분기 실제 중심선 (D44). 분기 계통 (D134) 은 expand_trees 가 다리를 가상 배관으로 떼어 내므로 여기에는
+    주관만 온다."""
     R = elbow_radius(pipe.nominal_size)
     return [build_centerline(r.waypoints, R, ANGLE_TOL_DEG)] + \
            [build_centerline(b, R, ANGLE_TOL_DEG) for b in r.branches if len(b) >= 2]

@@ -27,13 +27,13 @@ class SupportHint:
         from . import modules as _  # noqa: F401  (모듈 등록)
         self.scenario = scenario
         self.std = std or ss.load_standard()
-        self.pipes = {p.id: p for p in scenario.pipes}
         if isinstance(routes, dict):
             routes = [PipeRoute(k, v) for k, v in routes.items()]
-        given = {r.pipe_id: r for r in routes if r.waypoints}
-        rmap = {pid: given[pid] for pid in self.pipes if pid in given}   # 시나리오 순서 (검증기와 같음)
+        from .core import expand_trees
+        # 시나리오 순서 (검증기와 같음). D134 분기 계통: 다리는 가상 배관 "<계통>.<다리>" 로 묻는다
+        self.pipes, rmap, _, self.family, self.trees = expand_trees(scenario, list(routes))
         cls = {pid: centerlines_of(self.pipes[pid], r) for pid, r in rmap.items()}
-        self.ctx = Context(scenario, self.pipes, rmap, cls, std=self.std)
+        self.ctx = Context(scenario, self.pipes, rmap, cls, std=self.std, family=self.family, trees=self.trees)
         self._rmap, self._cls = rmap, cls
 
     @classmethod
@@ -56,7 +56,7 @@ class SupportHint:
         from .. import blockpair as bp
         pipe = self.pipes[pid]
         ext = np.array(self.scenario.block.extent, dtype=float)
-        oA, oB, oR, oS, _ = self.ctx.others(pid)
+        oA, oB, oR, oS, _ = self.ctx.others(pid, family=True)
         holes = bp.hole_boxes(self.scenario)
         box_lo = [o.box.min for o in self.scenario.obstacles] + [h[0] for h in holes]
         box_hi = [o.box.max for o in self.scenario.obstacles] + [h[1] for h in holes]
@@ -163,6 +163,27 @@ class SupportHint:
         return sg.together_at(self.ctx, pipe_id, np.asarray(pos, float), np.asarray(axis, float), 0.0)
 
     # ---------------------------------------------------------------- support_blockers (D128)
+    def tee_at(self, pipe_id: str, pos, branch_dir, branch_size: str, flow: str = "out", leg_first_straight=None) -> dict:
+        """D114 티 조회 (D112·D134 규칙, 검증기 branch 모듈과 같은 함수 `tree.tee_check`): 주관 pipe_id 의 지금 경로 위
+        pos 에 분기 구경 branch_size 의 다리를 기하 방향 branch_dir (티 → 다리 쪽) 로 낼 수 있는가.
+        flow = "out" (갈래) / "in" (합류) — 분기각은 흐름 벡터로 잰다. leg_first_straight = 티 → 다리 첫 엘보 접점 길이
+        (모르면 None — 그 항목은 보지 않는다). 같은 주관의 다른 다리 티 (지금 경로에 있으면) 와의 3D 도 본다.
+        반환 {"ok", "reasons", "angle", "segment", "s"}."""
+        from ..tree import tee_check
+        if pipe_id not in self._cls:
+            return {"ok": False, "reasons": ["주관 경로 없음"], "angle": None, "segment": None, "s": None}
+        main = self._cls[pipe_id][0]
+        tr = self.trees.get(pipe_id)
+        others = []
+        if tr is not None:
+            P = np.asarray(pos, float)
+            others = [np.asarray(g[0], float) for g in tr.branches if g and len(g) >= 2
+                      and np.linalg.norm(np.asarray(g[0], float) - P) > 1.0]
+        chk = tee_check(main, self.pipes[pipe_id].nominal_size, pos, branch_dir, flow, branch_size, others,
+                        leg_first_straight, self.ctx.angle_tol)
+        return {"ok": chk.ok, "reasons": chk.reasons, "angle": None if chk.angle != chk.angle else round(chk.angle, 3),
+                "segment": chk.seg if chk.seg >= 0 else None, "s": None if chk.s != chk.s else round(chk.s, 3)}
+
     def support_blockers(self, pipe_id: str) -> list:
         """D128: 그 배관의 서포트 배치에서, 다른 놓인 배관이 없었다면 쓸 수 있었던 (면, 형식) 이 그 배관 때문에 불가가 된
         경우 (부재 간섭, D80 ⑧) — R7 진단 (`docs/reports/s1_6.md` §10) 과 같은 정의.
@@ -180,14 +201,16 @@ class SupportHint:
         if key in self.ctx.cache:
             return self.ctx.cache[key]
         pr = self._rmap[pipe_id]
-        solo = Context(self.scenario, self.pipes, {pipe_id: pr}, {pipe_id: self._cls[pipe_id]}, std=self.std)
+        solo = Context(self.scenario, self.pipes, {pipe_id: pr}, {pipe_id: self._cls[pipe_id]}, std=self.std,
+                       family=self.family, trees=self.trees)
         MODULES["support"](solo, pr)
-        here = Context(self.scenario, self.pipes, self._rmap, self._cls, std=self.std)   # self.ctx 캐시를 건드리지 않게
+        here = Context(self.scenario, self.pipes, self._rmap, self._cls, std=self.std, family=self.family,
+                       trees=self.trees)   # self.ctx 캐시를 건드리지 않게
         gaps = []
         for v in MODULES["support"](here, pr):
             m = re.match(r"([\d.]+)~([\d.]+) m", v.message)
             gaps.append((float(m.group(1)) * 1000, float(m.group(2)) * 1000))
-        oA, oB, oR, oS, ids = self.ctx.others(pipe_id)
+        oA, oB, oR, oS, ids = self.ctx.others(pipe_id, family=True)
         ids = np.array(ids, dtype=object)
         out = []
         if not len(ids):

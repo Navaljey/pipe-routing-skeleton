@@ -60,6 +60,22 @@ from pipe_routing.scenario import load
 out = run(load("scenarios/manual/manual_01.json"), router=straight_router)
 ```
 
+### 1.1 분기 계통 (S2-3, D112·D134)
+
+분기 배관 (`pipe.branches` 1~5개) 의 라우터는 같은 `RouteResult` 에 **나무** `tree` 속성을 더해 돌려준다. 분기 없는 배관은 지금과 같다 (`tree` 없음).
+
+| `tree` 키 | 내용 |
+|---|---|
+| `method` | `exact` (분기 1개 정확 풀이) · `exact_retry` (자기 간섭으로 티 후보를 막고 다시, 최대 8회) · `sequential` (순차 근사, D112 Q9) |
+| `legs[]` | `{leg_id, nominal_size, flow, found, waypoints, tee {pos, angle}}` — `waypoints` 는 **기하 순서** (티 → 다리 단자), 흐름은 `flow` (D134 보완 2) |
+| `leg_search` · `leg_search_final` | 다리 표 상태 (`done` 끝까지 · `bounded` 한계 c 에서 멈춤 · `budget` 예산 소진) — 처음 / 순차 근사 전 다시 만든 뒤 (F1) |
+| `search` | 확장 수 분해 `{main_solo, leg_tables[], tee_search[], leg_rebuild[]}` (보고용) |
+
+- 주관 경로 = `waypoints` (분기 없는 배관과 같은 뜻). 계통 성공 = 주관과 모든 다리가 Layer 0 통과 (D112 Q10), 찾은 다리는 실패해도 출력에 남는다.
+- 예산 = 배관당 라우팅 상한 × (다리 수 + 1) (D112 Q6), 진단 = D127 식.
+- 다른 선수는 나무를 어떻게 만들든 같은 `tree` 형식으로 돌려주면 된다 — 심판은 최종 나무만 채점한다 (D134 보완 1).
+- `leg_router(scenario, pipe, main_waypoints, leg_id, placed, budget)` (주관 고정, 주관 직관 위 목표 집합 — 기준선 순차 근사와 같은 함수) 는 S2-4 에서 공개한다 (D134 보완 4).
+
 ## 2. 다중 배관 슬롯
 
 ```python

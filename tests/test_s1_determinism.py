@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCEN = ROOT / "scenarios" / "procedural" / "proc_005.json"
 LIMIT = 8 * 2048   # 작은 예산 — 예산 소진(timeout)이 실제로 일어나게 해서 그 판정도 결정적인지 본다
 PAIR = ROOT / "scenarios" / "pair" / "pair_000.json"
+BRANCH = ROOT / "scenarios" / "branch" / "br1_000.json"   # S2-3 분기 계통 (D112·D134)
 
 
 def run(out_dir, hashseed, scen=SCEN):
@@ -50,6 +51,27 @@ class DeterminismTest(unittest.TestCase):
             self.assertEqual(out["global"]["search_budget"], {"kind": "expansions", "limit": LIMIT, "diagnosis_limit": 4 * LIMIT})
             for d, _ in procs:
                 self.assertEqual(view(d), ref, d)
+
+    def test_tree_parallel_1_vs_4_with_load(self):
+        """S2-3 (D134): 분기 계통 (다리 표·티 전이 커널·순차 근사) 도 병렬 수와 무관하게 바이트 동일."""
+        with tempfile.TemporaryDirectory() as tmp:
+            solo = os.path.join(tmp, "solo")
+            p = run(solo, 1, BRANCH)
+            self.assertEqual(p.wait(), 0, p.stderr.read())
+            burners = [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(2)]
+            try:
+                procs = [(os.path.join(tmp, f"par{i}"), run(os.path.join(tmp, f"par{i}"), 100 + i, BRANCH))
+                         for i in range(4)]
+                for d, q in procs:
+                    self.assertEqual(q.wait(), 0, q.stderr.read())
+            finally:
+                for b in burners:
+                    b.kill()
+            ref = view(solo, BRANCH)
+            out = json.loads((Path(solo) / "br1_000_output.json").read_text(encoding="utf-8"))
+            self.assertTrue(any(r.get("tree") for r in out["routes"]))
+            for d, _ in procs:
+                self.assertEqual(view(d, BRANCH), ref, d)
 
     @unittest.skipUnless(os.environ.get("PIPE_SLOW_TESTS"), "블록 쌍 결정성 — PIPE_SLOW_TESTS=1 일 때만 (수 분, 메모리 수 GB)")
     def test_pair_parallel_1_vs_3_with_load(self):

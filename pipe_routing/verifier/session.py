@@ -71,6 +71,10 @@ class Session:
         self.reach = _reach(self.std)
         self._final = None
         self._last = {}
+        # D134 분기 계통이 있는 시나리오: 증분 대신 매 호출 전체 검증 (`추정:` S2-3 — 결과는 verify() 그대로라 비트 동일,
+        # 계통 단위 증분 영향 범위는 S2-4 에서). 분기 없는 시나리오는 이전과 같은 증분 경로
+        self.tree = any(getattr(p, "branches", None) for p in scenario.pipes)
+        self._legs = {}
 
     # ---------------------------------------------------------------- 공개 API
     def add(self, pipe_id: str, waypoints, branches=()) -> dict:
@@ -95,12 +99,16 @@ class Session:
         return self._final
 
     def result(self, recomputed=None, sec=0.0) -> dict:
-        from ..pipeline import j_breakdown
+        from ..pipeline import j_breakdown, tree_j
         recomputed = recomputed or {}
         out, jt = {}, 0.0
         for pid, rep in self.reports().items():
-            J = j_breakdown(self.pipes[pid], self.routes[pid].waypoints, rep.fittings, rep.supports, self.scenario) \
-                if rep.routed else None
+            if not rep.routed:
+                J = None
+            elif pid in self._legs:
+                J = tree_j(self.scenario, self.pipes[pid], self.routes[pid], rep, self._legs[pid])
+            else:
+                J = j_breakdown(self.pipes[pid], self.routes[pid].waypoints, rep.fittings, rep.supports, self.scenario)
             out[pid] = {"routed": rep.routed, "success": rep.success, "layer0": dict(rep.layer0), "J": J,
                         "supports": rep.supports, "violations": len(rep.violations)}
             if rep.success:
@@ -151,6 +159,8 @@ class Session:
         return False
 
     def _change(self, pid: str, waypoints, branches) -> dict:
+        if self.tree:
+            return self._change_full(pid, waypoints, branches)
         t0 = time.perf_counter()
         affected_by = [self.segs[pid]] if pid in self.segs else []
         if waypoints:
@@ -187,6 +197,20 @@ class Session:
                                ctx.cache.get(("support_trace", q), []))
         self._final = self._group()
         return self.result(redo, time.perf_counter() - t0)
+
+    def _change_full(self, pid: str, waypoints, branches) -> dict:
+        """D134 분기 계통 시나리오: 전체 검증 (verify() 와 같은 결과)."""
+        from .core import verify
+        t0 = time.perf_counter()
+        if waypoints:
+            self.routes[pid] = PipeRoute(pid, [list(map(float, w)) for w in waypoints],
+                                         [[list(map(float, q)) for q in b] if b else [] for b in branches])
+        else:
+            self.routes.pop(pid, None)
+        res = verify(self.scenario, [self.routes[q] for q in self.order if q in self.routes], std=self.std)
+        self._final = res["pipes"]
+        self._legs = res.get("legs", {})
+        return self.result({q: module_order(self.scenario) for q in self.routes}, time.perf_counter() - t0)
 
     def _group(self) -> dict:
         from .core import PipeReport, fittings_of

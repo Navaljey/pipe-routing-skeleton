@@ -45,14 +45,17 @@ class GeneratorConfig:
     access: bool = False                         # D119: 주 통로 + 장비 정비 공간 — 별도 난수열, 기본 꺼짐
     stiffeners: tuple = (10, 20)                 # D113 스티프너 개수 범위 (internal 일 때만) — 기능 시험용 작은 세트 (4, 8) (D123 ②)
     maint_ratio: float = 1.0                     # D119 정비 공간을 두는 장비 비율 (access 일 때만) — 작은 세트 0.3 (D123 ②)
+    branches: tuple = ()                         # D112·D134: 배관마다 다리 수 범위 (lo, hi) — 별도 난수열, 기본 꺼짐 (빈 튜플)
+    out_ratio: float = 0.7                       # D112 Q1 `추정:` 압력 분기 갈래 (out) 비율, 나머지 합류 (in). 중력은 in
 
 
 # S2 생성 옵션 (D115 보완): 꺼져 있으면 meta.config 에 쓰지 않는다 — 기본 출력 비트 동일
-OPTION_KEYS = ("services", "internal", "access")
-SUB_OPTIONS = {"stiffeners": "internal", "maint_ratio": "access"}   # 부모 옵션이 꺼져 있으면 meta 에 쓰지 않는다
+OPTION_KEYS = ("services", "internal", "access", "branches")
+SUB_OPTIONS = {"stiffeners": "internal", "maint_ratio": "access", "out_ratio": "branches"}   # 부모 옵션이 꺼져 있으면 meta 에 쓰지 않는다
 SERVICE_SALT = 0x5E5   # `추정:` 서비스 난수열 = Random(seed ^ SERVICE_SALT) — 기본 난수열 소비 불변
 INTERNAL_SALT = 0x1A7  # `추정:` 내부 구조재 난수열 (D113)
 ACCESS_SALT = 0xACC    # `추정:` 접근 구역 난수열 (D119)
+BRANCH_SALT = 0xB7A    # `추정:` 분기 난수열 (D112·D134)
 PLATE_T = 20           # `추정:` 격벽·데크 두께 mm — s2_plan §2 의 12 mm 강판은 10 mm 격자 (D5) 밖이라 20 으로 올림
 PILLAR_MM = 300        # `추정:` 필라 단면
 STIFF_W, STIFF_T = 150, 20   # `추정:` 스티프너 평판 150 × 12 → 10 mm 격자에 맞춰 두께 20
@@ -329,6 +332,50 @@ def d94_stub_ok(pipe: Pipe, block: Block, obstacles) -> bool:
     return True
 
 
+def gen_branches(brng: random.Random, cfg: GeneratorConfig, block: Block, obstacles, pipes: list) -> None:
+    """D112·D134 분기 단자 (`추정:` 규칙): 배관마다 다리 수 = cfg.branches 범위 균등, 다리 구경 = 주관 이하 구경 균등,
+    흐름 = 중력 in · 압력 out (out_ratio) / in, 단자 = 기본 생성기와 같은 표본 (노즐·경계, 단자 규약·경고 없음), 직진 구간이
+    모든 단자 직진 구간과 r₁ + r₂ 이상, 중력 합류 다리는 단자 → 주관 끝 낙차 하한 (D64) 충족. 실패하면 그 다리는 뺀다.
+    다리가 하나라도 붙으면 type_id = T3 (압력) / T7 (중력)."""
+    from .scenario import Branch, leg_pipe
+    from .gravity import feasibility
+    from . import pipe_spec
+    stubs = [(terminal_stub(p, w), p.radius) for p in pipes for w in ("start", "end")]
+    for p in pipes:
+        lo, hi = cfg.branches
+        n = brng.randint(lo, hi)
+        sizes = [s for s in cfg.sizes if NOMINAL_SIZES.index(s) <= NOMINAL_SIZES.index(p.nominal_size)]
+        legs = []
+        for k in range(n):
+            size = brng.choice(sizes)
+            flow = "in" if p.gravity_pipe or brng.random() >= cfg.out_ratio else "out"
+            which = "end" if flow == "out" else "start"
+            cls, ins = pipe_spec.resolve(p.service, p.pipe_class, p.insulation_thickness)
+            r = pipe_spec.spec(cls, size).od / 2 + ins + CLEARANCE_MM
+            for _ in range(cfg.max_tries):
+                t = _sample_terminal(brng, which, size, cfg, obstacles, p.gravity_pipe, r)
+                if t is None:
+                    continue
+                b = Branch(f"B{k + 1}", size, t, flow)
+                lp = leg_pipe(p, b)
+                if terminal_errors(lp, which, block, obstacles) or terminal_warnings(lp, which, block, obstacles):
+                    continue
+                st = terminal_stub(lp, which)
+                if any(box_distance(st, o) < r + ro for o, ro in stubs):
+                    continue
+                if p.gravity_pipe:
+                    probe = Pipe("probe", "T5", size, True, p.min_slope, ins, t, p.end, service=p.service,
+                                 pipe_class=p.pipe_class)
+                    if not feasibility(probe)["feasible"]:
+                        continue
+                legs.append(b)
+                stubs.append((st, r))
+                break
+        if legs:
+            p.branches = legs
+            p.type_id = "T7" if p.gravity_pipe else "T3"
+
+
 def _clashes(pipe: Pipe, placed: list[Pipe]) -> bool:
     for q in placed:
         need = pipe.radius + q.radius
@@ -362,6 +409,8 @@ def generate(cfg: GeneratorConfig, name: str = "") -> Scenario:
             pipes.append(p)
     if not pipes:
         raise RuntimeError(f"seed {cfg.seed}: 배관을 하나도 배치하지 못함")
+    if cfg.branches:   # D112·D134 — 기본 난수열을 다 쓴 뒤 별도 난수열 (기본 출력 비트 동일, D115 보완)
+        gen_branches(random.Random(cfg.seed ^ BRANCH_SALT), cfg, block, obstacles, pipes)
     meta = {"name": name or f"proc_seed{cfg.seed}", "source": "procedural",
             "generator": "pipe_routing.generator", "config": _config_meta(cfg),
             "n_pipes_requested": cfg.n_pipes}
@@ -392,6 +441,8 @@ def main(argv=None) -> int:
                     help="스티프너 개수 범위 (D113, 기능 시험용 작은 세트 4 8 — D123 ②)")
     ap.add_argument("--maint-ratio", type=float, default=GeneratorConfig.maint_ratio,
                     help="정비 공간을 두는 장비 비율 (D119, 작은 세트 0.3 — D123 ②)")
+    ap.add_argument("--branches", type=int, nargs=2, default=None, metavar=("LO", "HI"),
+                    help="배관마다 분기 다리 수 범위 (D112·D134, 새 세트용 — 확인 세트 1 1, 헤더 1 5)")
     args = ap.parse_args(argv)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -399,7 +450,7 @@ def main(argv=None) -> int:
         cfg = GeneratorConfig(seed=args.seed + i, n_pipes=args.n_pipes, obstacle_fill=args.fill,
                               stair_rule=args.stair_rule, d94_rule=args.d94_rule, services=args.services, internal=args.internal,
                               access=args.access, stiffeners=tuple(args.stiffeners),
-                              maint_ratio=args.maint_ratio)
+                              maint_ratio=args.maint_ratio, branches=tuple(args.branches) if args.branches else ())
         name = f"{args.prefix}_{i:03d}"
         sc = generate(cfg, name)
         save(sc, out / f"{name}.json")

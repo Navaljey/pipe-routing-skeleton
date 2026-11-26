@@ -76,7 +76,31 @@ def collision(ctx: Context, pr: PipeRoute):
         A, B, S, _ = cl.arrays(("straight",))
         out += _obstacle_hits(ctx, A, B, S, pipe.radius, "collision", pipe.id, "직관")
         out += _pipe_hits(ctx, A, B, S, pipe.radius, "collision", pipe.id, "직관")
+    if pipe.id in ctx.family:   # D134 보완 8: 같은 계통 안 간섭 (티 몸체 구역만 예외) — 라우터 자기 간섭과 같은 함수
+        for lid, oid, q, g, need in family_hits(ctx, ctx.family[pipe.id]):
+            if lid == pipe.id:
+                what = "자기 주관" if oid == "main" else f"같은 계통 다리 {oid}"
+                out.append(Violation("collision", pipe.id, _pt(q), f"다리 ↔ {what} 이격 부족 {need - g:.1f}mm (필요 "
+                                     f"{need:.2f}, 티 몸체 구역 밖)", g, ctx.family[pipe.id] if oid == "main" else oid))
     return out
+
+
+def family_hits(ctx: Context, root: str) -> list:
+    """계통 하나의 자기 간섭 목록 (tree.family_conflicts, 캐시)."""
+    key = ("family", root)
+    if key not in ctx.cache:
+        from ..tree import centerline_of, family_conflicts
+        pipe = ctx.pipes[root]
+        tr = ctx.trees[root]
+        legs = []
+        for vid, rt in ctx.family.items():
+            if rt != root:
+                continue
+            vp = ctx.pipes[vid]
+            geom = tr.branches[pipe.branches.index(vp.leg)]
+            legs.append((vid, centerline_of(vp.nominal_size, geom), vp.nominal_size, vp.radius))
+        ctx.cache[key] = family_conflicts(ctx.centerlines[root][0], pipe.nominal_size, pipe.radius, legs)
+    return ctx.cache[key]
 
 
 # ---------------------------------------------------------------- boundary
@@ -285,7 +309,7 @@ def valve_front_free(ctx: Context, pid: str, c, axis) -> list:
     pipe = ctx.pipes[pid]
     r = pipe.radius
     ext = ctx.scenario.block.extent
-    oA, oB, oR, oS, _ = ctx.others(pid)
+    oA, oB, oR, oS, _ = ctx.others(pid, family=True)   # 밸브 전면은 자기 계통 다리도 막는다 (D134)
     free = []
     for d in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0)):
         if abs(np.dot(unit(axis), d)) > 1 - 1e-6:
@@ -337,6 +361,8 @@ def valve(ctx: Context, pr: PipeRoute):
 def branch(ctx: Context, pr: PipeRoute):
     """분기점이 주관 직관 위, 분기각(흐름 방향 기준) ∈ {45, 90}, 입력 branch_points 와 일치 (D44)."""
     pipe = ctx.pipes[pr.pipe_id]
+    if getattr(pipe, "branches", None):
+        return tree_branch(ctx, pipe)
     if not pr.branches and not pipe.branch_points:
         return None
     main = ctx.centerlines[pipe.id][0]
@@ -364,6 +390,35 @@ def branch(ctx: Context, pr: PipeRoute):
     return out
 
 
+def tree_branch(ctx: Context, pipe) -> list:
+    """D112·D134 분기 계통: 다리마다 — 경로 있음 · 나무 연결성 (시작점이 자기 주관 직관 위 1 mm 안 = 티, 끝점 = 자기
+    단자, 다리끼리 연결 없음) · 티 규칙 (tree.tee_check: 축 정렬 직관 · 분기각 ∈ {45, 90} 흐름 기준 · 티 앞뒤 3D_주관 ·
+    분기 쪽 3D_분기 · 티끼리 3D · 다리 구경 ≤ 주관). 다리의 collision·boundary·bend·gravity_slope·support 는 다리 가상
+    배관이 받는다 (흐름 순서, D134 보완 2)."""
+    from ..tree import centerline_of, leg_first_straight, tee_check
+    tr = ctx.trees.get(pipe.id)
+    main = ctx.centerlines[pipe.id][0]
+    geoms = list(tr.branches) + [[]] * (len(pipe.branches) - len(tr.branches))
+    tees = [np.asarray(g[0], float) if g and len(g) >= 2 else None for g in geoms]
+    out = []
+    for k, (b, geom) in enumerate(zip(pipe.branches, geoms)):
+        if not geom or len(geom) < 2:
+            out.append(Violation("branch", pipe.id, _pt(b.terminal.pos), f"다리 {b.id} 경로 없음 (D112 Q10)"))
+            continue
+        G = np.asarray(geom, float)
+        if np.linalg.norm(G[-1] - np.asarray(b.terminal.pos, float)) > ON_LINE_MM:
+            out.append(Violation("branch", pipe.id, _pt(G[-1]), f"다리 {b.id} 끝점이 자기 단자 {list(b.terminal.pos)} 가 "
+                                 f"아님 (D134 ④)"))
+        cl = centerline_of(b.nominal_size, geom)
+        others = [t for j, t in enumerate(tees) if j != k and t is not None]
+        chk = tee_check(main, pipe.nominal_size, G[0], G[1] - G[0], b.flow, b.nominal_size, others,
+                        leg_first_straight(cl), ctx.angle_tol)
+        for msg in chk.reasons:
+            out.append(Violation("branch", pipe.id, _pt(G[0]), f"다리 {b.id}: {msg}",
+                                 chk.angle if "분기각" in msg else None))
+    return out
+
+
 # ---------------------------------------------------------------- support
 
 CANDIDATE_STEP_MM = 10   # D5 정밀도
@@ -379,7 +434,7 @@ def support_candidates(ctx: Context, pid: str, pts: np.ndarray, dirs: np.ndarray
     pipe = ctx.pipes[pid]
     std = ctx.std
     ext = np.array(ctx.scenario.block.extent, dtype=float)
-    oA, oB, oR, oS, _ = ctx.others(pid)
+    oA, oB, oR, oS, _ = ctx.others(pid, family=True)   # 부재는 자기 계통 주관·다리도 피한다 (D134)
     holes = bp.hole_boxes(ctx.scenario)   # D76: 관통 창은 부재가 닿을 수 없는 구멍, 공유 격벽은 지지면
     box_lo = [o.box.min for o in ctx.scenario.obstacles] + [h[0] for h in holes]
     box_hi = [o.box.max for o in ctx.scenario.obstacles] + [h[1] for h in holes]
