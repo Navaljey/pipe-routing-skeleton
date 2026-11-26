@@ -98,10 +98,12 @@ def term(s):
     m = re.match(r"(DECK_DN|DECK_UP)\((\d+),\s*(\d+)\)", s)
     if m:
         up = m.group(1) == "DECK_UP"; return [float(m.group(2)), float(m.group(3)), float(H) if up else 0.0], [0, 0, -1 if up else 1], None, m.group(1)
-    m = re.match(r"BHD\((\w+)\)", s)
+    m = re.match(r"BHD\((\w+),\s*(\d+),\s*(\d+)\)$", s)     # D136 ③: BHD(격벽 id, u, z)
     if m:
-        b = next(b for b in boxes if b["id"] == m.group(1)); c = [(b["min"][i] + b["max"][i]) / 2 for i in range(3)]; c[2] = 3000.0
-        return c, None, None, "BHD"
+        bh = next(b for b in S["bulkheads"] if b["id"] == m.group(1)); u, z = float(m.group(2)), float(m.group(3))
+        c = [bh["at"], u, z] if bh["axis"] == "x" else [u, bh["at"], z]
+        return c, "BHD", None, bh["id"]           # dir 는 배관의 다른 끝 쪽으로 (아래에서 정함)
+    if s.startswith("BHD(") or "." not in s: raise SystemExit(f"단자 표기 오류 (D136 ③): {s}")
     eid, nn = s.split("."); return nozzle(eid, nn)
 systems, issues = [], []
 for i, p in enumerate(T["pipes"]):
@@ -114,6 +116,11 @@ for i, p in enumerate(T["pipes"]):
             s = rr[side]
             if s == "(티)": continue
             pos, dvec, nsize, host = term(s)
+            if dvec == "BHD":   # 격벽 관통: 직진 구간은 배관이 오는 쪽 (이 줄의 다른 끝 쪽) — 편집기 해석, 로더 규칙 아님
+                bh = next(b for b in S["bulkheads"] if b["id"] == host); ax = 0 if bh["axis"] == "x" else 1
+                other = rr["to" if side == "from" else "from"]
+                if other == "(티)": other = p["from"] if side == "to" else p["to"]
+                op = term(other)[0]; dvec = [0, 0, 0]; dvec[ax] = 1 if op[ax] > bh["at"] else -1
             if nsize and nsize != rr["size"]: issues.append(f"계통 {i+1} {s}: 노즐 구경 {nsize} ≠ 배관 {rr['size']}")
             sys_["terms"].append({"name": s, "pos": pos, "dir": dvec, "size": rr["size"], "host": host, "role": rr["role"], "side": side})
     systems.append(sys_)
@@ -142,7 +149,8 @@ for s_ in systems:
     for t_ in s_["terms"]:
         if t_["dir"] is None: continue
         sz = t_["size"]; r = effective_radius(sz); D = int(sz[:-1])
-        L = (max(3 * D, r) + elbow_tangent(sz, 90)) if t_["host"].startswith("DECK") else max(PIPE_SPECS[sz].min_straight, elbow_tangent(sz, 90))
+        thru = t_["host"].startswith("DECK") or t_["name"].startswith("BHD(")   # 데크·격벽 관통 = max(3D, r) + t90 (D136 ⑦)
+        L = (max(3 * D, r) + elbow_tangent(sz, 90)) if thru else max(PIPE_SPECS[sz].min_straight, elbow_tangent(sz, 90))
         q = [t_["pos"][i] + t_["dir"][i] * L for i in range(3)]
         for b in boxes:
             if b["id"] == t_["host"] or b["key"] in ("floor_openings",): continue

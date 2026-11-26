@@ -2,7 +2,8 @@
 
 **작성:** 2026-11-24, 템플릿 세션 (5) APR - Template)
 **대상 코드:** 로더 초안 `pipe_routing/template.py` (브랜치 `claude/blissful-ritchie-vvzbhd-s2t`, 커밋 9ef2abd)
-**대상 템플릿:** `templates/drafts/er_2nd_generic_a_v2_draft.yaml` (브랜치 `claude/template-handoff`)
+**대상 템플릿:** `templates/er_2nd_generic_a.yaml` (형식 2, D136 — 2026-11-26 초안에서 옮김)
+**상태 (2026-11-26):** §2 의 형식 항목 (성격 블록·노즐·계통·문·트레이·use) 은 D136·D137 로 확정됐다. 로더 반영은 skeleton Code 몫 (사양 세션 지시). 이 문서는 기록으로 남긴다.
 **비교 대상:** 편집기 임시 펼치기 `tools/template_editor/expand.py` (공식 로더 아님 — 로더가 v2 를 읽게 되면 편집기는 로더 출력을 그리고 expand.py 는 지운다, 펼치기 코드 두 벌 금지)
 
 템플릿 세션은 로더 코드를 고치지 않는다. 아래 §3 은 skeleton Code 에 넘길 요청이고, §2 의 "형식 결정 필요" 표시 항목은 사양 세션이 먼저 정한다.
