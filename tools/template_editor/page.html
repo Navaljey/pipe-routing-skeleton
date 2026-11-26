@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>E/R 2nd 템플릿 편집기</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<script>__PLOTLY__</script>
+<style>
+:root{--bg:#f2f5f8;--surface:#fff;--surface-2:#e9eef3;--line:#ccd6df;--fg:#16202a;--fg-dim:#5d6e7d;--accent:#0e6f82;--bad:#a8322a;--ok:#256b45;
+  --font:"IBM Plex Sans KR",system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,monospace}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e141a;--surface:#161e26;--surface-2:#1d2832;--line:#2b3741;--fg:#e3eaf0;--fg-dim:#94a6b4;--accent:#45bdd4;--bad:#ff6f61;--ok:#4fb584;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e141a;--surface:#161e26;--surface-2:#1d2832;--line:#2b3741;--fg:#e3eaf0;--fg-dim:#94a6b4;--accent:#45bdd4;--bad:#ff6f61;--ok:#4fb584;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.55 var(--font)}
+.wrap{max-width:1280px;margin:0 auto;padding:22px max(16px,env(safe-area-inset-left)) 48px}
+h1{font-size:clamp(1.35rem,4vw,1.85rem);margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--fg-dim);font-size:.86rem;margin:0 0 14px;max-width:80ch}
+h2{font-size:1rem;margin:26px 0 8px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:14px;align-items:start}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:4px}
+.bar{display:flex;flex-wrap:wrap;gap:6px;padding:8px;border-bottom:1px solid var(--line)}
+button{font:600 .78rem var(--font);padding:5px 10px;border:1px solid var(--line);background:var(--surface);color:var(--fg);border-radius:3px;cursor:pointer}
+button[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:color-mix(in srgb,var(--accent) 8%,transparent)}
+button.primary{background:var(--accent);color:var(--surface);border-color:var(--accent)}
+.sep{width:1px;background:var(--line);margin:0 3px}
+#plan{width:100%;height:auto;display:block;cursor:crosshair}
+#plot3d{width:100%;height:min(70vh,640px)}
+.panel{padding:12px 14px}
+.panel h3{margin:0 0 2px;font-size:.98rem}
+.k{font-family:var(--mono);font-size:.72rem;color:var(--fg-dim)}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 0;border-bottom:1px solid var(--line);font-size:.88rem}
+.row:last-child{border-bottom:0}
+.seg{display:flex;gap:4px}
+select,input[type=search]{font:inherit;font-size:.84rem;padding:4px 6px;border:1px solid var(--line);border-radius:3px;background:var(--surface);color:var(--fg);width:100%}
+.scope{display:flex;gap:6px;margin:8px 0}
+.note{font-size:.78rem;color:var(--fg-dim);margin:8px 0 0}
+textarea{width:100%;min-height:260px;font:12px/1.5 var(--mono);background:var(--surface-2);color:var(--fg);border:1px solid var(--line);border-radius:3px;padding:10px;resize:vertical}
+.list{max-height:300px;overflow:auto;border-top:1px solid var(--line)}
+.list div{padding:4px 10px;font-size:.8rem;cursor:pointer;display:flex;justify-content:space-between;gap:6px}
+.list div:hover,.list div.sel{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.legend{display:flex;flex-wrap:wrap;gap:10px;padding:8px 10px;font-size:.76rem;color:var(--fg-dim);border-top:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;font-size:.82rem;min-width:560px}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 .68rem var(--mono);color:var(--fg-dim);background:var(--surface-2)}
+.tbox{overflow-x:auto}
+td.m{font-family:var(--mono);font-size:.78rem}
+.okc{color:var(--ok);font-weight:600}.badc{color:var(--bad);font-weight:600}
+.flash{color:var(--ok);font-size:.78rem;margin-left:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>E/R 2nd 템플릿 편집기 <span class="k">v2 초안</span></h1>
+<p class="sub">평면도에서 장애물을 누르거나 오른쪽 목록에서 고른 뒤 성격을 바꾸면, 아래 YAML 이 바로 바뀐다. 그 YAML 을 복사해 사양 세션에 붙여 넣으면 템플릿에 반영된다. 바꾼 내용은 이 브라우저에 남는다. 템플릿 v2 는 사양 세션 초안 — 노즐 위치는 경험값으로 고칠 것.</p>
+
+<div class="grid">
+<div class="card">
+  <div class="bar" role="group" aria-label="보기">
+    <button data-view="plan" aria-pressed="true">평면도 (편집)</button>
+    <button data-view="3d" aria-pressed="false">3D</button>
+    <span class="sep"></span>
+    <button data-color="attr" aria-pressed="true">색: 성격</button>
+    <button data-color="cat" aria-pressed="false">색: 구분</button>
+    <span class="sep"></span>
+    <button id="tgCeil" aria-pressed="false">천장 구조</button>
+    <button id="tgPipes" aria-pressed="true">배관 계통</button>
+  </div>
+  <div id="planBox"><svg id="plan" role="img" aria-label="구역 평면도 — 장애물을 눌러 선택"></svg></div>
+  <div id="box3d" hidden><div id="plot3d"></div></div>
+  <div class="legend" id="legend"></div>
+</div>
+
+<div class="card panel" id="side">
+  <div id="selInfo"><h3>선택 없음</h3><div class="k">평면도나 목록에서 장애물을 고른다</div></div>
+  <div class="scope" role="group" aria-label="적용 범위">
+    <button data-scope="cat" aria-pressed="true">구분 전체에 적용</button>
+    <button data-scope="item" aria-pressed="false">이 항목만</button>
+  </div>
+  <div id="attrs"></div>
+  <p class="note" id="scopeNote"></p>
+  <input type="search" id="q" placeholder="찾기 (예: TK, WEB, 통로)" aria-label="장애물 찾기" style="margin-top:10px">
+  <div class="list" id="list"></div>
+</div>
+</div>
+
+<h2>YAML — 복사해서 사양 세션에 붙여 넣기</h2>
+<div class="card panel">
+  <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;flex-wrap:wrap">
+    <button class="primary" id="copy">YAML 복사</button>
+    <button id="reset">처음 값으로</button>
+    <span class="flash" id="flash" aria-live="polite"></span>
+  </div>
+  <textarea id="yaml" readonly aria-label="성격 YAML"></textarea>
+</div>
+
+<h2>배관 계통 25 (다리 포함 33 줄)</h2>
+<div class="card tbox"><table><thead><tr><th>#</th><th>서비스</th><th>구분</th><th>구경</th><th>출발</th><th>도착</th></tr></thead><tbody id="sysRows"></tbody></table></div>
+
+<h2>점검</h2>
+<div class="card panel" id="checks"></div>
+</div>
+
+<script>
+const D = __DATA__;
+const KEY = "er2nd-v2-attrs";
+const ATTRS = ["supportable","penetrable","access"];
+const LABEL = {supportable:"지지 가능",penetrable:"관통 가능",access:"접근 구역"};
+const CATC = {"장비":"#8a6d3b","케이싱 안 장비":"#6b4f2a","케이싱 벽":"#7a8a99","내부 격벽":"#3f7fbf","필라":"#55606b","종늑골":"#9aa8b5","트랜스 웹":"#6f86a0","외판 수직 웹":"#8796a8","계단":"#b07aa1","통로":"#e0b43a","정비 공간":"#f08c3a","난간":"#f08c3a","바닥 개구부":"#d64545","케이블 트레이":"#3aa37a"};
+const ATTRC = {"지지·관통":"#2f7fd6","지지만":"#2f9e5b","관통만":"#7a5cc8","불가":"#8a6d3b","접근 구역":"#f08c3a","바닥 개구부":"#d64545"};
+const SVC = {FO:"#b5651d",LO:"#c9a227",SW:"#2a7ab8",FW:"#4fa3d9",CA:"#8e8e8e",ST:"#d43f3f",CN:"#e07b7b",FF:"#e0302f",BG:"#5b8c3a",SD:"#7a5230",DD:"#6aa84f"};
+const CEIL = new Set(["ceiling_longitudinals","ceiling_web_frames"]);
+const byId = Object.fromEntries(D.boxes.map(b=>[b.id,b]));
+const orig = {defaults:JSON.parse(JSON.stringify(D.defaults)), overrides:JSON.parse(JSON.stringify(D.overrides||{}))};
+let state = JSON.parse(JSON.stringify(orig));
+try{const s=localStorage.getItem(KEY); if(s){const v=JSON.parse(s); if(v.defaults) state=v;}}catch(e){}
+let sel=null, scope="cat", colorMode="attr", view="plan", showCeil=false, showPipes=true;
+
+function eff(b){const a={supportable:false,penetrable:false,access:false,penetration_axis:null};
+  Object.assign(a,state.defaults[b.key]||{},state.overrides[b.id]||{}); return a;}
+function klass(b){ if(b.key==="floor_openings") return "바닥 개구부"; const a=eff(b);
+  if(a.access) return "접근 구역"; if(a.supportable&&a.penetrable) return "지지·관통"; if(a.supportable) return "지지만"; if(a.penetrable) return "관통만"; return "불가";}
+const color = b => colorMode==="attr" ? ATTRC[klass(b)] : CATC[b.cat];
+function save(){try{localStorage.setItem(KEY,JSON.stringify(state));}catch(e){}}
+
+// ── 평면도 ──
+const [X,Y,H]=D.zone, PAD=600, NS="http://www.w3.org/2000/svg";
+const svg=document.getElementById("plan"); svg.setAttribute("viewBox",`${-PAD} ${-PAD} ${X+2*PAD} ${Y+2*PAD}`);
+const ORDER=["ceiling_longitudinals","ceiling_web_frames","floor_openings","passages","handrails","maintenance","side_shell_frames","bulkheads","casing_wall","pillars","stairs","casing_contents","equipment","cable_trays"];
+function el(t,a,p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);(p||svg).appendChild(e);return e;}
+const fy = y => Y-y;   // 평면도: y(좌현→우현) 를 위로
+function drawPlan(){
+  svg.innerHTML="";
+  const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  el("rect",{x:0,y:0,width:X,height:Y,fill:"none",stroke:css("--fg-dim"),"stroke-width":40});
+  for(let gx=0;gx<=X;gx+=6000){el("text",{x:gx,y:Y+420,"font-size":300,fill:css("--fg-dim"),"text-anchor":"middle","font-family":"IBM Plex Mono"}).textContent=gx/1000+"m";}
+  for(let gy=0;gy<=Y;gy+=6000){el("text",{x:-120,y:fy(gy)+100,"font-size":300,fill:css("--fg-dim"),"text-anchor":"end","font-family":"IBM Plex Mono"}).textContent=gy/1000;}
+  el("text",{x:X/2,y:-220,"font-size":320,fill:css("--fg-dim"),"text-anchor":"middle"}).textContent="선수 →  (x)       위 = 우현 (y)";
+  const bs=[...D.boxes].sort((a,b)=>ORDER.indexOf(a.key)-ORDER.indexOf(b.key));
+  for(const b of bs){
+    if(CEIL.has(b.key)&&!showCeil) continue;
+    const w=Math.max(b.max[0]-b.min[0],60), h=Math.max(b.max[1]-b.min[1],60);
+    const op = CEIL.has(b.key)?.45 : ["passages","handrails","maintenance"].includes(b.key)?.45 : .85;
+    const r=el("rect",{x:b.min[0],y:fy(b.max[1]),width:w,height:h,fill:color(b),"fill-opacity":op,
+      stroke: sel===b.id?css("--fg"):"none","stroke-width":sel===b.id?120:0});
+    r.style.cursor="pointer"; r.addEventListener("click",ev=>{ev.stopPropagation();select(b.id);});
+    const t=el("title",{},r); t.textContent=`${b.id} · ${b.cat} · ${klass(b)}`;
+    if(["equipment","casing_contents","stairs"].includes(b.key)&&w>1200&&h>800)
+      el("text",{x:b.min[0]+w/2,y:fy(b.max[1])+h/2+90,"font-size":260,"text-anchor":"middle",fill:"#fff","pointer-events":"none","font-family":"IBM Plex Mono"}).textContent=b.id.replace(/_/g," ");
+  }
+  if(showPipes) for(const s of D.systems){
+    const c=SVC[s.svc]||"#888"; const t=s.terms;
+    const main=t.filter(x=>x.role==="주관"); if(main.length<2) continue;
+    const a=main.find(x=>x.side==="from"), z=main.find(x=>x.side==="to");
+    el("line",{x1:a.pos[0],y1:fy(a.pos[1]),x2:z.pos[0],y2:fy(z.pos[1]),stroke:c,"stroke-width":70,"stroke-dasharray":"220 140","pointer-events":"none"});
+    const tee=[(a.pos[0]+z.pos[0])/2,(a.pos[1]+z.pos[1])/2];
+    for(const lg of t.filter(x=>x.role!=="주관")){
+      el("line",{x1:tee[0],y1:fy(tee[1]),x2:lg.pos[0],y2:fy(lg.pos[1]),stroke:c,"stroke-width":50,"stroke-dasharray":"80 120","pointer-events":"none"});}
+    if(t.some(x=>x.role!=="주관")) el("circle",{cx:tee[0],cy:fy(tee[1]),r:160,fill:c,"pointer-events":"none"});
+    for(const x of t){ const n=el("circle",{cx:x.pos[0],cy:fy(x.pos[1]),r:x.host&&x.host.startsWith("DECK")?190:140,fill:x.host&&x.host.startsWith("DECK")?"none":c,stroke:c,"stroke-width":60});
+      el("title",{},n).textContent=`계통 ${s.no} ${s.svc} ${x.role} ${x.size} — ${x.name}`;}
+  }
+}
+// ── 3D ──
+function boxMesh(list,col,name,op){const x=[],y=[],z=[],i=[],j=[],k=[],t=[];
+  const F=[[0,1,2],[0,2,3],[4,6,5],[4,7,6],[0,4,5],[0,5,1],[1,5,6],[1,6,2],[2,6,7],[2,7,3],[3,7,4],[3,4,0]];
+  list.forEach(b=>{const o=x.length,[a0,b0,c0]=b.min,[a1,b1,c1]=b.max;
+    [[a0,b0,c0],[a1,b0,c0],[a1,b1,c0],[a0,b1,c0],[a0,b0,c1],[a1,b0,c1],[a1,b1,c1],[a0,b1,c1]].forEach(p=>{x.push(p[0]);y.push(p[1]);z.push(p[2]);t.push(`<b>${b.id}</b><br>${b.cat} · ${klass(b)}`)});
+    F.forEach(f=>{i.push(o+f[0]);j.push(o+f[1]);k.push(o+f[2])});});
+  return {type:"mesh3d",x,y,z,i,j,k,color:col,opacity:op,name,flatshading:true,text:t,hovertemplate:"%{text}<extra></extra>",lighting:{ambient:.75,diffuse:.5}};}
+function draw3d(){
+  const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const groups={}; D.boxes.filter(b=>showCeil||!CEIL.has(b.key)).forEach(b=>{const g=colorMode==="attr"?klass(b):b.cat;(groups[g]??=[]).push(b);});
+  const tr=Object.entries(groups).map(([g,l])=>boxMesh(l,colorMode==="attr"?ATTRC[g]:CATC[g],g,["접근 구역","통로","정비 공간","난간"].includes(g)?.35:.8));
+  if(sel){const b=byId[sel]; tr.push(boxMesh([{...b,min:b.min.map(v=>v-40),max:b.max.map(v=>v+40)}],"#ffffff","선택",.35));}
+  if(showPipes) for(const s of D.systems){const x=[],y=[],z=[],t=[];
+    const m=s.terms.filter(q=>q.role==="주관"),a=m.find(q=>q.side==="from"),e=m.find(q=>q.side==="to"); if(!a||!e) continue;
+    x.push(a.pos[0],e.pos[0],null);y.push(a.pos[1],e.pos[1],null);z.push(a.pos[2],e.pos[2],null);
+    const tee=[0,1,2].map(i=>(a.pos[i]+e.pos[i])/2);
+    s.terms.filter(q=>q.role!=="주관").forEach(q=>{x.push(tee[0],q.pos[0],null);y.push(tee[1],q.pos[1],null);z.push(tee[2],q.pos[2],null);});
+    const h=`계통 ${s.no} ${s.svc}`; t.push(...x.map(()=>h));
+    tr.push({type:"scatter3d",mode:"lines",x,y,z,text:t,hovertemplate:"%{text}<extra></extra>",name:"배관 "+s.svc,showlegend:false,line:{color:SVC[s.svc],width:4,dash:"dash"}});
+    const nx=s.terms.map(q=>q.pos[0]),ny=s.terms.map(q=>q.pos[1]),nz=s.terms.map(q=>q.pos[2]);
+    tr.push({type:"scatter3d",mode:"markers",x:nx,y:ny,z:nz,text:s.terms.map(q=>`${q.name} ${q.size} (${q.role})`),hovertemplate:"%{text}<extra></extra>",showlegend:false,marker:{size:3.5,color:SVC[s.svc]}});}
+  const ax=(tt,r)=>({title:{text:tt,font:{color:css("--fg-dim")}},range:r,color:css("--fg-dim"),gridcolor:css("--line"),backgroundcolor:"rgba(0,0,0,0)"});
+  Plotly.react("plot3d",tr,{paper_bgcolor:"rgba(0,0,0,0)",font:{color:css("--fg")},margin:{l:0,r:0,t:0,b:0},showlegend:false,
+    scene:{xaxis:ax("x 선미→선수",[0,X]),yaxis:ax("y 좌현→우현",[0,Y]),zaxis:ax("z",[0,H]),aspectmode:"manual",aspectratio:{x:1.2,y:1,z:H/Y*1.6},camera:{eye:{x:-1.3,y:-1.5,z:1.0}}}},{responsive:true,displaylogo:false});
+}
+// ── 패널 ──
+function select(id){sel=id; renderSide(); redraw(); const it=document.querySelector(`#list [data-id="${id}"]`); if(it) it.scrollIntoView({block:"nearest"});}
+function renderSide(){
+  const info=document.getElementById("selInfo"), box=document.getElementById("attrs");
+  document.querySelectorAll("[data-scope]").forEach(b=>b.setAttribute("aria-pressed",b.dataset.scope===scope));
+  if(!sel){box.innerHTML="";document.getElementById("scopeNote").textContent="";renderList();return;}
+  const b=byId[sel], a=eff(b), n=D.boxes.filter(x=>x.key===b.key).length;
+  info.innerHTML=`<h3>${b.id}</h3><div class="k">${b.cat} (${b.key}) · ${n}개 · ${b.min.map(Math.round).join(", ")} → ${b.max.map(Math.round).join(", ")}</div>`;
+  if(b.key==="floor_openings"){box.innerHTML=`<p class="note">바닥 개구부는 장애물이 아니다 — 위에서 바닥 지지를 못 쓴다 (D130). 바꿀 성격 없음.</p>`;renderList();return;}
+  box.innerHTML = ATTRS.map(k=>`<div class="row"><span>${LABEL[k]}</span><div class="seg">
+    <button data-k="${k}" data-v="true" aria-pressed="${a[k]===true}">예</button><button data-k="${k}" data-v="false" aria-pressed="${a[k]!==true}">아니오</button></div></div>`).join("")+
+    `<div class="row"><span>관통 방향</span><select id="pax" aria-label="관통 방향"><option value="">자동 (가장 얇은 축)</option><option value="x">x</option><option value="y">y</option><option value="z">z</option></select></div>`;
+  document.getElementById("pax").value=a.penetration_axis||"";
+  box.querySelectorAll("button[data-k]").forEach(bt=>bt.onclick=()=>setAttr(bt.dataset.k,bt.dataset.v==="true"));
+  document.getElementById("pax").onchange=e=>setAttr("penetration_axis",e.target.value||null);
+  const ov=state.overrides[b.id];
+  document.getElementById("scopeNote").textContent = scope==="cat"
+    ? `바꾸면 "${b.cat}" ${n}개 모두에 적용된다 (attribute_defaults.${b.key}).` + (ov?` 이 항목에는 개별 값이 따로 있어 그것이 우선한다.`:"")
+    : `바꾸면 ${b.id} 하나에만 적용된다 (attribute_overrides).`;
+  renderList();
+}
+function setAttr(k,v){
+  const b=byId[sel];
+  if(k==="access"&&v){ /* 접근 구역은 지지·관통과 함께 쓸 수 없다 (D119) */ }
+  const tgt = scope==="cat" ? (state.defaults[b.key] ??= {}) : (state.overrides[b.id] ??= {});
+  if(v===null) delete tgt[k]; else tgt[k]=v;
+  if(k==="access"&&v){tgt.supportable=false;tgt.penetrable=false;}
+  if((k==="supportable"||k==="penetrable")&&v){tgt.access=false;}
+  if(scope==="item"){ const base={...(state.defaults[b.key]||{})}; for(const kk in tgt){ if(base[kk]===tgt[kk] || (base[kk]===undefined && tgt[kk]===false)) delete tgt[kk]; }
+    if(!Object.keys(tgt).length) delete state.overrides[b.id]; }
+  save(); renderSide(); redraw(); renderYaml();
+}
+function renderList(){
+  const q=document.getElementById("q").value.trim().toLowerCase();
+  const items=D.boxes.filter(b=>!q||b.id.toLowerCase().includes(q)||b.cat.includes(q)||b.key.includes(q));
+  document.getElementById("list").innerHTML=items.map(b=>`<div data-id="${b.id}" class="${b.id===sel?"sel":""}"><span><span class="sw" style="background:${ATTRC[klass(b)]}"></span>${b.id}</span><span class="k">${b.cat}${state.overrides[b.id]?" · 개별":""}</span></div>`).join("");
+  document.querySelectorAll("#list [data-id]").forEach(d=>d.onclick=()=>select(d.dataset.id));
+}
+function yamlVal(o){const ks=["supportable","penetrable","access","penetration_axis"].filter(k=>o[k]!==undefined&&o[k]!==null);
+  return "{"+ks.map(k=>`${k}: ${o[k]}`).join(", ")+"}";}
+function renderYaml(){
+  const keys=[...new Set([...Object.keys(state.defaults),...D.boxes.map(b=>b.key)])].filter(k=>k!=="floor_openings");
+  const w=Math.max(...keys.map(k=>k.length))+1;
+  let s="# 템플릿 er_2nd_generic_a v2 — 성격 (D93·D113·D119)\nattribute_defaults:\n";
+  for(const k of keys) s+=`  ${(k+":").padEnd(w)} ${yamlVal(state.defaults[k]||{supportable:false,penetrable:false})}\n`;
+  const ov=Object.entries(state.overrides).filter(([,v])=>Object.keys(v).length);
+  s+= ov.length? "attribute_overrides:\n"+ov.map(([id,v])=>`  ${id}: ${yamlVal(v)}`).join("\n")+"\n" : "attribute_overrides: {}\n";
+  const changed=JSON.stringify(state)!==JSON.stringify(orig);
+  s+= changed? "# 처음 값에서 바뀜\n" : "# 처음 값 그대로\n";
+  document.getElementById("yaml").value=s;
+}
+function legend(){
+  const L=colorMode==="attr"?ATTRC:CATC;
+  document.getElementById("legend").innerHTML=Object.entries(L).map(([k,c])=>`<span><span class="sw" style="background:${c}"></span>${k}</span>`).join("")+
+   (showPipes?" · "+Object.entries(SVC).map(([k,c])=>`<span><span class="sw" style="background:${c};border-radius:50%"></span>${k}</span>`).join(""):"")+
+   `<span>○ 데크 관통 단자 · ● 노즐 · 큰 점 = 티 (개략)</span>`;
+}
+function redraw(){legend(); if(view==="plan") drawPlan(); else draw3d();}
+// ── 이벤트 ──
+const press=(sel_,el_)=>document.querySelectorAll(sel_).forEach(b=>b.setAttribute("aria-pressed",b===el_));
+document.querySelectorAll("[data-view]").forEach(b=>b.onclick=()=>{view=b.dataset.view;press("[data-view]",b);
+  document.getElementById("planBox").hidden=view!=="plan";document.getElementById("box3d").hidden=view!=="3d";redraw();});
+document.querySelectorAll("[data-color]").forEach(b=>b.onclick=()=>{colorMode=b.dataset.color;press("[data-color]",b);redraw();});
+document.querySelectorAll("[data-scope]").forEach(b=>b.onclick=()=>{scope=b.dataset.scope;renderSide();});
+const tg=(id,f)=>{const e=document.getElementById(id);e.onclick=()=>{e.setAttribute("aria-pressed",f());redraw();};};
+tg("tgCeil",()=>showCeil=!showCeil); tg("tgPipes",()=>showPipes=!showPipes);
+document.getElementById("q").oninput=renderList;
+svg.addEventListener("click",()=>{sel=null;renderSide();redraw();});
+document.getElementById("copy").onclick=async()=>{const ta=document.getElementById("yaml");let ok=false;
+  try{await navigator.clipboard.writeText(ta.value);ok=true;}catch(e){}
+  if(!ok){try{ta.removeAttribute("readonly");ta.select();ok=document.execCommand("copy");ta.setAttribute("readonly","");}catch(e){}}
+  const f=document.getElementById("flash"); f.textContent=ok?"복사됨":"자동 복사가 막혔다 — 상자 안을 눌러 전체 선택(Ctrl+A) 후 복사"; if(!ok){ta.focus();ta.select();} setTimeout(()=>f.textContent="",4000);};
+document.getElementById("reset").onclick=()=>{state=JSON.parse(JSON.stringify(orig));save();renderSide();redraw();renderYaml();};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",redraw);
+// 표
+document.getElementById("sysRows").innerHTML=D.systems.flatMap(s=>s.runs.map((r,i)=>`<tr><td class="m">${i?"":s.no}</td><td>${i?"":`<span class="sw" style="background:${SVC[s.svc]}"></span>${s.svc}`}</td><td>${r.role}</td><td class="m">${r.size}</td><td class="m">${r.from}</td><td class="m">${r.to}</td></tr>`)).join("");
+document.getElementById("checks").innerHTML=
+  `<p><span class="${D.clash.length?"badc":"okc"}">장애물 겹침 ${D.clash.length}건</span> (v1 11건) · <span class="${D.issues.length?"badc":"okc"}">단자 직진 구간 막힘 ${D.issues.length}건</span> (노즐 = max(§3.3, t₉₀), 데크 관통 = max(3D, r) + t₉₀, 다른 장애물과 유효 반경 r 이상 · 접근 구역 침범 없음)</p>`+
+  (D.clash.concat(D.issues).length?"<ul>"+D.clash.map(c=>`<li>${c[1]} ↔ ${c[3]}</li>`).join("")+D.issues.map(x=>`<li>${x}</li>`).join("")+"</ul>":"")+
+  `<p class="note">점검은 템플릿 원래 값 기준이다. 티 위치는 그림용 개략 (주관 가운데) — 실제 티 위치는 라우터가 고른다 (D112).</p>`;
+renderSide(); renderYaml(); redraw();
+</script>
+</body>
+</html>

@@ -1,0 +1,230 @@
+# 시험용 고정 사본 (S2-T 로더 형식 2 시험) — 템플릿 v2 초안 (claude/template-handoff, 2026-11-24) 을 형식 2 로 맞춘 것.
+# 템플릿 정본이 아니다 (정본 = templates/, 템플릿 세션 몫). 바꾸면 시험의 기대값도 바꾼다.
+# 구역 배치 설명서 (D124 ③) — 첫 템플릿 (M36) v2 초안 (사양 세션, 2026-11-24 — 소유자 확인 전)
+# 기관실 2nd deck "형" 가상 템플릿 — 실제 도면 좌표·실제 노즐 위치를 옮기지 않았다 (D124 ④).
+# v1 → v2: ① 성격을 직접 적는 블록 (attribute_defaults · attribute_overrides)
+#          ② 장비마다 이름 붙은 노즐 (면 · 면 안 위치 · 구경) — 경험값 초안, 소유자가 고칠 것
+#          ③ 배관 = 계통 (주관 + 분기 다리, D134) — 같은 출발·도착 노즐을 쓰던 배관을 묶음
+#          ④ v1 겹침 11건 수정 · 미정 규칙 (면 방향·문·곁가지 통로·트레이 내림) 명시
+#          ⑤ 케이싱 벽 관통 가능 — v1 에서는 관통 불가라 ME_TOP 노즐에 배관이 닿을 수 없었다
+
+template: ER_2ND_GENERIC_A
+format: 2
+use: train
+kind: er_deck
+version: 2
+units: mm
+axes: {x: 선미→선수 (길이), y: 좌현→우현 (폭), z: 데크 윗면 → 윗데크 판 아랫면 (D133)}
+faces: {east: +x, west: -x, north: +y, south: -y, top: +z, bottom: -z}   # 장비 면 이름
+nozzle_at: "옆면 = [면 안 수평 거리 (면의 작은 좌표 쪽 모서리부터), 높이 (장비 바닥부터)] · top = [x 거리, y 거리] (장비 최소 모서리부터)"
+
+zone:
+  size: [36000, 30000, 5200]
+  floor: {supportable: true}
+  ceiling: {supportable: true}
+
+# ── 성격 (D93·D113·D119·D130·D131·D132) — 여기만 고치면 된다 ───────────────
+# supportable = 서포트 지지면 · penetrable = 배관 관통 · penetration_axis = 관통 방향 (없으면 가장 얇은 축) · access = 접근 구역
+attribute_defaults:
+  ceiling_longitudinals: {supportable: true,  penetrable: false}
+  ceiling_web_frames:    {supportable: true,  penetrable: false}   # D132 — 웹 구멍 관통은 M27
+  side_shell_frames:     {supportable: true,  penetrable: false}   # 2026-11-24 소유자 확인
+  pillars:               {supportable: true,  penetrable: false}
+  bulkheads:             {supportable: true,  penetrable: true}    # D113 내부 격벽
+  casing_wall:           {supportable: true,  penetrable: true}    # v2 변경 (v1 = 관통 불가)
+  casing_contents:       {supportable: false, penetrable: false}
+  stairs:                {access: true}                            # 2026-11-24 소유자: 계단 = 접근 구역 (D119)
+  equipment:             {supportable: false, penetrable: false}
+  cable_trays:           {supportable: false, penetrable: false}   # D131
+  passages:              {access: true}                            # D119
+  maintenance:           {access: true}
+  handrails:             {access: true}                            # D130
+attribute_overrides: {}      # 개별 항목만 다르게: {FO_SETT_TK: {supportable: true}, ...}
+
+# ── 구조 ─────────────────────────────────────────────────────────────
+structure:
+  ceiling_longitudinals: {run: x, spacing_y: 800, section: [250, 90], hang_from: ceiling}
+  ceiling_web_frames:    {run: y, spacing_x: 3200, section: [800, 20], face_plate: [150, 20], hang_from: ceiling}
+  side_shell_frames:     {sides: [port, stbd], spacing_x: 800, section: [300, 15]}   # 외판 면에 붙은 깊이 300 판
+  pillars:   {grid_x: [9600, 25600], grid_y: [7000, 23000], size: [300, 300]}
+  bulkheads:
+    - {id: BHD_PUR, axis: x, at: 9600,  span_y: [1500, 11000], thickness: 12}
+    - {id: BHD_WS,  axis: y, at: 22000, span_x: [24000, 34500], thickness: 12}
+
+casing:
+  id: ER_CASING
+  box: [[13000, 10500], [23000, 19500]]
+  wall_thickness: 10
+  contents:
+    - id: ME_TOP
+      box: [[14000, 12000, 0], [22000, 15500, 3200]]
+      nozzles:
+        FO_IN:  {face: west, at: [1000, 2500], size: 100A}
+        FO_RET: {face: west, at: [2500, 2500], size: 50A}
+        FW_IN:  {face: east, at: [1000, 2500], size: 150A}
+        FW_OUT: {face: east, at: [2600, 2500], size: 150A}
+        SA_IN:  {face: east, at: [1800, 1500], size: 65A}
+    - {id: UPTAKE_1, box: [[15000, 16000, 0], [17200, 18800, 5200]]}
+    - {id: UPTAKE_2, box: [[19800, 16500, 0], [21200, 18800, 5200]]}
+  maintenance: {above: ME_TOP, height_to: ceiling}
+
+passages:
+  ring: {around: ER_CASING, offset: 1200, width: 1000, height: 2000}
+  spokes:                      # 규칙: 목표 중심에서 고리의 가까운 변까지 한 축 직선
+    - {to: STAIR_P,  width: 900}
+    - {to: STAIR_S,  width: 900}
+    - {to: DOOR_PUR, width: 900}
+    - {to: DOOR_WS,  width: 900}
+  doors:
+    - {id: DOOR_PUR, on: BHD_PUR, at: [9600, 9800]}
+    - {id: DOOR_WS,  on: BHD_WS,  at: [24800, 22000]}
+  stairs:
+    - {id: STAIR_P, box: [[13500, 4000], [14700, 6500]]}     # v2: FO_PUR_2 겹침 해소
+    - {id: STAIR_S, box: [[24500, 23500], [25700, 26000]]}
+  hatches:
+    - {id: HATCH_1, box: [[27000, 4000], [33000, 9000]], floor_opening: true, handrail: {height: 1100, width: 50}}
+
+cable_trays:
+  - {id: TRAY_RING,    follow: passages.ring, width: 600, height: 150, z_top: 4300}
+  - {id: TRAY_SPOKE_P, follow: "passages.spokes[0]", width: 450, height: 120, z_top: 4300}
+  - {id: TRAY_SPOKE_S, follow: "passages.spokes[1]", width: 450, height: 120, z_top: 4300}
+  - {id: TRAY_DROP_ME, drop_from: TRAY_RING, at: [17000, 9300], to_z: 3200, width: 300, depth: 120}   # 케이싱 남쪽 바깥에서 수직 내림
+
+# ── 장비 (상자 근사) · 노즐 ────────────────────────────────────────────
+equipment:
+  - id: FO_SETT_TK
+    box: [[2000, 2500, 0], [6000, 6500, 4300]]               # v2: 높이 4500 → 4300 (트랜스 웹 아래)
+    vary: {pos: 500}
+    nozzles:
+      OUT:  {face: east,  at: [1000, 400],  size: 65A}
+      HEAT: {face: top,   at: [2000, 2000], size: 100A}
+      DRN:  {face: south, at: [2000, 150],  size: 50A}
+  - id: FO_SERV_TK
+    box: [[2000, 8000, 0], [6000, 12000, 4300]]
+    vary: {pos: 500}
+    nozzles:
+      IN:   {face: east,  at: [3000, 3800], size: 65A}
+      OUT:  {face: east,  at: [1000, 400],  size: 100A}
+      HEAT: {face: top,   at: [2000, 2000], size: 50A}
+      DRN:  {face: north, at: [2000, 150],  size: 50A}
+  - id: LO_SETT_TK
+    box: [[2000, 14000, 0], [5000, 17000, 3500]]
+    vary: {pos: 500}
+    nozzles:
+      OUT: {face: east, at: [1500, 400], size: 65A}
+  - id: FO_PUR_1
+    box: [[10200, 2000, 0], [12200, 3500, 1800]]
+    vary: {pos: 300}
+    nozzles:
+      IN:  {face: west, at: [750, 1200], size: 65A}
+      OUT: {face: east, at: [750, 1200], size: 65A}
+  - id: FO_PUR_2
+    box: [[10200, 4000, 0], [12200, 5500, 1800]]
+    vary: {pos: 300}
+    nozzles:
+      IN:  {face: west, at: [750, 1200], size: 65A}
+      OUT: {face: east, at: [750, 1200], size: 65A}
+  - id: LO_PUR_1
+    box: [[10200, 6300, 0], [12200, 7800, 1800]]            # v2: 고리 통로 겹침 해소
+    vary: {pos: 300}
+    nozzles:
+      IN:  {face: west, at: [750, 1200], size: 65A}
+      OUT: {face: east, at: [750, 1200], size: 65A}
+  - id: FO_SUPPLY_UNIT
+    box: [[7000, 20000, 0], [10000, 22500, 2200]]
+    vary: {pos: 500}
+    nozzles:
+      IN:   {face: south, at: [500, 600],   size: 100A}
+      OUT:  {face: east,  at: [1250, 800],  size: 100A}
+      HEAT: {face: top,   at: [1500, 1250], size: 50A}
+  - id: FW_COOLER
+    box: [[25600, 11000, 0], [27100, 14000, 2000]]          # v2: 고리 통로 겹침 해소
+    vary: {pos: 500}
+    nozzles:
+      SW_IN:  {face: east,  at: [800, 600],   size: 300A}
+      SW_OUT: {face: north, at: [750, 1400],  size: 300A}
+      FW_OUT: {face: top,   at: [400, 2400],  size: 150A}   # 서쪽은 고리 통로 — 위로 뺀다
+      FW_IN:  {face: south, at: [750, 600],   size: 150A}
+  - id: SW_PUMP_1
+    box: [[28800, 12000, 0], [29800, 13000, 1500]]
+    vary: {pos: 300}
+    nozzles:
+      SUC: {face: south, at: [500, 400],  size: 300A}
+      DIS: {face: west,  at: [500, 1000], size: 300A}
+  - id: SW_PUMP_2
+    box: [[28800, 14500, 0], [29800, 15500, 1500]]
+    vary: {pos: 300}
+    nozzles:
+      SUC: {face: north, at: [500, 400],  size: 300A}
+      DIS: {face: west,  at: [500, 1000], size: 300A}
+  - id: AIR_RCV_1
+    box: [[29000, 18000, 0], [30500, 19500, 3000]]
+    vary: {pos: 500}
+    nozzles:
+      IN:  {face: east,  at: [750, 800],  size: 50A}
+      OUT: {face: south, at: [750, 2500], size: 65A}
+  - id: AIR_RCV_2
+    box: [[29000, 20300, 0], [30500, 21800, 3000]]          # v2: 격벽 BHD_WS 겹침 해소
+    vary: {pos: 500}
+    nozzles:
+      IN: {face: east, at: [750, 800],  size: 50A}
+      WK: {face: west, at: [750, 2500], size: 25A}
+  - id: AIR_COMP
+    box: [[31500, 18000, 0], [33500, 20500, 1800]]
+    vary: {pos: 500}
+    nozzles:
+      OUT: {face: west, at: [1250, 1200], size: 50A}
+  - id: BLR_FW_PUMP
+    box: [[8000, 13000, 0], [9000, 14000, 1500]]
+    vary: {pos: 300}
+    nozzles:
+      SUC: {face: south, at: [500, 400],  size: 65A}
+      DIS: {face: north, at: [500, 1000], size: 65A}
+  - id: HOTWELL
+    box: [[6500, 24000, 0], [9000, 27000, 2500]]
+    vary: {pos: 500}
+    nozzles:
+      IN:  {face: west, at: [1500, 2000], size: 50A}
+      OUT: {face: east, at: [1500, 400],  size: 65A}
+  - id: WS_CABINETS
+    box: [[26000, 23400, 0], [34000, 28500, 2200]]          # v2: 필라·계단 겹침 해소
+    nozzles:
+      AIR: {face: south, at: [3000, 1500], size: 25A}
+      DRN: {face: west,  at: [4500, 300],  size: 100A}
+
+# ── 배관 계통 (D134: 주관 + 분기 다리 0~5) ─────────────────────────────
+# 단자: 장비.노즐 · DECK_DN/UP(x, y) = 아래·윗데크 관통 · BHD(id) = 격벽 관통
+# 다리: to = 갈래 (흐름 out) · from = 합류 (흐름 in)
+pipes:
+  - {svc: FO, size: 65A,  from: FO_SETT_TK.OUT, to: FO_PUR_1.IN, legs: [{size: 65A, to: FO_PUR_2.IN}]}
+  - {svc: FO, size: 65A,  from: FO_PUR_1.OUT, to: FO_SERV_TK.IN, legs: [{size: 65A, from: FO_PUR_2.OUT}]}
+  - {svc: FO, size: 100A, from: FO_SERV_TK.OUT, to: FO_SUPPLY_UNIT.IN}
+  - {svc: FO, size: 100A, from: FO_SUPPLY_UNIT.OUT, to: ME_TOP.FO_IN}
+  - {svc: FO, size: 50A,  from: ME_TOP.FO_RET, to: "DECK_DN(12000, 22000)"}
+  - {svc: LO, size: 65A,  from: LO_SETT_TK.OUT, to: LO_PUR_1.IN}
+  - {svc: LO, size: 65A,  from: LO_PUR_1.OUT, to: "DECK_DN(12500, 9900)"}
+  - {svc: SW, size: 300A, from: "DECK_DN(29300, 10000)", to: SW_PUMP_1.SUC}   # 2026-11-24 소유자: 펌프에서 1.4 m 이상 (흡입 노즐까지 꺾임 공간)
+  - {svc: SW, size: 300A, from: "DECK_DN(29300, 17500)", to: SW_PUMP_2.SUC}   # 〃
+  - {svc: SW, size: 300A, from: SW_PUMP_1.DIS, to: FW_COOLER.SW_IN, legs: [{size: 300A, from: SW_PUMP_2.DIS}]}
+  - {svc: SW, size: 300A, from: FW_COOLER.SW_OUT, to: "DECK_DN(26350, 16500)"}
+  - {svc: FW, size: 150A, from: FW_COOLER.FW_OUT, to: ME_TOP.FW_IN}
+  - {svc: FW, size: 150A, from: ME_TOP.FW_OUT, to: FW_COOLER.FW_IN}
+  - {svc: CA, size: 50A,  from: AIR_COMP.OUT, to: AIR_RCV_1.IN, legs: [{size: 50A, to: AIR_RCV_2.IN}]}
+  - {svc: CA, size: 65A,  from: AIR_RCV_1.OUT, to: ME_TOP.SA_IN}
+  - {svc: CA, size: 25A,  from: AIR_RCV_2.WK, to: WS_CABINETS.AIR}
+  - {svc: ST, size: 100A, from: "DECK_UP(8000, 18000)", to: FO_SETT_TK.HEAT, legs: [{size: 50A, to: FO_SERV_TK.HEAT}, {size: 50A, to: FO_SUPPLY_UNIT.HEAT}]}
+  - {svc: CN, size: 50A,  from: FO_SETT_TK.DRN, to: HOTWELL.IN, legs: [{size: 50A, from: FO_SERV_TK.DRN}]}
+  - {svc: CN, size: 65A,  from: HOTWELL.OUT, to: BLR_FW_PUMP.SUC}
+  - {svc: CN, size: 65A,  from: BLR_FW_PUMP.DIS, to: "DECK_UP(9000, 15000)"}
+  - {svc: FF, size: 150A, from: "DECK_DN(31000, 10000)", to: "BHD(BHD_WS, 31000, 3000)", legs: [{size: 100A, to: "DECK_UP(4000, 27000)"}]}
+  - {svc: BG, size: 100A, from: "DECK_DN(18000, 24000)", to: "DECK_DN(5000, 27000)"}
+  - {svc: SD, size: 100A, from: WS_CABINETS.DRN, to: "DECK_DN(22000, 27500)"}              # 중력
+  - {svc: DD, size: 65A,  from: "DECK_UP(35000, 24400)", to: "DECK_DN(35200, 22600)"}      # v2: 캐비닛 안 관통 해소 · 2026-11-24: 종늑골 사이로 (y 24000 → 24400)
+  - {svc: DD, size: 65A,  from: "DECK_UP(3000, 20400)", to: "DECK_DN(2500, 19000)"}   # 2026-11-24: 윗데크 관통을 종늑골 사이로 (y 20000 → 20400)
+
+variation:
+  equipment_pos: per_item          # 노즐은 장비와 함께 움직인다
+  equipment_size: 0.10
+  pipe_count: [30, 50]             # 계통 복제 + 데크 단자 흔들기로 다리 포함 배관 수를 늘린다
+  terminal_jitter: 300
+  structure: fixed
