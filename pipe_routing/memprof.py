@@ -232,11 +232,7 @@ def _astar_generic(space, pipe, time_limit, h_start, expand_limit=None, scost=No
     af._CURRENT.update(space=space)
     s0 = space.start_state(pipe)
     cap = 1 << 16
-    H = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64))
-    S = (np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap),
-         np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap))
-    K = (np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap), np.zeros(cap, np.int64), np.zeros(cap, np.int64),
-         np.zeros(cap), np.zeros(cap))
+    H, S, K = af._generic_arrays(cap)   # astar_route_generic 과 같은 배열 (D126 L3 (d))
     N = len(P)
     open_head = np.full(N * 18, -1, dtype=np.int32)
     closed_head = np.full(N * 18, -1, dtype=np.int32)
