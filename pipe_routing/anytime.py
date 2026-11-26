@@ -73,15 +73,24 @@ def better(a, b) -> bool:
 
 
 def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expanded: int = None,
-                max_sec: float = None) -> Trajectory:
+                max_sec: float = None, on_time: bool = True, vclock=None) -> Trajectory:
     """anytime 기준선 실행. 멈춤 = 누적 확장 ≥ max_expanded (결정적) 또는 벽시계 ≥ max_sec (안전 상한, 결정적이지
-    않지만 궤적의 각 점은 결정적 — 같은 시드면 누적 확장 축에서 같은 궤적의 앞부분)."""
+    않지만 궤적의 각 점은 결정적 — 같은 시드면 누적 확장 축에서 같은 궤적의 앞부분).
+
+    D139 보완 (나) 정시 멈춤 (on_time, 기본): 첫 해 뒤 max_sec 에 닿으면 진행 중인 이동 (라우팅·채점) 을 버리고 마지막 최선
+    해를 돌려준다 — 판정 해 (가) = 예산 끝 이전 시각이 찍힌 마지막 해는 이전 판 (on_time=False) 과 같다. 해의 시각 = 채점이
+    끝난 때 (D75). 첫 해는 끊지 않는다 (첫 해가 예산 뒤면 판정은 (가) 의 "해 없음").
+    vclock (시험용) = 누적 확장 수 → 초 — 주면 벽시계 대신 이 시계를 쓴다 (결정적 시험)."""
+    from . import astar_fast
     rng = random.Random(seed)
     pipes = {p.id: p for p in sc.pipes}
     base_order = [p.id for p in default_order(sc)]
     tr = Trajectory(seed=seed)
     t0 = time.perf_counter()
     count = [0]
+
+    def now(extra: int = 0) -> float:   # 예산 시계 (초, t0 기준)
+        return vclock(count[0] + extra) if vclock is not None else time.perf_counter() - t0
 
     def call(pid, placed_items):
         r = router(sc, pipes[pid], time_limit, placed_items)
@@ -97,7 +106,7 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
 
     def done():
         return ((max_expanded is not None and count[0] >= max_expanded)
-                or (max_sec is not None and time.perf_counter() - t0 >= max_sec))
+                or (max_sec is not None and now() >= max_sec))
 
     # 첫 해 = first-solution 기준선 (D50, rip-up 3회). 실패 분류(진단 재라우팅)는 예산 밖 — 끝난 뒤 (D110 ②)
     first = sequential_ripup_planner(sc, router=counting_router, time_limit=time_limit, classify=False)
@@ -107,7 +116,7 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
     best_when = placement_time(first.order, first.events, set(best))   # 배치 시점 (기록만)
     tick = [len(best_when)]
     best_score = score(sc, best)          # D75: 첫 해 채점도 시간에 들어간다
-    tr.t0_sec, tr.e0 = time.perf_counter() - t0, count[0]
+    tr.t0_sec, tr.e0 = now(), count[0]
     tr.points.append((count[0], tr.t0_sec, dict(best), "first", best_score))
     solo: dict = {}
 
@@ -129,6 +138,32 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
             tick[0] += 1
         return True
 
+    tr._count = lambda: count[0]
+    deadline_hit = False
+    if on_time and max_sec is not None:   # 첫 해 뒤부터 — 라우터 탐색 안에서도 예산 끝을 본다
+        astar_fast.ABORT = lambda e: now(e) >= max_sec
+    try:
+        deadline_hit = _improve(tr, sc, pipes, base_order, rng, best, best_score, best_when, done, call, get_solo,
+                                items, lay, now, max_sec if on_time else None)
+    except astar_fast.Deadline:
+        deadline_hit = True
+    finally:
+        astar_fast.ABORT = None
+    deadline_hit = deadline_hit or bool(on_time and max_sec is not None and now() >= max_sec)
+    best, best_score, best_when = tr._best
+    tr.placement = sorted((q for q in best_when if best[q].status == "ok"), key=best_when.get)
+    tr.total_expanded = count[0]
+    tr.total_sec = time.perf_counter() - t0
+    tr.stop = ("deadline" if deadline_hit else
+               "expansions" if (max_expanded is not None and count[0] >= max_expanded) else "wall_clock")
+    classify_sequential(first, sc, router, time_limit)   # 예산 밖 (곡선 시간·확장 축에 넣지 않는다)
+    return tr
+
+
+def _improve(tr, sc, pipes, base_order, rng, best, best_score, best_when, done, call, get_solo, items, lay, now,
+             deadline) -> bool:
+    """개선 반복. 최선 해는 tr._best 에 (Deadline 으로 끊겨도 마지막 최선 해가 남는다). 반환 = 정시 멈춤 여부."""
+    tr._best = (best, best_score, best_when)
     tried_max, tried_failed = set(), set()
     while not done():
         tr.moves += 1
@@ -170,22 +205,22 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
             cand, cand_when = {q: _Removed(q) for q in order}, {}
             if not lay(cand, order, order, cand_when):
                 break
+        if deadline is not None and now() >= deadline:   # 정시 멈춤: 예산 끝에 걸친 이동은 버린다
+            return True
         if _objective(cand) > _objective(best):      # D75 ① 라우터 추정으로 1차 거르기
             tr.verified += 1
             sc_c = score(sc, cand)                  # D75 ② 검증기 채점 (시간에 포함)
+            if deadline is not None and now() >= deadline:   # 채점이 예산 뒤에 끝났다 — 해의 시각이 예산 밖 (가)
+                return True
             if better(sc_c, best_score):
                 best, best_score, best_when = cand, sc_c, cand_when
+                tr._best = (best, best_score, best_when)
                 tried_max.clear()
                 tried_failed.clear()
-                tr.points.append((count[0], time.perf_counter() - t0, dict(best), kind, best_score))
+                tr.points.append((tr._count(), now(), dict(best), kind, best_score))
             else:
                 tr.rejected += 1
-    tr.placement = sorted((q for q in best_when if best[q].status == "ok"), key=best_when.get)
-    tr.total_expanded = count[0]
-    tr.total_sec = time.perf_counter() - t0
-    tr.stop = "expansions" if (max_expanded is not None and count[0] >= max_expanded) else "wall_clock"
-    classify_sequential(first, sc, router, time_limit)   # 예산 밖 (곡선 시간·확장 축에 넣지 않는다)
-    return tr
+    return False
 
 
 class _Removed:
@@ -274,6 +309,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-sec", type=float, default=3600.0, help="벽시계 상한 (안전 상한, 기본 60분)")
     ap.add_argument("--max-expanded", type=int, default=None, help="누적 확장 상한 (결정적 멈춤)")
     ap.add_argument("--concurrency", type=int, default=None, help="측정 조건 기록용 (동시 실행 수)")
+    ap.add_argument("--no-on-time", action="store_true",
+                    help="D139 보완 (나) 정시 멈춤 끄기 (이전 동작 — 예산 끝에 걸친 이동을 끝까지 돈다, 비교용)")
     args = ap.parse_args(argv)
     from .support_std import load_standard
     if load_standard().source != "private":   # D78: 공개 임시 표 결과는 비교에 쓰지 않는다
@@ -285,7 +322,8 @@ def main(argv=None) -> int:
     for path in args.paths:
         sc = load(path)
         stem = Path(path).stem
-        tr = anytime_run(sc, router, seed=args.seed, max_expanded=args.max_expanded, max_sec=args.max_sec)
+        tr = anytime_run(sc, router, seed=args.seed, max_expanded=args.max_expanded, max_sec=args.max_sec,
+                         on_time=not args.no_on_time)
         solo_cache: dict = {}
 
         def solo_route(pid):
@@ -316,6 +354,7 @@ def main(argv=None) -> int:
                  "grid_variant": args.grid, "seed": args.seed,
                  "search_budget": router.budget_for(sc) if hasattr(router, "budget_for") else router.search_budget,
                  "stop": tr.stop, "max_sec": args.max_sec, "max_expanded": args.max_expanded,
+                 "on_time": not args.no_on_time,
                  "acceptance": "D75", "verified": tr.verified, "rejected": tr.rejected,
                  "t0_sec": round(tr.t0_sec, 3), "e0": tr.e0, "moves": tr.moves, "total_expanded": tr.total_expanded,
                  "total_sec": round(tr.total_sec, 3), "concurrency": args.concurrency, "machine": machine_info(),
