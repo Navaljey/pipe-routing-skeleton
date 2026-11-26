@@ -460,9 +460,19 @@ def _grow(arrs, need):
     return tuple(out)
 
 
+class Deadline(Exception):
+    """D139 보완 (나): anytime 기준선 정시 멈춤 — 예산 끝에 진행 중인 탐색을 버린다."""
+
+
+ABORT = None   # D139 보완 (나): None 이 아니면 확인 때마다 ABORT(이번 탐색 확장 수) → 참이면 Deadline. 기본 없음 = 결과 불변
+
+
 def budget_over(t0: float, time_limit, expand_limit, expanded: int) -> bool:
     """탐색 중단 판정. D72: expand_limit(배관당 확장 상태 수 상한)이 있으면 그것만 본다 — 결정적, 벽시계 무관.
-    없으면 예전 벽시계 제한 (D40②, 비교용). 확인은 CHECK_EVERY 확장마다 — 상한은 CHECK_EVERY 의 배수로 둔다."""
+    없으면 예전 벽시계 제한 (D40②, 비교용). 확인은 CHECK_EVERY 확장마다 — 상한은 CHECK_EVERY 의 배수로 둔다.
+    ABORT (anytime 정시 멈춤) 가 참이면 Deadline 을 던진다 — 예산 끝 뒤에만 참이라 예산 안 탐색 결과는 그대로."""
+    if ABORT is not None and ABORT(expanded):
+        raise Deadline()
     if expand_limit is not None:
         return expanded >= expand_limit
     return time.perf_counter() - t0 > time_limit
