@@ -35,6 +35,20 @@
         "wall_thickness": {"type": "number", "minimum": 0, "description": "공유 격벽 두께 mm (D93, 없으면 0). 양쪽 면이 10mm 격자 위"}
       }
     },
+    "floor_openings": {
+      "type": "array",
+      "description": "선택 (D130). 구역 바닥 (z = 0) 의 사각 개구부 — 개구부 위에서는 바닥 지지면을 쓸 수 없다 (바닥 쪽 C·D 부재가 개구부에 닿으면 그 조합 불가, 천장 지지는 그대로). 배관 장애물이 아니다",
+      "items": {
+        "type": "object",
+        "required": ["id", "min", "max"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "min": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+          "max": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+        }
+      }
+    },
     "obstacles": {
       "type": "array",
       "items": {

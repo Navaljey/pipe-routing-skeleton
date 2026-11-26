@@ -116,8 +116,19 @@ def wall_boxes(sc, window=None) -> list:
 
 
 def hole_boxes(sc) -> list:
-    """모든 관통 창 (서포트 부재 판정용 구멍)."""
-    return [window_box(sc, p.crossing_window) for p in sc.pipes if getattr(p, "crossing_window", None)]
+    """서포트 부재 판정용 구멍 — 관통 창 (D76) + 바닥 개구부 (D130).
+
+    바닥 개구부 = 개구부 평면 사각형 × z [−OPENING_DEPTH, 0] 의 구역 밖 상자: 바닥에 닿는 부재 (C·D 다리) 끝점이 개구부
+    위 (가장자리에서 부재 반폭 안 포함, `추정:`) 이면 장애물 간섭과 같은 판정으로 그 조합이 불가 — 검증기·라우터
+    (LineSupport)·힌트·묶음이 모두 이 목록을 쓴다. 배관 장애물 목록에는 들어가지 않는다 (개구부는 배관 장애물이 아님)."""
+    out = [window_box(sc, p.crossing_window) for p in sc.pipes if getattr(p, "crossing_window", None)]
+    for f in getattr(sc, "floor_openings", None) or ():
+        out.append((np.array([f["min"][0], f["min"][1], -OPENING_DEPTH], dtype=float),
+                    np.array([f["max"][0], f["max"][1], 0.0], dtype=float)))
+    return out
+
+
+OPENING_DEPTH = 100.0   # D130 개구부 구멍 상자 깊이 (구역 밖, 판정용) — 바닥 위 부재와의 거리에는 영향 없음
 
 
 def local_bounds(ext, X, sp=()) -> tuple:
