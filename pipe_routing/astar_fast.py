@@ -531,8 +531,10 @@ if HAVE_NUMBA:
         ctr: [expanded, generated, tie, pending_id, heap_size, found_id, n_states, n_closed]
         fctr: [pending_g]
         """
-        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat, dkind, gpar, spack, smaxd, bendu) = T
+        (step, elen, scost, emask, px, py, pz, hdist, clearance, pipe_margin, end_flat, dkind, gpar, spack, smaxd, bendu,
+         hlow) = T
         gflag = gpar[0] > 0.5   # D61 중력관
+        hflag = gpar[2] > 0.5   # D126 공식 휴리스틱 인자 (노드별 하한 표) — 없으면 아래 식 그대로
         lmax = gpar[1]
         (defl_idx, dir_vec, need_m, run_cap, goal_need_m, thr, ekg, kgpm, kgmm, e45, end_dir, check_every,
          goal_x, goal_y, goal_z) = C
@@ -705,6 +707,10 @@ if HAVE_NUMBA:
                         and abs(v2 - tt * e2) < 1e-6
                     bends = 0 if on_ray else 2
                 f = ng + (dist * kgmm + bends * e45)
+                if hflag:   # D126: h = max(D41 h, 하한 표[노드]) — 표가 없으면 f 는 이전과 비트 동일
+                    hb = hlow[nflat]
+                    if hb > dist * kgmm + bends * e45:
+                        f = ng + hb
                 # push
                 pos = ctr[4]
                 ctr[4] = pos + 1
@@ -740,14 +746,19 @@ def _dir_kinds():
 _DKIND = _dir_kinds()
 
 
-def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None):
-    """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태."""
+def astar_route_generic(space, pipe, time_limit, h_start, expand_limit=None, scost=None, h_lower=None):
+    """이웃 표 그래프(space.step, space.elen, space.pos …)용 컴파일 A*. 반환은 astar_route_fast 와 같은 형태.
+    D126: scost = 엣지 비용 표 대신 쓸 (N, 18) 표 (공식 비용 덧셈 인자를 더한 값, 지도는 그대로), h_lower = 노드별 하한 표
+    (N,) — h = max(D41 h, h_lower[노드]). 둘 다 None 이면 이전과 비트 동일."""
     t0 = time.perf_counter()
     goal = tuple(map(float, pipe.end.pos))
     P = space.pos
-    T = (space.step, space.elen, space.scost, space.emask, np.ascontiguousarray(P[:, 0]), np.ascontiguousarray(P[:, 1]),
+    hl = np.zeros(1) if h_lower is None else h_lower
+    T = (space.step, space.elen, space.scost if scost is None else scost, space.emask, np.ascontiguousarray(P[:, 0]),
+         np.ascontiguousarray(P[:, 1]),
          np.ascontiguousarray(P[:, 2]), space.hdist, space.clearance, space.pipe_margin, np.int64(space.end_node),
-         _DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, _lmax(pipe)]), space.spack, space.smax_dir, space.bend_u)
+         _DKIND, np.array([1.0 if pipe.gravity_pipe else 0.0, _lmax(pipe), 0.0 if h_lower is None else 1.0]),
+         space.spack, space.smax_dir, space.bend_u, hl)
     _, C = _consts(space, pipe, goal)
     G = _arc_tables(space)
     _CURRENT.update(space=space)
