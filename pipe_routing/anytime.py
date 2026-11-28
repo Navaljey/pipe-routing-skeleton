@@ -73,7 +73,7 @@ def better(a, b) -> bool:
 
 
 def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expanded: int = None,
-                max_sec: float = None) -> Trajectory:
+                max_sec: float = None, classify: bool = True) -> Trajectory:
     """anytime 기준선 실행. 멈춤 = 누적 확장 ≥ max_expanded (결정적) 또는 벽시계 ≥ max_sec (안전 상한, 결정적이지
     않지만 궤적의 각 점은 결정적 — 같은 시드면 누적 확장 축에서 같은 궤적의 앞부분)."""
     rng = random.Random(seed)
@@ -184,7 +184,8 @@ def anytime_run(sc, router, time_limit: float = 60.0, seed: int = 0, max_expande
     tr.total_expanded = count[0]
     tr.total_sec = time.perf_counter() - t0
     tr.stop = "expansions" if (max_expanded is not None and count[0] >= max_expanded) else "wall_clock"
-    classify_sequential(first, sc, router, time_limit)   # 예산 밖 (곡선 시간·확장 축에 넣지 않는다)
+    if classify:   # D129 보완 --no-classify 면 건너뛴다 (분류 = 동결 결과 참조)
+        classify_sequential(first, sc, router, time_limit)   # 예산 밖 (곡선 시간·확장 축에 넣지 않는다)
     return tr
 
 
@@ -203,6 +204,7 @@ class _Removed:
 # ---------------------------------------------------------------- 평가·곡선
 
 def quality(sc, routes: dict, solo_route, scored=None) -> dict:
+    # solo_route = None (D129 보완 --no-classify): 간섭-차단 수 (진단 재라우팅) 를 세지 않는다 → None
     """궤적 한 점의 품질 (검증기 기준, D44·D49): 경로 배관 수 · Layer 0 통과 수 · success_rate · J_total(통과 배관 합) ·
     간섭-차단 수(실패 배관 중 단독 경로가 놓인 배관과 충돌, D51) · 완전 성공(D77 ①, 규칙상 가능한 배관 전부 통과).
     solo_route(pid) = 단독 경로 (평가용, 예산 밖).
@@ -211,9 +213,9 @@ def quality(sc, routes: dict, solo_route, scored=None) -> dict:
     pipes = {p.id: p for p in sc.pipes}
     success, J = scored if scored is not None else score(sc, routes)
     ok = [pid for pid, r in routes.items() if r.status == "ok"]
-    block = 0
+    block = 0 if solo_route is not None else None
     for pid, r in routes.items():
-        if r.status == "ok":
+        if r.status == "ok" or solo_route is None:
             continue
         s = solo_route(pid)
         if s.status == "ok" and any(routes_conflict(pipes[pid], s.waypoints, pipes[q], routes[q].waypoints) for q in ok):
@@ -274,6 +276,8 @@ def main(argv=None) -> int:
     ap.add_argument("--max-sec", type=float, default=3600.0, help="벽시계 상한 (안전 상한, 기본 60분)")
     ap.add_argument("--max-expanded", type=int, default=None, help="누적 확장 상한 (결정적 멈춤)")
     ap.add_argument("--concurrency", type=int, default=None, help="측정 조건 기록용 (동시 실행 수)")
+    ap.add_argument("--no-classify", action="store_true",
+                    help="D129 보완: 첫 해·최선 해의 실패 분류 (D51·D74)·간섭-차단 수·D101 을 건너뛴다 (판정 지표 불변)")
     args = ap.parse_args(argv)
     from .support_std import load_standard
     if load_standard().source != "private":   # D78: 공개 임시 표 결과는 비교에 쓰지 않는다
@@ -285,7 +289,9 @@ def main(argv=None) -> int:
     for path in args.paths:
         sc = load(path)
         stem = Path(path).stem
-        tr = anytime_run(sc, router, seed=args.seed, max_expanded=args.max_expanded, max_sec=args.max_sec)
+        cls_on = not args.no_classify
+        tr = anytime_run(sc, router, seed=args.seed, max_expanded=args.max_expanded, max_sec=args.max_sec,
+                         classify=cls_on)
         solo_cache: dict = {}
 
         def solo_route(pid):
@@ -295,7 +301,7 @@ def main(argv=None) -> int:
             return solo_cache[pid]
         points = []
         for e, t, routes, kind, sc_pt in tr.points:
-            q = quality(sc, routes, solo_route, scored=sc_pt)
+            q = quality(sc, routes, solo_route if cls_on else None, scored=sc_pt)
             q.update({"expanded": e, "sec": round(t, 3), "move": kind})
             points.append(q)
         best = tr.points[-1][2]
@@ -309,14 +315,16 @@ def main(argv=None) -> int:
             if pid not in solo_rb:
                 solo_rb[pid] = router(sc, next(q for q in sc.pipes if q.id == pid), 60.0, [])
             return solo_rb[pid]
-        classify_failures(plan, sc, router, 60.0, order, placed, best, solo_routing_budget)
-        out = run(sc, router=router, planner=lambda sc_, r_, tl: plan)
+        if cls_on:
+            classify_failures(plan, sc, router, 60.0, order, placed, best, solo_routing_budget)
+        out = run(sc, router=router, planner=lambda sc_, r_, tl: plan, solo_ref=cls_on, classify=cls_on)
         validate_output(out)
         curve = {"scenario": stem, "n_pipes": len(sc.pipes), "required_pipes": len(required_pipe_ids(sc)[0]),
                  "grid_variant": args.grid, "seed": args.seed,
                  "search_budget": router.budget_for(sc) if hasattr(router, "budget_for") else router.search_budget,
                  "stop": tr.stop, "max_sec": args.max_sec, "max_expanded": args.max_expanded,
                  "acceptance": "D75", "verified": tr.verified, "rejected": tr.rejected,
+                 **({} if cls_on else {"classify": False}),
                  "t0_sec": round(tr.t0_sec, 3), "e0": tr.e0, "moves": tr.moves, "total_expanded": tr.total_expanded,
                  "total_sec": round(tr.total_sec, 3), "concurrency": args.concurrency, "machine": machine_info(),
                  "points": points}
@@ -324,7 +332,7 @@ def main(argv=None) -> int:
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
         (out_dir / f"{stem}_report.md").write_text(report_md(out, path), encoding="utf-8")
         # D110 ②: 첫 해 출력 (= pipeline 순차 출력, 첫 해를 따로 돌리지 않는다). 채점·D101 은 예산 밖
-        out_first = run(sc, router=router, planner=lambda sc_, r_, tl: tr.first)
+        out_first = run(sc, router=router, planner=lambda sc_, r_, tl: tr.first, solo_ref=cls_on, classify=cls_on)
         validate_output(out_first)
         (out_dir / f"{stem}_first_output.json").write_text(json.dumps(out_first, ensure_ascii=False), encoding="utf-8")
         (out_dir / f"{stem}_first_report.md").write_text(report_md(out_first, path), encoding="utf-8")
