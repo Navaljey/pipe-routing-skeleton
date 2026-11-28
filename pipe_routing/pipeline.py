@@ -112,10 +112,15 @@ def spec_fields(p, names: dict) -> dict:
 
 
 def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 60.0,
-        planner: Callable = sequential_ripup_planner, solo_ref: bool = True) -> dict:
-    """시나리오 1개 실행 → §7.2 출력 dict. solo_ref = D101 Σ 단독 J 참고치 (보고용, 계산 시간 밖)."""
+        planner: Callable = sequential_ripup_planner, solo_ref: bool = True, classify: bool = True) -> dict:
+    """시나리오 1개 실행 → §7.2 출력 dict. solo_ref = D101 Σ 단독 J 참고치 (보고용, 계산 시간 밖).
+    classify = False (D129 보완 `--no-classify`): 실패 분류 (D51·D74 진단 재라우팅·예약 확인) 와 D101 을 건너뛴다 —
+    경로·검증·J·D77 지표는 그대로, 분류 필드는 비고 global.classify = false (분류는 동결 결과 참조)."""
     t0 = time.perf_counter()
-    plan = planner(sc, router, time_limit)
+    if not classify and planner is sequential_ripup_planner:
+        plan = planner(sc, router, time_limit, classify=False)
+    else:
+        plan = planner(sc, router, time_limit)
     results = plan.routes
     route_sec = time.perf_counter() - t0
     std = load_standard()   # D78·D80 서포트 표준 (비공개 표 또는 공개 임시 표)
@@ -197,7 +202,9 @@ def run(sc: Scenario, router: Callable = layered_router_a, time_limit: float = 6
         g["placement_order"] = plan.placement   # 최종 배치 시점 순서 (anytime 최선 해 — 부재 막힘 (가)/(나) 판정용)
     out = {"scenario": sc.meta.get("name", ""), "routes": routes, "global": g}
     g["member_blockage"] = member_blockage(out, sc, std)   # R7: 다른 배관 부재 막힘 support 위반
-    if solo_ref:   # D101 (예산 밖, computation_time_sec 에 넣지 않는다)
+    if not classify:
+        g["classify"] = False   # D129 보완: 분류 = 동결 결과 참조
+    if solo_ref and classify:   # D101 (예산 밖, computation_time_sec 에 넣지 않는다)
         from .solo_ref import attach
         attach(out, sc, router, std, reuse=plan.free_solo)
     return out
@@ -408,9 +415,10 @@ def report_md(out: dict, scenario_path: str = "") -> str:
           f"| 실중량 (성공 배관 / 경로 있는 배관, 보조 지표) | {g['real_weight_total']:,.2f} / {g['real_weight_total_routed']:,.2f} kg |",
           f"| 다중 배관 | {g.get('planner', '-')} · rip-up {g.get('reroute_count', 0)} (되돌림 {g.get('reverted_count', 0)}) · "
           f"timeout {g.get('timeout_count', 0)} · 라우팅 시도 {g.get('routing_attempts', '-')} · 그래프 재생성 합 {g.get('graph_regen_sec_total', 0):.1f} s |",
-          "| 실패 분류 (D51) | " + " · ".join(f"{FAIL_CLASS_KO[c]} {g.get('fail_class', {}).get(c, 0)}" for c in FAIL_CLASSES)
-          + (" (" + ", ".join(f"{k} {v}" for k, v in g.get("fail_class_status", {}).items()) + ")"
-             if g.get("fail_class_status") else "") + " |",
+          ("| 실패 분류 (D51) | 분류 = 동결 결과 참조 (`--no-classify`, D129 보완) |" if g.get("classify") is False else
+           "| 실패 분류 (D51) | " + " · ".join(f"{FAIL_CLASS_KO[c]} {g.get('fail_class', {}).get(c, 0)}" for c in FAIL_CLASSES)
+           + (" (" + ", ".join(f"{k} {v}" for k, v in g.get("fail_class_status", {}).items()) + ")"
+              if g.get("fail_class_status") else "") + " |"),
           f"| 실패 원인 | {', '.join(f'{k} {v}' for k, v in g['fail_causes'].items()) or '없음'} |",
           f"| 배관 간 이격 위반 쌍 | {g['pairwise_violation']} |",
           (f"| 중력관 (D61·D64) | {g['gravity']['total']}개 중 규칙상 가능 {g['gravity']['feasible']} · 통과 {g['gravity']['pass']} "
@@ -478,6 +486,8 @@ def main(argv=None) -> int:
                     help="layered 라우터 비용에서 D57 추정 서포트를 뺀다 (M4 이전 비교용)")
     ap.add_argument("--no-support-lines", action="store_true",
                     help="D80 ⑨ 서포트 보조 격자선 (띠 경계·단자 첫 꺾임) 을 끈다 (비교용)")
+    ap.add_argument("--no-classify", action="store_true",
+                    help="D129 보완: 실패 분류 (D51·D74 진단 재라우팅·예약 확인)·D101 을 건너뛴다 — 판정 지표 불변, 분류는 동결 결과 참조")
     ap.add_argument("--no-member-reservation", action="store_true",
                     help="D90 (a1) 놓인 배관 서포트 부재 예약을 끈다 (비교용)")
     ap.add_argument("--expand-limit", type=int, default=None,
@@ -530,7 +540,7 @@ def main(argv=None) -> int:
         sc = load(path)
         out = run(sc, router=router, time_limit=args.time_limit,
                   planner=sequential_ripup_planner if args.planner == "sequential" else independent_planner,
-                  solo_ref=not args.no_solo_ref)
+                  solo_ref=not args.no_solo_ref, classify=not args.no_classify)
         validate_output(out)
         stem = Path(path).stem
         (out_dir / f"{stem}_output.json").write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

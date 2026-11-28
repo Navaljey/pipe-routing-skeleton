@@ -110,6 +110,7 @@
       "required": ["total_pipes", "success_count", "J_total", "computation_time_sec"],
       "properties": {
         "total_pipes": {"type": "integer"},
+        "classify": {"type": "boolean", "description": "D129 보완 --no-classify: false 면 실패 분류 (D51·D74)·D101 을 건너뜀 — 분류는 동결 결과 참조"},
         "routed_count": {"type": "integer"},
         "success_count": {"type": "integer"},
         "success_rate": {"type": ["number", "null"]},
